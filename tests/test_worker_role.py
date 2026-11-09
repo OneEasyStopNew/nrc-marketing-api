@@ -177,3 +177,25 @@ async def test_worker_role_has_exactly_the_table_privileges_it_uses(
         granted.setdefault(row.table_name, set()).add(row.privilege_type)
 
     assert granted == expected
+
+
+@pytest.mark.usefixtures("job_in_a")
+async def test_lease_batch_is_clamped_to_1_through_50(
+    connection: AsyncConnection, world: World
+) -> None:
+    await _bind(connection, world.a.tenant_id)
+    # 60 due job.run events in all (the job's own plus 59 copies).
+    await connection.execute(
+        text(
+            "INSERT INTO outbox_events (id, tenant_id, job_id, event_type, payload, attempts)"
+            " SELECT gen_random_uuid(), o.tenant_id, o.job_id, o.event_type, o.payload, 0"
+            " FROM outbox_events AS o, generate_series(1, 59)"
+        )
+    )
+    await as_role(connection, WORKER_ROLE)
+    lease = "SELECT count(*) FROM lease_outbox_events('probe', :batch, 60, ARRAY['job.run'])"
+
+    too_many = await connection.scalar(text(lease), {"batch": 500})
+    none = await connection.scalar(text(lease), {"batch": 0})
+
+    assert (too_many, none) == (50, 1)
