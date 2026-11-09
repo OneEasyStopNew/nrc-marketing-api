@@ -31,12 +31,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Only valid while every key is still a UUID; derived keys cannot be converted back.
+    # Derived "nrc-job-..." keys have no UUID form and become NULL; UUID keys are kept.
     op.alter_column(
         "jobs",
         "provider_idempotency_key",
         existing_type=sa.String(length=255),
         type_=sa.Uuid(),
         existing_nullable=True,
-        postgresql_using="provider_idempotency_key::uuid",
+        postgresql_using=(
+            "CASE WHEN provider_idempotency_key ~* "
+            "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' "
+            "THEN provider_idempotency_key::uuid END"
+        ),
     )
