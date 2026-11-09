@@ -10,12 +10,14 @@ import pytest
 from asgi_lifespan import LifespanManager
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.api.deps import get_signing_keys
 from app.core.config import get_settings
+from app.core.errors import ValidationNotPassedError
 from app.main import create_app
+from app.services import eligibility
 from tests.conftest import AuthHeaders, IntegrationEnv, SeededTenant, StaticKeys, World
 
 JOBS = "/v1/marketing/creative-jobs"
@@ -252,3 +254,32 @@ async def test_parallel_duplicate_jobs_make_one_job(
             )
             assert count == 1
     await engine.dispose()
+
+
+async def test_validation_gate_refusal_is_a_409_and_queues_nothing(
+    client: httpx.AsyncClient,
+    world: World,
+    auth: AuthHeaders,
+    connection: AsyncConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    creative_id = await _creative(client, auth, world.a)
+    calls: list[tuple[UUID, UUID, int]] = []
+
+    # Stands in for Dinesh's gate (NRC-7), which has the same signature as the stub.
+    async def not_passed(
+        session: AsyncSession, tenant_id: UUID, creative: UUID, creative_version: int
+    ) -> None:
+        calls.append((tenant_id, creative, creative_version))
+        raise ValidationNotPassedError(details={"validation_run_id": "run-1", "status": "FAILED"})
+
+    monkeypatch.setattr(eligibility, "assert_generation_allowed", not_passed)
+
+    response = await _post_job(client, auth, world, creative_id)
+
+    assert response.status_code == 409
+    body = _error(response)
+    assert (body["code"], body["retryable"]) == ("VALIDATION_NOT_PASSED", False)
+    assert body["details"] == {"validation_run_id": "run-1", "status": "FAILED"}
+    assert calls == [(world.a.tenant_id, UUID(creative_id), 1)]
+    assert await _count(connection, world.a.tenant_id, "jobs") == 0

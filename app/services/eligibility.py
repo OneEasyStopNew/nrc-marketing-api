@@ -13,8 +13,8 @@ from app.models import StudySnapshot
 from app.models.enums import FORMAT_SPECS, PostFormat, RecruitmentStatus
 from app.services import creatives
 
-# Seam owned by Dinesh (NRC-7). While True, GENERATION_MODE=live refuses to start, so no paid
-# call can run on a brief that has not passed validation.
+# Seam owned by Dinesh (NRC-7): assert_generation_allowed below. While True, GENERATION_MODE=live
+# refuses to start, so no paid call can run on a brief that has not passed validation.
 VALIDATION_GATE_IS_STUB: Final = True
 
 
@@ -60,19 +60,23 @@ async def assert_generation_eligible(
     spec = FORMAT_SPECS.get(creative.post_format)
     if spec is None or spec.channel != creative.channel:
         _not_eligible("FORMAT_NOT_ALLOWED")
-    if not await _validation_passed(db, ctx, creative_id, creative_version):
-        _not_eligible("VALIDATION_NOT_PASSED")
+    await assert_generation_allowed(db, ctx.tenant_id, creative_id, creative_version)
     return EligibleCreative(
         creative.study_snapshot_id, creative.study_snapshot_version, creative.post_format
     )
 
 
-async def _validation_passed(
-    db: AsyncSession, ctx: TenantContext, creative_id: UUID, creative_version: int
-) -> bool:
-    # STUB, owned by Dinesh (NRC-7): replace with the validation-PASS lookup for this exact
-    # version and set VALIDATION_GATE_IS_STUB to False in the same change.
-    return True
+async def assert_generation_allowed(
+    session: AsyncSession, tenant_id: UUID, creative_id: UUID, creative_version: int
+) -> None:
+    """STUB with the exact signature of Dinesh's validation gate (NRC-7). Allows everything.
+
+    His version raises ValidationNotPassedError (409 VALIDATION_NOT_PASSED, not retryable,
+    details with the run id and status) unless the latest validation run for this exact version
+    passed. Swap this stub for an import of his function and set VALIDATION_GATE_IS_STUB to
+    False in the same change.
+    """
+    return None
 
 
 def _not_eligible(reason: str) -> NoReturn:

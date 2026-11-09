@@ -60,6 +60,12 @@ class GenerationNotEligibleError(ConflictError):
     default_message = "This creative version cannot be sent for image generation."
 
 
+class ValidationNotPassedError(ConflictError):
+    # details: validation_run_id and status of the latest run for that exact creative version.
+    code = "VALIDATION_NOT_PASSED"
+    default_message = "This creative version has not passed validation."
+
+
 class GenerationLimitError(AppError):
     # details.reason is ACTIVE_JOB_LIMIT or CREDIT_CEILING.
     code = "GENERATION_LIMIT_REACHED"

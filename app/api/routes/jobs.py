@@ -22,7 +22,8 @@ router = APIRouter(tags=["jobs"])
         404: {"model": ErrorBody, "description": "Creative not found or not permitted."},
         409: {
             "model": ErrorBody,
-            "description": "GENERATION_NOT_ELIGIBLE (details.reason), or Idempotency-Key reused.",
+            "description": "GENERATION_NOT_ELIGIBLE (details.reason), VALIDATION_NOT_PASSED "
+            "(details.validation_run_id and status), or Idempotency-Key reused.",
         },
         412: {"model": ErrorBody, "description": "Not the current creative version."},
         429: {
