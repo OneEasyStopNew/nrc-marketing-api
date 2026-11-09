@@ -132,7 +132,10 @@ async def _event(connection: AsyncConnection) -> Row[Any]:
     # The single outbox event of the test (RLS: tenant A is bound by now).
     return (
         await connection.execute(
-            text("SELECT processed_at, lease_owner, last_error_code FROM outbox_events")
+            text(
+                "SELECT processed_at, lease_owner, last_error_code FROM outbox_events"
+                " WHERE event_type = 'job.run'"
+            )
         )
     ).one()
 
@@ -151,6 +154,7 @@ class ScriptedProvider(SimulatedImageProvider):
         self.estimates = 0
         self.before_estimate: Callable[[], Awaitable[None]] | None = None
         self.before_submit: Callable[[], Awaitable[None]] | None = None
+        self.before_fetch: Callable[[], Awaitable[None]] | None = None
 
     async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
         self.estimates += 1
@@ -173,6 +177,8 @@ class ScriptedProvider(SimulatedImageProvider):
         return dataclasses.replace(result, actual_cost_usd=self.actual_cost_usd)
 
     async def fetch_output(self, result: StatusResult) -> FetchedImage:
+        if self.before_fetch is not None:
+            await self.before_fetch()
         if self.fetch_error is not None:
             raise self.fetch_error
         return await super().fetch_output(result)
@@ -291,7 +297,7 @@ async def test_expired_lease_is_processed_once(
     provider, sink = SimulatedImageProvider(), FakeSink()
     # A worker leases the event and dies; then its lease runs out.
     crashed = await connection.execute(
-        text("SELECT * FROM lease_outbox_events('crashed-worker', 10, 60)")
+        text("SELECT * FROM lease_outbox_events('crashed-worker', 10, 60, ARRAY['job.run'])")
     )
     assert len(crashed.all()) == 1
     assert await _run(sessions, provider, sink) == 0
@@ -752,3 +758,28 @@ async def test_retry_before_acceptance_keeps_one_reservation(
     assert waiting == (reserved + 94_000, committed)
     assert job.state is ExecutionState.SUCCEEDED
     assert await _spend(connection) == (reserved, committed + 94_000)
+
+
+async def test_asset_is_rolled_back_when_the_job_is_already_terminal(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+
+    async def finished_elsewhere() -> None:
+        # E.g. an operator or a racing webhook finished the job while the image was fetched.
+        await connection.execute(text("UPDATE jobs SET state = 'CANCELLED'"))
+
+    provider.before_fetch = finished_elsewhere
+
+    await _run(sessions, provider, sink)
+
+    job, _ = await _load(sessions, world, job_id)
+    assets = await connection.scalar(text("SELECT count(*) FROM assets"))
+    handoffs = await connection.scalar(
+        text("SELECT count(*) FROM outbox_events WHERE event_type = 'asset.generated'")
+    )
+    assert len(sink.stored) == 1
+    assert (job.state, job.result_asset_id) == (ExecutionState.CANCELLED, None)
+    assert assets == 0
+    assert handoffs == 0
+    assert (await _event(connection)).processed_at is not None

@@ -292,3 +292,55 @@ def test_live_mode_without_storage_refuses_to_start() -> None:
 
     with pytest.raises(WorkerConfigError, match="AWS_S3_BUCKET"):
         build_providers(settings)
+
+
+async def test_success_queues_one_asset_generated_event_that_this_worker_never_leases(
+    sessions: Sessions,
+    sink: StoredImageSink,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+) -> None:
+    job_id, asset_id = await _succeeded_asset(sessions, sink, client, auth, world)
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    # Due now: only the event-type filter keeps the worker away from it.
+    await connection.execute(
+        text("UPDATE outbox_events SET available_at = clock_timestamp() - interval '1 minute'")
+    )
+
+    assert (
+        await run_once(sessions, {"simulator": SimulatedImageProvider()}, sink, get_settings()) == 0
+    )
+
+    events = (
+        await connection.execute(
+            text(
+                "SELECT payload, attempts, lease_owner, processed_at FROM outbox_events"
+                " WHERE event_type = 'asset.generated'"
+            )
+        )
+    ).all()
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        asset = (await db.execute(select(Asset))).scalar_one()
+    assert len(events) == 1
+    event = events[0]
+    assert (event.attempts, event.lease_owner, event.processed_at) == (0, None, None)
+    assert event.payload == {
+        "job_id": str(job_id),
+        "asset_id": asset_id,
+        "tenant_id": str(world.a.tenant_id),
+        "creative_id": str(asset.creative_id),
+        "creative_version": 1,
+        "bucket": asset.bucket,
+        "s3_key": asset.s3_key,
+        "s3_version_id": asset.s3_version_id,
+        "checksum_sha256": asset.checksum_sha256,
+        "mime_type": "image/png",
+        "width_px": 1080,
+        "height_px": 1080,
+    }
+    assert "http" not in str(event.payload)

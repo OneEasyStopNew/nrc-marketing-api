@@ -29,7 +29,7 @@ from types import MappingProxyType
 from typing import Final, Protocol, cast
 from uuid import UUID
 
-from sqlalchemy import Row, Update, func, select, text, update
+from sqlalchemy import ARRAY, Row, Text, Update, bindparam, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -41,10 +41,11 @@ from app.models.enums import FORMAT_SPECS, ExecutionState
 from app.models.jobs import ReservationState
 from app.schemas.jobs import JobKind
 from app.services import eligibility, spend
-from app.services.assets import StoredImageSink
+from app.services.assets import StoredImageSink, emit_asset_generated
 from app.services.jobs import (
     HIGGSFIELD_NAME,
     NON_TERMINAL_STATES,
+    RUN_EVENT,
     STAGE_OUTPUT_READY,
     TERMINAL_STATES,
     provider_idempotency_key,
@@ -83,9 +84,13 @@ STAGE_RETRY_WAIT: Final = "retry_wait"
 STAGE_RECONCILE: Final = "reconcile"
 STAGE_WAITING: Final = "waiting_provider"
 STAGE_STORED: Final = "stored"
+# Event types this worker has handlers for. Others (asset.generated, until the NRC-7 validation
+# handler subscribes) are never leased, so they are not retried or given up meanwhile.
+HANDLED_EVENT_TYPES: Final = (RUN_EVENT,)
 _LEASE = text(
-    "SELECT event_id, tenant_id, job_id, event_type FROM lease_outbox_events(:owner, 1, :lease)"
-)
+    "SELECT event_id, tenant_id, job_id, event_type"
+    " FROM lease_outbox_events(:owner, 1, :lease, :event_types)"
+).bindparams(bindparam("event_types", type_=ARRAY(Text)))
 _jitter = secrets.SystemRandom()
 
 
@@ -349,7 +354,13 @@ class ImageGenerationHandler:
         try:
             image = await provider.fetch_output(status)
             await step.heartbeat(db)
-            asset_id = await step.sink.store(db, job, image, provider.name, provider.model)
+            # The asset row is kept only together with the job's SUCCEEDED transition.
+            stored = await db.begin_nested()
+            try:
+                asset_id = await step.sink.store(db, job, image, provider.name, provider.model)
+            except BaseException:
+                await stored.rollback()
+                raise
         except ProviderError as error:
             if error.retryable:
                 return backoff_seconds(step.event_attempts)
@@ -372,9 +383,18 @@ class ImageGenerationHandler:
             result_asset_id=asset_id,
             provider_cost_actual_usd_micros=actual,
         )
-        if moved:
-            await settle_reservation(db, job.id, ReservationState.COMMITTED)
-            await spend.settle(db, job.id, billed=True, actual_usd_micros=actual)
+        if not moved:
+            # Already finished elsewhere: drop this asset row (its object becomes an orphan).
+            await stored.rollback()
+            logger.warning(
+                "job already terminal, asset discarded job=%s tenant=%s", job.id, job.tenant_id
+            )
+            return None
+        await stored.commit()
+        await settle_reservation(db, job.id, ReservationState.COMMITTED)
+        await spend.settle(db, job.id, billed=True, actual_usd_micros=actual)
+        # Hand-off to image validation (NRC-7), in the same commit as SUCCEEDED.
+        await emit_asset_generated(db, asset_id)
         return None
 
 
@@ -412,7 +432,14 @@ async def run_once(
     while leased < max_events:
         async with sessions() as db:
             event = (
-                await db.execute(_LEASE, {"owner": owner, "lease": run.lease_seconds})
+                await db.execute(
+                    _LEASE,
+                    {
+                        "owner": owner,
+                        "lease": run.lease_seconds,
+                        "event_types": list(HANDLED_EVENT_TYPES),
+                    },
+                )
             ).one_or_none()
             await db.commit()
         if event is None:
