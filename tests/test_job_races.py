@@ -24,8 +24,6 @@ from tests.conftest import AuthHeaders, IntegrationEnv, SeededTenant, StaticKeys
 from tests.test_job_worker import FakeSink
 from tests.test_jobs_api import JOBS, _creative
 
-pytest_plugins = ("tests.test_jobs_api",)  # committed_tenant fixture
-
 
 class SlowProvider(SimulatedImageProvider):
     # SIMULATED; a slow submit keeps the race window open.

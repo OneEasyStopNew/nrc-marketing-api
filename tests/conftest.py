@@ -29,6 +29,7 @@ from sqlalchemy.pool import NullPool
 from app.api.deps import get_db, get_signing_keys
 from app.core.config import get_settings
 from app.core.errors import AuthenticationError
+from app.db.base import Base
 from app.db.session import TenantSession
 from app.main import create_app
 from app.models import Membership, MembershipStudy, Study, StudySnapshot, Tenant
@@ -259,3 +260,31 @@ class AuthHeaders:
 @pytest.fixture
 def auth(signing_key: RSAPrivateKey) -> AuthHeaders:
     return AuthHeaders(signing_key)
+
+
+@pytest.fixture
+async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTenant]:
+    # Committed data (no shared test transaction), so parallel requests really race.
+    engine = create_async_engine(
+        test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
+    )
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        seeded = await seed_tenant(db, name="Job race tenant", members={"creator-a": ["creator"]})
+        await db.commit()
+    try:
+        yield seeded
+    finally:
+        async with AsyncSession(engine) as db:
+            # jobs and assets reference each other: break the cycle before deleting.
+            await db.execute(
+                text("UPDATE jobs SET result_asset_id = NULL WHERE tenant_id = :t"),
+                {"t": seeded.tenant_id},
+            )
+            for table in reversed(Base.metadata.sorted_tables):
+                if table.name == "provider_spend":
+                    # Not tenant data (one counter per provider).
+                    continue
+                column = table.c.id if table.name == "tenants" else table.c.tenant_id
+                await db.execute(table.delete().where(column == seeded.tenant_id))
+            await db.commit()
+        await engine.dispose()

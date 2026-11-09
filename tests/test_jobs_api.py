@@ -1,7 +1,7 @@
 # Generation job API (simulated provider mode): admission, idempotency, limits and isolation.
 
 import asyncio
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -10,14 +10,13 @@ import pytest
 from asgi_lifespan import LifespanManager
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.api.deps import get_signing_keys
 from app.core.config import get_settings
-from app.db.base import Base
 from app.main import create_app
-from tests.conftest import AuthHeaders, IntegrationEnv, SeededTenant, StaticKeys, World, seed_tenant
+from tests.conftest import AuthHeaders, IntegrationEnv, SeededTenant, StaticKeys, World
 
 JOBS = "/v1/marketing/creative-jobs"
 
@@ -220,34 +219,6 @@ async def test_daily_credit_ceiling_returns_429(
 
     assert response.status_code == 429
     assert _error(response)["details"] == {"reason": "CREDIT_CEILING"}
-
-
-@pytest.fixture
-async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTenant]:
-    # Committed data (no shared test transaction), so parallel requests really race.
-    engine = create_async_engine(
-        test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
-    )
-    async with AsyncSession(engine, expire_on_commit=False) as db:
-        seeded = await seed_tenant(db, name="Job race tenant", members={"creator-a": ["creator"]})
-        await db.commit()
-    try:
-        yield seeded
-    finally:
-        async with AsyncSession(engine) as db:
-            # jobs and assets reference each other: break the cycle before deleting.
-            await db.execute(
-                text("UPDATE jobs SET result_asset_id = NULL WHERE tenant_id = :t"),
-                {"t": seeded.tenant_id},
-            )
-            for table in reversed(Base.metadata.sorted_tables):
-                if table.name == "provider_spend":
-                    # Not tenant data (one counter per provider).
-                    continue
-                column = table.c.id if table.name == "tenants" else table.c.tenant_id
-                await db.execute(table.delete().where(column == seeded.tenant_id))
-            await db.commit()
-        await engine.dispose()
 
 
 async def test_parallel_duplicate_jobs_make_one_job(
