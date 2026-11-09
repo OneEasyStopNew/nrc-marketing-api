@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionm
 
 from app.core.config import Settings, get_settings
 from app.db.session import TenantSession, bind_tenant
-from app.models import CreditReservation, Job
+from app.models import Asset, CreditReservation, Job
 from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState
 from app.services.jobs import transition
@@ -43,7 +43,7 @@ Sessions = async_sessionmaker[AsyncSession]
 
 
 class FakeSink:
-    # Stands in for generated-image storage (NRC-3).
+    # Stands in for generated-image storage: a metadata row without any object.
 
     def __init__(self) -> None:
         self.stored: list[UUID] = []
@@ -53,8 +53,26 @@ class FakeSink:
     ) -> UUID:
         assert image.content.startswith(b"\x89PNG")
         assert provider_name == "simulator"
-        self.stored.append(uuid4())
-        return self.stored[-1]
+        # A real row, because jobs.result_asset_id is a foreign key to assets.
+        asset = Asset(
+            tenant_id=job.tenant_id,
+            creative_id=job.creative_id,
+            creative_version=job.creative_version,
+            job_id=job.id,
+            origin="generated",
+            bucket="fake",
+            s3_key=f"fake/{uuid4()}.png",
+            mime_type="image/png",
+            width_px=1,
+            height_px=1,
+            size_bytes=len(image.content),
+            checksum_sha256="0" * 64,
+            created_by=job.created_by,
+        )
+        db.add(asset)
+        await db.flush()
+        self.stored.append(asset.id)
+        return asset.id
 
 
 @pytest.fixture

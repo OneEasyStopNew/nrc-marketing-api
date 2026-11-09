@@ -1109,6 +1109,7 @@
           "assets"
         ],
         "summary": "Asset metadata and a short-lived download URL (D3)",
+        "description": "The URL is not stored or logged; ask again when it expires.",
         "operationId": "get_asset",
         "security": [
           {
@@ -1180,8 +1181,18 @@
               }
             }
           },
-          "501": {
-            "description": "Not implemented yet.",
+          "404": {
+            "description": "Asset not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Object storage is not configured.",
             "content": {
               "application/json": {
                 "schema": {

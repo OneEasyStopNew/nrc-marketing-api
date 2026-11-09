@@ -68,6 +68,13 @@ def app_environment(test_env: IntegrationEnv) -> Iterator[None]:
         patch.setenv("COGNITO_CLIENT_IDS", CLIENT_ID)
         patch.setenv("REQUIRED_SCOPE", SCOPE)
         patch.setenv("CORS_ORIGINS", "")
+        # Local SeaweedFS; these credentials only open that container, not AWS.
+        patch.setenv("AWS_S3_BUCKET", "nrc-test-media")
+        patch.setenv("AWS_ENDPOINT_URL_S3", "http://127.0.0.1:8333")
+        patch.setenv("S3_FORCE_PATH_STYLE", "true")
+        patch.setenv("AWS_ACCESS_KEY_ID", "localdev")
+        patch.setenv("AWS_SECRET_ACCESS_KEY", "localdev-password")
+        patch.delenv("AWS_PROFILE", raising=False)
         get_settings.cache_clear()
         yield
     get_settings.cache_clear()

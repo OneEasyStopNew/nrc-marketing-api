@@ -235,6 +235,11 @@ async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTena
         yield seeded
     finally:
         async with AsyncSession(engine) as db:
+            # jobs and assets reference each other: break the cycle before deleting.
+            await db.execute(
+                text("UPDATE jobs SET result_asset_id = NULL WHERE tenant_id = :t"),
+                {"t": seeded.tenant_id},
+            )
             for table in reversed(Base.metadata.sorted_tables):
                 column = table.c.id if table.name == "tenants" else table.c.tenant_id
                 await db.execute(table.delete().where(column == seeded.tenant_id))

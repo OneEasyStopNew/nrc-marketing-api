@@ -56,6 +56,28 @@ S3 bucket on servers.
 
 The storage tests use the bucket `nrc-test-media` and skip themselves when SeaweedFS is not running.
 
+### Run the generation worker locally
+
+Image generation runs in a separate worker process, never inside a request. With Postgres and
+SeaweedFS up (see above), in a second terminal:
+
+```powershell
+uv run python -m app.workers.connector
+```
+
+`GENERATION_MODE` defaults to `simulator`: no provider account is needed and every image is stamped
+SIMULATED. End to end you will see:
+
+1. `POST /creative-jobs` returns `202` with a `job_id` (state `QUEUED`).
+2. The worker leases the job, "submits" it to the simulated provider and polls it.
+3. It checks the 1080x1080 PNG, stores it in the bucket and adds an `assets` row; the job becomes
+   `SUCCEEDED` with a `result_asset_id`.
+4. `GET /jobs/{id}` shows that state; `GET /assets/{asset_id}` returns the metadata and a 15-minute
+   download URL.
+
+Without `AWS_S3_BUCKET` the simulator worker still runs, but finished jobs stop at stage
+`output_ready`. `GENERATION_MODE=live` refuses to start without storage.
+
 ## Checks
 
 CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, plus a
@@ -71,7 +93,7 @@ uv run pytest            # uses the marketing_test database; each test is rolled
 
 - `contracts/openapi.json` is the spec. Regenerate it with `uv run python -m scripts.export_openapi`.
   A test fails if it is stale. Operation IDs are the handler names (for example `create_creative`).
-- `contracts/examples/d1.json` holds sample responses for mocks. They are validated against the
+- `contracts/examples/` (`d1.json`, `d3.json`) holds sample responses for mocks. They are validated against the
   schemas.
 - Generate the TypeScript types with `npx openapi-typescript contracts/openapi.json -o schema.d.ts`.
 
