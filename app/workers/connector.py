@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 from types import MappingProxyType
-from typing import Final, Protocol, cast
+from typing import Final, Protocol, cast, runtime_checkable
 from uuid import UUID
 
 from sqlalchemy import ARRAY, Row, Text, Update, bindparam, func, select, text, update
@@ -97,6 +97,12 @@ _jitter = secrets.SystemRandom()
 class WorkerConfigError(Exception):
     # The worker cannot start with this configuration. Messages name settings, never values.
     pass
+
+
+@runtime_checkable
+class _Closable(Protocol):
+    # Providers that hold network clients (Higgsfield) close them on shutdown.
+    async def aclose(self) -> None: ...
 
 
 class LeaseLostError(Exception):
@@ -295,6 +301,8 @@ class ImageGenerationHandler:
         )
         if not moved:
             return None
+        # The sink records it on the asset; the job was loaded before the id was known.
+        set_committed_value(job, "provider_request_id", submitted.provider_request_id)
         await db.commit()
         return await self._poll(db, job, provider, submitted.provider_request_id, step)
 
@@ -781,6 +789,14 @@ def load_provider_secrets(settings: Settings) -> Settings:
 async def run_forever(settings: Settings) -> None:
     settings = await asyncio.to_thread(load_provider_secrets, settings)
     providers = build_providers(settings)
+    try:
+        await _serve(settings, providers)
+    finally:
+        await close_providers(providers)
+    logger.info("connector worker stopped")
+
+
+async def _serve(settings: Settings, providers: Mapping[str, ImageProvider]) -> None:
     engine = create_engine(settings)
     sessions = create_sessionmaker(engine)
     stop = asyncio.Event()
@@ -800,7 +816,12 @@ async def run_forever(settings: Settings) -> None:
                     await asyncio.wait_for(stop.wait(), settings.worker_poll_interval_seconds)
     finally:
         await engine.dispose()
-    logger.info("connector worker stopped")
+
+
+async def close_providers(providers: Mapping[str, ImageProvider]) -> None:
+    for provider in providers.values():
+        if isinstance(provider, _Closable):
+            await provider.aclose()
 
 
 def _stop_on_signals(stop: asyncio.Event) -> None:

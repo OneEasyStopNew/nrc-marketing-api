@@ -23,6 +23,7 @@ import httpx
 from pydantic import SecretStr
 
 from app.core.config import Settings
+from app.services.fetch import SafeFetcher, build_fetch_client
 from app.services.providers.base import (
     FetchedImage,
     ImageRequest,
@@ -66,6 +67,9 @@ _CONFIG_STATUSES = frozenset({401, 404})
 # concepts/errors documents 403 as "Insufficient balance"; 402 is not documented but means
 # Payment Required, so it is treated the same. Both are terminal: nothing was generated.
 _BALANCE_STATUSES = frozenset({402, 403})
+
+# Output downloads run under the worker's lease too; never longer than this.
+_MAX_FETCH_TIMEOUT_SECONDS = 30.0
 
 # Failures where the request provably never left this process.
 _NOT_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
@@ -154,6 +158,13 @@ class HiggsfieldProvider:
 
     def __repr__(self) -> str:
         return f"HiggsfieldProvider(model={self.model!r})"
+
+    async def aclose(self) -> None:
+        # Closes the API client and the output fetcher's client (worker shutdown).
+        await self._client.aclose()
+        close = getattr(self._fetcher, "aclose", None)
+        if close is not None:
+            await close()
 
     async def submit(self, request: ImageRequest) -> SubmitResult:
         if not _IDEMPOTENCY_KEY_RE.fullmatch(request.idempotency_key):
@@ -387,3 +398,43 @@ def _parse_expiry(value: object) -> datetime | None:
         return None
     # TODO(NRC-10): confirm with live account that timestamps always carry an offset.
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def build_api_client(settings: Settings) -> httpx.AsyncClient:
+    """HTTP client for the Higgsfield API: https only, no proxies from the environment.
+
+    Its timeout must end every call before the worker's lease on the job expires.
+    """
+    timeout = settings.http_timeout_seconds
+    if timeout >= settings.worker_lease_seconds:
+        raise ProviderConfigError("HTTP_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS")
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout),
+        trust_env=False,
+        follow_redirects=False,
+        event_hooks={"request": [_require_https]},
+    )
+
+
+async def _require_https(request: httpx.Request) -> None:
+    # Runs before anything is sent, so the key never travels over plain http.
+    if request.url.scheme != "https":
+        raise ProviderConfigError("Higgsfield requests must use https")
+
+
+def create_provider(
+    settings: Settings, *, model: str | None = None, resolution: str | None = None
+) -> HiggsfieldProvider:
+    """The live provider, with its own API client and SSRF-safe output fetcher.
+
+    The worker calls this with settings only (connector._higgsfield_provider); the smoke script
+    picks the model and resolution. Close it with aclose().
+    """
+    fetch_timeout = min(_MAX_FETCH_TIMEOUT_SECONDS, settings.worker_lease_seconds / 2)
+    return HiggsfieldProvider.from_settings(
+        settings,
+        build_api_client(settings),
+        SafeFetcher(build_fetch_client(), timeout_seconds=fetch_timeout),
+        model=model,
+        resolution=resolution,
+    )

@@ -62,6 +62,9 @@ class SafeFetcher:
         self._resolver = resolver or _default_resolver
         self._timeout = timeout_seconds
 
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
     async def __call__(
         self, url: str, *, allowed_hosts: frozenset[str], max_bytes: int
     ) -> FetchedImage:

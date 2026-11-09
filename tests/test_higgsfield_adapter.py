@@ -12,6 +12,7 @@ import pytest
 from pydantic import SecretStr
 
 from app.core.config import Settings
+from app.services.fetch import SafeFetcher
 from app.services.providers.base import (
     FetchedImage,
     ImageRequest,
@@ -29,7 +30,10 @@ from app.services.providers.higgsfield import (
     HiggsfieldIdempotencyConflictError,
     HiggsfieldInsufficientBalanceError,
     HiggsfieldProvider,
+    build_api_client,
+    create_provider,
 )
+from app.workers.connector import close_providers
 
 KEY_ID = "kid-SECRETID-123"
 KEY_SECRET = "ksecret-SECRETVALUE-456"  # noqa: S105
@@ -559,3 +563,38 @@ async def test_actual_cost_is_read_only_from_an_explicit_field(
     result = await make(fixed(200, json=response)).get_status("r")
 
     assert result.actual_cost_usd == expected
+
+
+async def test_create_provider_owns_https_clients_below_the_lease_and_closes_them() -> None:
+    config = settings(http_timeout_seconds=5, worker_lease_seconds=60)
+
+    provider = create_provider(config, resolution="2K")
+
+    api = provider._client
+    fetcher = provider._fetcher
+    assert isinstance(fetcher, SafeFetcher)
+    assert provider.model == MODEL
+    assert provider._resolution == "2K"
+    assert provider._allowed_hosts == frozenset({"cdn.example.com"})
+    assert api.timeout.read == 5
+    assert api.trust_env is False
+    assert api.follow_redirects is False
+    await close_providers({"higgsfield": provider})
+    assert api.is_closed
+    assert fetcher._client.is_closed
+
+
+async def test_api_client_refuses_plain_http_before_sending() -> None:
+    async with build_api_client(settings()) as client:
+        with pytest.raises(ProviderConfigError, match="https"):
+            await client.get("http://api.higgsfield.invalid/requests/x/status")
+
+
+def test_api_client_timeout_must_be_below_the_lease() -> None:
+    with pytest.raises(ProviderConfigError, match="WORKER_LEASE_SECONDS"):
+        build_api_client(settings(http_timeout_seconds=10, worker_lease_seconds=10))
+
+
+def test_create_provider_without_key_names_the_setting() -> None:
+    with pytest.raises(ProviderConfigError, match="HIGGSFIELD_API_KEY"):
+        create_provider(settings(higgsfield_api_key=None))
