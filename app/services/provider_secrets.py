@@ -16,8 +16,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The JSON key to read, then the legacy name ops used first (until the secret is renamed).
-SECRET_JSON_KEYS: Final = ("HIGGSFIELD_API_KEY", "HF_KEY")
+# The secret's JSON entry; the same name as the setting it fills.
+KEY_ENTRY_NAME: Final = "HIGGSFIELD_API_KEY"
 
 
 class ProviderSecretError(RuntimeError):
@@ -33,7 +33,7 @@ def with_higgsfield_key(settings: Settings, client: SecretsManagerClient | None 
     default credential chain (the pod's IAM role) authorizes the read; no access keys are used.
 
     Raises:
-        ProviderSecretError: the secret cannot be read, is not JSON, or holds neither key.
+        ProviderSecretError: the secret cannot be read, is not JSON, or has no usable entry.
     """
     secret_id = settings.higgsfield_secret_id
     # An empty HIGGSFIELD_API_KEY= line in .env counts as not set.
@@ -53,9 +53,8 @@ def with_higgsfield_key(settings: Settings, client: SecretsManagerClient | None 
         raise ProviderSecretError(f"Secret {secret_id} is not a JSON object.") from None
     if not isinstance(data, dict):
         raise ProviderSecretError(f"Secret {secret_id} is not a JSON object.")
-    for name in SECRET_JSON_KEYS:
-        value = data.get(name)
-        if isinstance(value, str) and value:
-            logger.info("higgsfield key loaded from secret=%s json_key=%s", secret_id, name)
-            return settings.model_copy(update={"higgsfield_api_key": SecretStr(value)})
-    raise ProviderSecretError(f"Secret {secret_id} has no {' or '.join(SECRET_JSON_KEYS)} entry.")
+    value = data.get(KEY_ENTRY_NAME)
+    if not isinstance(value, str) or not value:
+        raise ProviderSecretError(f"Secret {secret_id} has no {KEY_ENTRY_NAME} entry.")
+    logger.info("higgsfield key loaded from secret=%s", secret_id)
+    return settings.model_copy(update={"higgsfield_api_key": SecretStr(value)})

@@ -53,15 +53,11 @@ def _answer(stubber: Stubber, secret: object) -> None:
     )
 
 
-@pytest.mark.parametrize("json_key", ["HIGGSFIELD_API_KEY", "HF_KEY"])
 def test_key_is_read_from_the_secret(
-    client: SecretsManagerClient,
-    stubber: Stubber,
-    json_key: str,
-    caplog: pytest.LogCaptureFixture,
+    client: SecretsManagerClient, stubber: Stubber, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    _answer(stubber, {json_key: KEY, "other": "x"})
+    _answer(stubber, {"HIGGSFIELD_API_KEY": KEY, "other": "x"})
 
     loaded = with_higgsfield_key(_settings(), client)
 
@@ -74,12 +70,13 @@ def test_key_is_read_from_the_secret(
     assert "STUBBED" not in repr(loaded)
 
 
-def test_new_name_wins_over_the_legacy_one(client: SecretsManagerClient, stubber: Stubber) -> None:
-    _answer(stubber, {"HF_KEY": "old:old", "HIGGSFIELD_API_KEY": KEY})
+def test_legacy_entry_name_is_no_longer_read(
+    client: SecretsManagerClient, stubber: Stubber
+) -> None:
+    _answer(stubber, {"HF_KEY": KEY})
 
-    loaded = with_higgsfield_key(_settings(), client)
-
-    assert loaded.higgsfield_api_key == SecretStr(KEY)
+    with pytest.raises(ProviderSecretError, match="no HIGGSFIELD_API_KEY entry"):
+        with_higgsfield_key(_settings(), client)
 
 
 def test_secret_is_not_read_when_the_key_is_set(
@@ -98,7 +95,12 @@ def test_secret_is_not_read_without_a_secret_id(client: SecretsManagerClient) ->
 
 @pytest.mark.parametrize(
     "secret",
-    [{"OTHER": KEY}, {"HIGGSFIELD_API_KEY": ""}, {"HF_KEY": 123}, ["not", "an", "object"]],
+    [
+        {"OTHER": KEY},
+        {"HIGGSFIELD_API_KEY": ""},
+        {"HIGGSFIELD_API_KEY": 123},
+        ["not", "an", "object"],
+    ],
     ids=["missing", "empty", "not-a-string", "not-an-object"],
 )
 def test_unusable_secret_is_refused_without_echoing_it(

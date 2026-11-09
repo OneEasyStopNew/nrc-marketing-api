@@ -86,7 +86,7 @@ storage.
 
 - **Key.** Locally, put it in `.env.local` (git-ignored) as `HIGGSFIELD_API_KEY=<key-id>:<key-secret>`,
   never in `.env`. On staging the worker reads it at startup from Secrets Manager
-  (`HIGGSFIELD_SECRET_ID=nrc/stg/higgsfield`, JSON entry `HIGGSFIELD_API_KEY` or the legacy `HF_KEY`)
+  (`HIGGSFIELD_SECRET_ID=nrc/stg/higgsfield`, JSON entry `HIGGSFIELD_API_KEY`)
   through its IAM role and keeps it in memory only.
 - **Connectivity check.** `scripts/higgsfield_smoke.py` runs outside the API. `--help` lists the
   candidate model ids and their smallest documented settings, with the doc source.
