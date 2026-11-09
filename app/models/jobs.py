@@ -107,8 +107,12 @@ class OutboxEvent(Base):
     __tablename__ = "outbox_events"
     __table_args__ = (
         ForeignKeyConstraint(["tenant_id", "job_id"], ["jobs.tenant_id", "jobs.id"]),
+        # The lease filters by event type first, so unhandled types are never scanned.
         Index(
-            "ix_outbox_events_due", "available_at", postgresql_where=text("processed_at IS NULL")
+            "ix_outbox_events_due",
+            "event_type",
+            "available_at",
+            postgresql_where=text("processed_at IS NULL"),
         ),
     )
 
