@@ -363,9 +363,11 @@ async def test_423_is_retryable_unavailable_but_submit_503_stays_unknown() -> No
         await make(fixed(503, json={"detail": "x"})).submit(request())
 
 
-async def test_403_is_insufficient_balance() -> None:
+@pytest.mark.parametrize("code", [402, 403])
+async def test_402_and_403_are_insufficient_balance(code: int) -> None:
     with pytest.raises(HiggsfieldInsufficientBalanceError) as info:
-        await make(fixed(403, json={"detail": "x"})).submit(request())
+        await make(fixed(code, json={"detail": "x"})).submit(request())
+    assert f"HTTP {code}" in str(info.value)
     assert isinstance(info.value, ProviderConfigError)
     assert info.value.code == "PROVIDER_INSUFFICIENT_BALANCE"
 

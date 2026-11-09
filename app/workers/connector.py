@@ -216,8 +216,13 @@ class ImageGenerationHandler:
         try:
             submitted = await provider.submit(request)
         except ProviderOutcomeUnknownError as error:
+            # Timeout after sending, 5xx or an unreadable answer: the provider may have the
+            # request, so only the same-key resend (reconcile) is safe from here on.
             await _park_unknown(db, job.id, error.code)
-            return backoff_seconds(1)
+            if error.code == IDEMPOTENCY_CONFLICT:
+                _log_review_stop(job, error)
+                return None
+            return max(error.retry_after_seconds or 0.0, backoff_seconds(1))
         except ProviderError as error:
             return await _retry_or_fail(db, job, error)
         return await self._accepted(db, job, provider, submitted, step)
@@ -240,12 +245,7 @@ class ImageGenerationHandler:
             transient = error.retryable or isinstance(error, ProviderOutcomeUnknownError)
             if transient and error.code != IDEMPOTENCY_CONFLICT:
                 return max(error.retry_after_seconds or 0.0, backoff_seconds(step.event_attempts))
-            logger.warning(
-                "reconcile stopped for operator review job=%s tenant=%s code=%s",
-                job.id,
-                job.tenant_id,
-                error.code,
-            )
+            _log_review_stop(job, error)
             return None
         return await self._accepted(db, job, provider, submitted, step)
 
@@ -556,9 +556,14 @@ def _log_call(
 
 
 async def _retry_or_fail(db: AsyncSession, job: Job, error: ProviderError) -> float | None:
-    # For errors before acceptance: back off while attempts remain, then fail without billing.
+    """For errors where the provider certainly did not accept the request.
+
+    Retryable ones (429, 423, 5xx on estimate or status, connect failures) back off and try
+    again with the same key until the job's deadline, which the handler checks first. Anything
+    else (400, 401, 402, 403, 404, 422) fails at once without billing.
+    """
     attempts = job.attempt_count + 1
-    if error.retryable and attempts < job.max_attempts:
+    if error.retryable:
         await transition(
             db,
             job.id,
@@ -568,8 +573,24 @@ async def _retry_or_fail(db: AsyncSession, job: Job, error: ProviderError) -> fl
             attempt_count=attempts,
         )
         return max(error.retry_after_seconds or 0.0, backoff_seconds(attempts))
+    logger.warning(
+        "provider refused job=%s tenant=%s code=%s reason=%s",
+        job.id,
+        job.tenant_id,
+        error.code,
+        error.message,
+    )
     await _fail_with(db, job.id, error.code, error.message, billed=False, attempt_count=attempts)
     return None
+
+
+def _log_review_stop(job: Job, error: ProviderError) -> None:
+    logger.warning(
+        "reconcile stopped for operator review job=%s tenant=%s code=%s",
+        job.id,
+        job.tenant_id,
+        error.code,
+    )
 
 
 async def _fail_with(

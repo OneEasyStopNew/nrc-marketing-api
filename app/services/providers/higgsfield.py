@@ -63,6 +63,9 @@ _FAILURE_CODES = {
 }
 
 _CONFIG_STATUSES = frozenset({401, 404})
+# concepts/errors documents 403 as "Insufficient balance"; 402 is not documented but means
+# Payment Required, so it is treated the same. Both are terminal: nothing was generated.
+_BALANCE_STATUSES = frozenset({402, 403})
 
 # Failures where the request provably never left this process.
 _NOT_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
@@ -283,9 +286,9 @@ class HiggsfieldProvider:
             )
         if code == 423:
             raise ProviderUnavailableError("Higgsfield model is temporarily blocked (HTTP 423)")
-        if code == 403:
+        if code in _BALANCE_STATUSES:
             raise HiggsfieldInsufficientBalanceError(
-                "Higgsfield account has insufficient balance or the key is disabled (HTTP 403)"
+                f"Higgsfield account has insufficient balance or the key is disabled (HTTP {code})"
             )
         if code == 404 and status_lookup:
             raise ProviderConfigError("Higgsfield request was not found or has expired (HTTP 404)")

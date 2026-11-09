@@ -293,21 +293,24 @@ async def test_simulated_provider_failure_fails_the_job(
     assert reservation is ReservationState.RELEASED
 
 
-async def test_simulated_rate_limit_retries_then_fails_and_releases_credits(
+async def test_simulated_rate_limit_retries_until_the_deadline_then_releases_credits(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
     provider = SimulatedImageProvider(SimulatorScenario.RATE_LIMITED)
+    retries = get_settings().generation_max_attempts + 2
 
-    for _ in range(get_settings().generation_max_attempts):
+    for _ in range(retries):
         await _run(sessions, provider, FakeSink())
-        await connection.execute(
-            text("UPDATE outbox_events SET available_at = clock_timestamp() - interval '1 second'")
-        )
+        await _requeue(connection, world)
+    waiting, reserved = await _load(sessions, world, job_id)
+    later = datetime.now(UTC) + timedelta(days=2)
+    await run_once(sessions, {"simulator": provider}, FakeSink(), get_settings(), now=later)
 
     job, reservation = await _load(sessions, world, job_id)
-    assert job.state is ExecutionState.FAILED
-    assert job.failure_code == "PROVIDER_RATE_LIMITED"
-    assert sum(provider.submits.values()) == get_settings().generation_max_attempts
+    assert (waiting.state, waiting.stage) == (ExecutionState.RUNNING, "retry_wait")
+    assert reserved is ReservationState.RESERVED
+    assert provider.submits == {f"nrc-job-{job_id}": retries}
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "DEADLINE_EXCEEDED")
     assert reservation is ReservationState.RELEASED
 
 
