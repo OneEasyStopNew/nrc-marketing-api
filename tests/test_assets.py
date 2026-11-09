@@ -22,7 +22,7 @@ from app.models.jobs import ReservationState
 from app.services.assets import StoredImageSink
 from app.services.providers.base import FetchedImage, ProviderOutputError
 from app.services.providers.simulator import SimulatedImageProvider, render_simulated_png
-from app.services.storage import ObjectStorage
+from app.services.storage import ObjectStorage, StorageError
 from app.workers.connector import WorkerConfigError, build_providers, run_once
 from tests.conftest import AuthHeaders, World
 from tests.test_job_worker import ScriptedProvider
@@ -196,6 +196,29 @@ async def test_storage_not_configured_returns_503(
 
     assert response.status_code == 503
     assert response.json()["code"] == "DEPENDENCY_UNAVAILABLE"
+
+
+async def test_storage_failure_while_signing_the_url_returns_503(
+    sessions: Sessions,
+    sink: StoredImageSink,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, asset_id = await _succeeded_asset(sessions, sink, client, auth, world)
+
+    async def unavailable(*args: object, **kwargs: object) -> str:
+        raise StorageError
+
+    monkeypatch.setattr(ObjectStorage, "presigned_get", unavailable)
+
+    response = await _get_asset(client, auth, "creator-a", world.a.tenant_id, asset_id)
+
+    assert response.status_code == 503
+    body = response.json()
+    assert (body["code"], body["retryable"]) == ("DEPENDENCY_UNAVAILABLE", True)
+    assert "s3" not in body["message"].lower()
 
 
 async def test_payload_that_is_not_an_image_fails_the_job_without_an_asset(

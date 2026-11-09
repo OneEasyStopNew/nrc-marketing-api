@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
 from app.core.config import Settings
-from app.core.errors import NotFoundError
+from app.core.errors import DependencyUnavailableError, NotFoundError
 from app.models import Asset, Creative, Job, OutboxEvent
 from app.schemas.assets import AssetOrigin, AssetRead
 from app.services import media
@@ -151,7 +151,12 @@ async def get_asset(
     ttl = settings.asset_url_ttl_seconds
     expires_at = datetime.now(UTC) + timedelta(seconds=ttl)
     # The URL is returned to the caller only: never stored or logged.
-    url = await storage.presigned_get(asset.s3_key, version_id=asset.s3_version_id, expires_in=ttl)
+    try:
+        url = await storage.presigned_get(
+            asset.s3_key, version_id=asset.s3_version_id, expires_in=ttl
+        )
+    except StorageError:
+        raise DependencyUnavailableError("Image storage is temporarily unavailable.") from None
     return AssetRead(
         asset_id=asset.id,
         creative_id=asset.creative_id,

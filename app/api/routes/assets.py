@@ -18,7 +18,10 @@ router = APIRouter(tags=["assets"])
     description="The URL is not stored or logged; ask again when it expires.",
     responses={
         404: {"model": ErrorBody, "description": "Asset not found or not permitted."},
-        503: {"model": ErrorBody, "description": "Object storage is not configured."},
+        503: {
+            "model": ErrorBody,
+            "description": "Object storage is not configured or temporarily unavailable.",
+        },
     },
 )
 async def get_asset(
