@@ -12,8 +12,15 @@ from sqlalchemy.pool import NullPool
 from app.api.deps import get_signing_keys
 from app.main import create_app
 from scripts.list_unknown_jobs import list_unknown_jobs, read_only_engine
-from tests.conftest import AuthHeaders, IntegrationEnv, SeededTenant, StaticKeys, World
-from tests.test_jobs_api import _creative, _post_job
+from tests.conftest import (
+    AuthHeaders,
+    IntegrationEnv,
+    SeededTenant,
+    StaticKeys,
+    World,
+    _creative,
+    _post_job,
+)
 
 
 async def _accept_jobs(tenant: SeededTenant, signing_key: RSAPrivateKey, count: int) -> list[str]:

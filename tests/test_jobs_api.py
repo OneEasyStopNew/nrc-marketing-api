@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Iterator
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 import pytest
@@ -18,41 +18,16 @@ from app.core.config import get_settings
 from app.core.errors import ValidationNotPassedError
 from app.main import create_app
 from app.services import eligibility
-from tests.conftest import AuthHeaders, IntegrationEnv, SeededTenant, StaticKeys, World
-
-JOBS = "/v1/marketing/creative-jobs"
-
-
-async def _creative(client: httpx.AsyncClient, auth: AuthHeaders, tenant: SeededTenant) -> str:
-    response = await client.post(
-        "/v1/marketing/creatives",
-        headers=auth("creator-a", tenant.tenant_id, **{"Idempotency-Key": uuid4().hex}),
-        json={
-            "study_id": str(tenant.study_id),
-            "prompt": "Invite adults with high blood pressure to learn about the study.",
-            "language": "en",
-            "channel": "facebook",
-            "post_format": "feed_image",
-        },
-    )
-    assert response.status_code == 201, response.text
-    creative_id: str = response.json()["id"]
-    return creative_id
-
-
-async def _post_job(
-    client: httpx.AsyncClient,
-    auth: AuthHeaders,
-    world: World,
-    creative_id: str,
-    *,
-    key: str | None = None,
-    sub: str = "creator-a",
-    version: int = 1,
-) -> httpx.Response:
-    headers = auth(sub, world.a.tenant_id, **{"Idempotency-Key": key or uuid4().hex})
-    body = {"creative_id": creative_id, "creative_version": version, "kind": "image_generation"}
-    return await client.post(JOBS, headers=headers, json=body)
+from tests.conftest import (
+    JOBS,
+    AuthHeaders,
+    IntegrationEnv,
+    SeededTenant,
+    StaticKeys,
+    World,
+    _creative,
+    _post_job,
+)
 
 
 async def _count(connection: AsyncConnection, tenant_id: UUID, table: str) -> int:

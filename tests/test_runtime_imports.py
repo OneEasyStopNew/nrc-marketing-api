@@ -1,5 +1,6 @@
 # The production image installs runtime dependencies only: app code must import without dev ones.
 
+import re
 import subprocess
 import sys
 
@@ -36,3 +37,14 @@ def test_app_imports_without_dev_dependencies() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_no_test_module_imports_another() -> None:
+    # Shared fixtures and helpers live in tests/conftest.py.
+    offenders = [
+        path.name
+        for path in (ROOT / "tests").glob("test_*.py")
+        if re.search(r"^\s*(from|import) tests\.test_", path.read_text(encoding="utf-8"), re.M)
+    ]
+
+    assert offenders == []

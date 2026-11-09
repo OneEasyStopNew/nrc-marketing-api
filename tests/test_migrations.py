@@ -23,9 +23,10 @@ from tests.conftest import (
     SeededTenant,
     StaticKeys,
     World,
+    _creative,
+    _post_job,
     as_role,
 )
-from tests.test_jobs_api import _creative, _post_job
 
 # The revision before the derived-key change; downgrading to it runs that change's downgrade.
 BEFORE_DERIVED_KEYS = "a3c5e7b91d24"

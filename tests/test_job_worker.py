@@ -1,37 +1,28 @@
 # Connector worker against the simulated provider: every image here is SIMULATED.
 
-import dataclasses
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import Row, select, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.db.session import bind_tenant
-from app.models import Asset, CreditReservation, Job
+from app.models import Asset, Job
 from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState, SpendState
 from app.services.jobs import jobs_awaiting_review, transition
 from app.services.providers.base import (
-    FetchedImage,
-    ImageRequest,
     ProviderConfigError,
-    ProviderError,
-    ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
     ProviderRateLimitedError,
     ProviderUnavailableError,
-    StatusResult,
-    SubmitResult,
 )
 from app.services.providers.higgsfield import higgsfield_credentials
 from app.services.providers.simulator import SimulatedImageProvider, SimulatorScenario
@@ -45,43 +36,22 @@ from app.workers.connector import (
     build_providers,
     run_once,
 )
-from tests.conftest import WORKER_ROLE, AuthHeaders, World, app_session, as_role
-from tests.test_jobs_api import _creative, _post_job
-
-Sessions = async_sessionmaker[AsyncSession]
-
-
-class FakeSink:
-    # Stands in for generated-image storage: a metadata row without any object.
-
-    def __init__(self) -> None:
-        self.stored: list[UUID] = []
-
-    async def store(
-        self, db: AsyncSession, job: Job, image: FetchedImage, provider_name: str, model: str
-    ) -> UUID:
-        assert image.content.startswith(b"\x89PNG")
-        assert provider_name == "simulator"
-        # A real row, because jobs.result_asset_id is a foreign key to assets.
-        asset = Asset(
-            tenant_id=job.tenant_id,
-            creative_id=job.creative_id,
-            creative_version=job.creative_version,
-            job_id=job.id,
-            origin="generated",
-            bucket="fake",
-            s3_key=f"fake/{uuid4()}.png",
-            mime_type="image/png",
-            width_px=1,
-            height_px=1,
-            size_bytes=len(image.content),
-            checksum_sha256="0" * 64,
-            created_by=job.created_by,
-        )
-        db.add(asset)
-        await db.flush()
-        self.stored.append(asset.id)
-        return asset.id
+from tests.conftest import (
+    WORKER_ROLE,
+    AuthHeaders,
+    FakeSink,
+    ScriptedProvider,
+    Sessions,
+    World,
+    _creative,
+    _event,
+    _load,
+    _post_job,
+    _requeue,
+    _spend,
+    app_session,
+    as_role,
+)
 
 
 @pytest.fixture
@@ -90,31 +60,6 @@ async def job_id(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> 
     response = await _post_job(client, auth, world, creative_id)
     assert response.status_code == 202
     return UUID(response.json()["job_id"])
-
-
-async def _load(sessions: Sessions, world: World, job_id: UUID) -> tuple[Job, ReservationState]:
-    async with sessions() as db:
-        await bind_tenant(db, world.a.tenant_id)
-        job = await db.get(Job, job_id)
-        reservation = await db.scalar(
-            select(CreditReservation.state).where(CreditReservation.job_id == job_id)
-        )
-    assert job is not None
-    assert reservation is not None
-    return job, reservation
-
-
-async def _requeue(connection: AsyncConnection, world: World) -> None:
-    # Make every outbox event due now, as if its backoff had passed.
-    await connection.execute(
-        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
-    )
-    await connection.execute(
-        text(
-            "UPDATE outbox_events SET processed_at = NULL,"
-            " available_at = clock_timestamp() - interval '1 second'"
-        )
-    )
 
 
 async def _expire_leases(connection: AsyncConnection, world: World) -> None:
@@ -126,84 +71,8 @@ async def _expire_leases(connection: AsyncConnection, world: World) -> None:
     )
 
 
-async def _event(connection: AsyncConnection) -> Row[Any]:
-    # The single outbox event of the test (RLS: tenant A is bound by now).
-    return (
-        await connection.execute(
-            text(
-                "SELECT processed_at, lease_owner, last_error_code, attempts, failed_attempts"
-                " FROM outbox_events WHERE event_type = 'job.run'"
-            )
-        )
-    ).one()
-
-
-class ScriptedProvider(SimulatedImageProvider):
-    # SIMULATED provider whose next calls can fail on cue.
-
-    def __init__(self) -> None:
-        super().__init__()
-        # Raised by the next submits, after the request was recorded (accepted, response lost).
-        self.submit_errors: list[Exception] = []
-        self.status_error: ProviderError | None = None
-        self.fetch_error: ProviderError | None = None
-        # Reported in the COMPLETED status, as a provider stating its actual cost would.
-        self.actual_cost_usd: Decimal | None = None
-        self.estimates = 0
-        self.before_estimate: Callable[[], Awaitable[None]] | None = None
-        self.before_submit: Callable[[], Awaitable[None]] | None = None
-        self.before_fetch: Callable[[], Awaitable[None]] | None = None
-        # Status checks that still report the generation as in progress.
-        self.pending_polls = 0
-
-    async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
-        self.estimates += 1
-        if self.before_estimate is not None:
-            await self.before_estimate()
-        return await super().estimate_cost_usd(request)
-
-    async def submit(self, request: ImageRequest) -> SubmitResult:
-        if self.before_submit is not None:
-            await self.before_submit()
-        result = await super().submit(request)
-        if self.submit_errors:
-            raise self.submit_errors.pop(0)
-        return result
-
-    async def get_status(self, provider_request_id: str) -> StatusResult:
-        if self.status_error is not None:
-            raise self.status_error
-        if self.pending_polls:
-            self.pending_polls -= 1
-            return StatusResult(provider_request_id, ProviderJobStatus.IN_PROGRESS)
-        result = await super().get_status(provider_request_id)
-        return dataclasses.replace(result, actual_cost_usd=self.actual_cost_usd)
-
-    async def fetch_output(self, result: StatusResult) -> FetchedImage:
-        if self.before_fetch is not None:
-            await self.before_fetch()
-        if self.fetch_error is not None:
-            raise self.fetch_error
-        return await super().fetch_output(result)
-
-
 class IdempotencyConflictError(ProviderOutcomeUnknownError):
     code = "PROVIDER_IDEMPOTENCY_CONFLICT"
-
-
-async def _spend(connection: AsyncConnection, provider: str = "simulator") -> tuple[int, int]:
-    # (reserved, committed) micro-USD of the global spend counter; only the worker may read it.
-    await as_role(connection, WORKER_ROLE)
-    row = (
-        await connection.execute(
-            text(
-                "SELECT reserved_usd_micros, committed_usd_micros FROM provider_spend"
-                " WHERE provider = :p"
-            ),
-            {"p": provider},
-        )
-    ).one()
-    return int(row.reserved_usd_micros), int(row.committed_usd_micros)
 
 
 def _priced(cost: str = "0.094") -> ScriptedProvider:

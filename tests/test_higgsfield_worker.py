@@ -16,7 +16,7 @@ import pytest
 from PIL import Image
 from pydantic import SecretStr
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -30,12 +30,19 @@ from app.services.providers.base import FetchedImage, OutputFetcher, ProviderOut
 from app.services.providers.higgsfield import HiggsfieldProvider
 from app.services.storage import ObjectStorage, StoredObject
 from app.workers.connector import GeneratedImageSink, run_once
-from tests.conftest import AuthHeaders, World
-from tests.test_job_worker import _event, _load, _requeue, _spend
-from tests.test_jobs_api import _creative, _post_job
-from tests.test_storage import needs_seaweedfs
+from tests.conftest import (
+    AuthHeaders,
+    Sessions,
+    World,
+    _creative,
+    _event,
+    _load,
+    _post_job,
+    _requeue,
+    _spend,
+    needs_seaweedfs,
+)
 
-Sessions = async_sessionmaker[AsyncSession]
 MODEL = "higgsfield-ai/soul/standard"
 ESTIMATE_USD = "0.05"
 OUTPUT_HOST = "images.higgsfield.example"

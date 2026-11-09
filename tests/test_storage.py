@@ -1,7 +1,6 @@
 """Object storage against the local SeaweedFS (bucket nrc-test-media)."""
 
 import hashlib
-import os
 import re
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -17,24 +16,7 @@ from app.services.storage import (
     StorageError,
     StorageNotConfiguredError,
 )
-
-ENDPOINT = "http://127.0.0.1:8333"
-BUCKET = "nrc-test-media"
-
-
-def _seaweedfs_reachable() -> bool:
-    try:
-        httpx.get(ENDPOINT, timeout=2)
-    except httpx.HTTPError:
-        return False
-    return True
-
-
-# Locally the tests skip without SeaweedFS; in CI (CI env var set) they run and so fail loudly.
-needs_seaweedfs = pytest.mark.skipif(
-    "CI" not in os.environ and not _seaweedfs_reachable(),
-    reason=f"SeaweedFS is not reachable at {ENDPOINT}",
-)
+from tests.conftest import BUCKET, ENDPOINT, needs_seaweedfs
 
 
 @pytest.fixture(autouse=True)

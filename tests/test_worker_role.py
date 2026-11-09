@@ -10,8 +10,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.workers.connector import WorkerConfigError, worker_database_url
-from tests.conftest import APP_ROLE, WORKER_ROLE, AuthHeaders, World, as_role
-from tests.test_jobs_api import _creative, _post_job
+from tests.conftest import APP_ROLE, WORKER_ROLE, AuthHeaders, World, _creative, _post_job, as_role
 
 LEASE_4 = "lease_outbox_events(text, integer, integer, text[])"
 LEASE_3 = "lease_outbox_events(text, integer, integer)"

@@ -12,7 +12,7 @@ from PIL import Image
 from pydantic import SecretStr
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.config import get_settings
 from app.db.session import bind_tenant
@@ -24,14 +24,17 @@ from app.services.providers.base import FetchedImage, ProviderOutputError
 from app.services.providers.simulator import SimulatedImageProvider, render_simulated_png
 from app.services.storage import ObjectStorage, StorageError
 from app.workers.connector import WorkerConfigError, build_providers, run_once
-from tests.conftest import AuthHeaders, World
-from tests.test_job_worker import ScriptedProvider
-from tests.test_jobs_api import _creative, _post_job
-from tests.test_storage import needs_seaweedfs
+from tests.conftest import (
+    AuthHeaders,
+    ScriptedProvider,
+    Sessions,
+    World,
+    _creative,
+    _post_job,
+    needs_seaweedfs,
+)
 
 pytestmark = needs_seaweedfs
-
-Sessions = async_sessionmaker[AsyncSession]
 
 
 @pytest.fixture

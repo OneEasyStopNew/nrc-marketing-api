@@ -26,9 +26,15 @@ from app.main import create_app
 from app.services.providers.base import ImageRequest, SubmitResult
 from app.services.providers.simulator import SimulatedImageProvider
 from app.workers.connector import run_once
-from tests.conftest import AuthHeaders, IntegrationEnv, SeededTenant, StaticKeys
-from tests.test_job_worker import FakeSink
-from tests.test_jobs_api import JOBS, _creative
+from tests.conftest import (
+    JOBS,
+    AuthHeaders,
+    FakeSink,
+    IntegrationEnv,
+    SeededTenant,
+    StaticKeys,
+    _creative,
+)
 
 
 class SlowProvider(SimulatedImageProvider):
