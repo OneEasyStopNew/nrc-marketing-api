@@ -78,6 +78,11 @@ SIMULATED. End to end you will see:
 Without `AWS_S3_BUCKET` the simulator worker still runs, but finished jobs stop at stage
 `output_ready`. `GENERATION_MODE=live` refuses to start without storage.
 
+The worker connects as `marketing_worker` through `WORKER_DATABASE_URL` and refuses to start
+without it. A job it gives up on while the provider may still have it stays `UNKNOWN` with its
+credits held; `uv run python -m scripts.list_unknown_jobs` lists those (ids only, read-only) for an
+operator to settle.
+
 ### Higgsfield (live)
 
 Live mode (`GENERATION_MODE=live`) stays off: the worker refuses to start until the validation-PASS
