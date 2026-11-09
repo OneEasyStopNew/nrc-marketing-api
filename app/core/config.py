@@ -32,7 +32,33 @@ class Settings(BaseSettings):
 
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
 
-    @field_validator("cognito_client_ids", "cors_origins", mode="before")
+    # Image generation (NRC-6, NRC-10). Live mode never falls back to the simulator.
+    generation_mode: Literal["simulator", "live"] = "simulator"
+    generation_max_active_jobs_per_tenant: int = Field(default=2, ge=1, le=50)
+    generation_daily_credit_ceiling_per_tenant: int = Field(default=50, ge=0)
+    generation_credits_per_image: int = Field(default=1, ge=1)
+    generation_max_attempts: int = Field(default=3, ge=1, le=10)
+    generation_deadline_seconds: int = Field(default=900, ge=60, le=86_400)
+    worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
+    worker_lease_seconds: int = Field(default=60, ge=5, le=3600)
+    higgsfield_base_url: str = "https://api.higgsfield.ai"
+    higgsfield_model: str | None = None
+    higgsfield_api_key_id: SecretStr | None = None
+    higgsfield_api_key_secret: SecretStr | None = None
+    higgsfield_output_hosts: Annotated[tuple[str, ...], NoDecode] = ()
+
+    # Media storage (NRC-3). The bucket comes only from configuration, never from code.
+    aws_region: str = "us-east-1"
+    aws_s3_bucket: str | None = None
+    # Local SeaweedFS only; never set on servers, where the IAM role gives access.
+    aws_endpoint_url_s3: str | None = None
+    s3_force_path_style: bool = False
+    aws_profile: str | None = None
+    max_generated_image_bytes: int = Field(default=10_485_760, ge=1024)
+    max_image_pixels: int = Field(default=25_000_000, ge=1)
+    asset_url_ttl_seconds: int = Field(default=900, ge=60, le=3600)
+
+    @field_validator("cognito_client_ids", "cors_origins", "higgsfield_output_hosts", mode="before")
     @classmethod
     def _split_comma_separated(cls, value: object) -> object:
         if isinstance(value, str):
