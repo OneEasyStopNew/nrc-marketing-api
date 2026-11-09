@@ -9,7 +9,9 @@ from typing import override
 from app.core.request_context import request_id_var
 
 MAX_MESSAGE_CHARS = 4000
-QUIET_LOGGERS = ("httpx", "httpcore")
+# httpx logs every request URL at INFO (provider output URLs carry signatures); botocore logs
+# whole responses at DEBUG, including the Secrets Manager value.
+QUIET_LOGGERS = ("httpx", "httpcore", "botocore", "boto3", "urllib3")
 
 
 class JsonFormatter(logging.Formatter):
@@ -43,7 +45,6 @@ def configure_logging(level: str) -> None:
                 }
             },
             "root": {"level": level, "handlers": ["stdout"]},
-            # httpx logs every request URL at INFO; provider output URLs carry signatures.
             "loggers": {name: {"level": "WARNING"} for name in QUIET_LOGGERS},
         }
     )

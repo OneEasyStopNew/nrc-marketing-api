@@ -366,3 +366,11 @@ def test_http_client_request_urls_are_never_logged() -> None:
 
     for name in ("httpx", "httpcore"):
         assert logging.getLogger(name).getEffectiveLevel() >= logging.WARNING
+
+
+def test_aws_sdk_responses_are_never_logged_at_debug() -> None:
+    # botocore logs response bodies at DEBUG, including the Secrets Manager key.
+    configure_logging("DEBUG")
+
+    for name in ("botocore", "botocore.endpoint", "boto3", "urllib3"):
+        assert logging.getLogger(name).getEffectiveLevel() >= logging.WARNING
