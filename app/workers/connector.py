@@ -58,6 +58,7 @@ from app.services.jobs import (
     transition,
 )
 from app.services.providers.base import (
+    HIGGSFIELD_NAME,
     TERMINAL_PROVIDER_STATUSES,
     FetchedImage,
     ImageProvider,
@@ -68,7 +69,6 @@ from app.services.providers.base import (
     SubmitResult,
 )
 from app.services.providers.higgsfield import (
-    HIGGSFIELD_NAME,
     ProviderSecretError,
     create_provider,
     missing_live_settings,

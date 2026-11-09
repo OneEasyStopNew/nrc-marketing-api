@@ -18,7 +18,7 @@ from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobKind, JobRead
 from app.services import eligibility, idempotency
-from app.services.providers.higgsfield import HIGGSFIELD_NAME
+from app.services.providers.base import HIGGSFIELD_NAME
 from app.services.providers.simulator import SIMULATOR_MODEL, SIMULATOR_NAME
 
 logger = logging.getLogger(__name__)

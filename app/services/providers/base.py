@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import ClassVar, Protocol
+from typing import ClassVar, Final, Protocol
+
+# Provider names stored as jobs.provider and provider_spend.provider (seeded by migration
+# 440a8d5dba9a). Here, not in the adapter, so the API can name a provider without importing it.
+HIGGSFIELD_NAME: Final = "higgsfield"
 
 
 class ProviderJobStatus(StrEnum):

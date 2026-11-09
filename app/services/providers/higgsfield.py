@@ -28,6 +28,7 @@ from pydantic import SecretStr
 from app.core.config import Settings
 from app.services.fetch import SafeFetcher, build_fetch_client
 from app.services.providers.base import (
+    HIGGSFIELD_NAME,
     FetchedImage,
     ImageRequest,
     OutputFetcher,
@@ -48,8 +49,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Stored as jobs.provider and provider_spend.provider (seeded by migration 440a8d5dba9a).
-HIGGSFIELD_NAME: Final = "higgsfield"
 # The Secrets Manager secret's JSON entry; the same name as the setting it fills.
 KEY_ENTRY_NAME: Final = "HIGGSFIELD_API_KEY"
 

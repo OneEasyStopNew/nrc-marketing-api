@@ -48,3 +48,13 @@ def test_no_test_module_imports_another() -> None:
     ]
 
     assert offenders == []
+
+
+def test_api_process_does_not_load_the_provider_adapter() -> None:
+    # Provider calls run only in the worker; the API never needs the adapter, boto3 or its client.
+    script = "import sys, app.main; print('app.services.providers.higgsfield' in sys.modules)"
+    result = subprocess.run(  # noqa: S603  fixed interpreter and script, no user input
+        [sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, check=False
+    )
+
+    assert (result.returncode, result.stdout.strip()) == (0, "False"), result.stderr
