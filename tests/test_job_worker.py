@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
-from app.db.session import TenantSession, bind_tenant
+from app.db.session import bind_tenant
 from app.models import Asset, CreditReservation, Job
 from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState, SpendState
@@ -43,7 +43,7 @@ from app.workers.connector import (
     build_providers,
     run_once,
 )
-from tests.conftest import AuthHeaders, World
+from tests.conftest import WORKER_ROLE, AuthHeaders, World, app_session, as_role
 from tests.test_jobs_api import _creative, _post_job
 
 Sessions = async_sessionmaker[AsyncSession]
@@ -80,16 +80,6 @@ class FakeSink:
         await db.flush()
         self.stored.append(asset.id)
         return asset.id
-
-
-@pytest.fixture
-def sessions(connection: AsyncConnection) -> Sessions:
-    return async_sessionmaker(
-        bind=connection,
-        join_transaction_mode="create_savepoint",
-        expire_on_commit=False,
-        sync_session_class=TenantSession,
-    )
 
 
 @pytest.fixture
@@ -200,7 +190,8 @@ class IdempotencyConflictError(ProviderOutcomeUnknownError):
 
 
 async def _spend(connection: AsyncConnection, provider: str = "simulator") -> tuple[int, int]:
-    # (reserved, committed) micro-USD of the global spend counter.
+    # (reserved, committed) micro-USD of the global spend counter; only the worker may read it.
+    await as_role(connection, WORKER_ROLE)
     row = (
         await connection.execute(
             text(
@@ -307,6 +298,7 @@ async def test_expired_lease_is_processed_once(
 ) -> None:
     provider, sink = SimulatedImageProvider(), FakeSink()
     # A worker leases the event and dies; then its lease runs out.
+    await as_role(connection, WORKER_ROLE)
     crashed = await connection.execute(
         text("SELECT * FROM lease_outbox_events('crashed-worker', 10, 60, ARRAY['job.run'])")
     )
@@ -656,11 +648,12 @@ async def test_completed_output_never_stored_commits_the_credits_past_the_cap(
     assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_UNAVAILABLE")
     assert reservation is ReservationState.COMMITTED
     assert await _spend(connection) == (reserved, committed + 94_000)
-    assert await _awaiting_review(sessions) == []
+    assert await _awaiting_review(connection) == []
 
 
-async def _awaiting_review(sessions: Sessions) -> list[tuple[UUID, UUID]]:
-    async with sessions() as db:
+async def _awaiting_review(connection: AsyncConnection) -> list[tuple[UUID, UUID]]:
+    # Lists across tenants, so it needs a role that reads tenants (the script uses the owner).
+    async with app_session(connection) as db:
         return await jobs_awaiting_review(db)
 
 
@@ -670,7 +663,7 @@ async def test_unbilled_unknown_job_past_the_cap_is_listed_for_review(
     provider = ScriptedProvider()
     provider.submit_errors = [ProviderOutcomeUnknownError("Simulated lost response.")]
     await _run(sessions, provider, FakeSink())
-    still_reconciling = await _awaiting_review(sessions)
+    still_reconciling = await _awaiting_review(connection)
     await _fail_attempts(connection, world)
     await _requeue(connection, world)
 
@@ -682,7 +675,7 @@ async def test_unbilled_unknown_job_past_the_cap_is_listed_for_review(
     assert job.state is ExecutionState.UNKNOWN
     assert reservation is ReservationState.HELD
     assert (event.processed_at is not None, event.last_error_code) == (True, "ATTEMPTS_EXHAUSTED")
-    assert await _awaiting_review(sessions) == [(world.a.tenant_id, job_id)]
+    assert await _awaiting_review(connection) == [(world.a.tenant_id, job_id)]
     # Given up: no worker leases it again.
     assert await _run(sessions, provider, FakeSink()) == 0
 
@@ -820,6 +813,7 @@ async def test_spend_past_the_global_budget_fails_before_submitting(
 ) -> None:
     budget = int(get_settings().generation_global_budget_usd * 1_000_000)
     # Earlier generations have used all but $0.05 of the budget.
+    await as_role(connection, WORKER_ROLE)
     await connection.execute(
         text("UPDATE provider_spend SET committed_usd_micros = :c WHERE provider = 'simulator'"),
         {"c": budget - 50_000},

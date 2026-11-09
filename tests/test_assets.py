@@ -15,7 +15,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
-from app.db.session import TenantSession, bind_tenant
+from app.db.session import bind_tenant
 from app.models import Asset, CreditReservation, Job
 from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState
@@ -32,16 +32,6 @@ from tests.test_storage import needs_seaweedfs
 pytestmark = needs_seaweedfs
 
 Sessions = async_sessionmaker[AsyncSession]
-
-
-@pytest.fixture
-def sessions(connection: AsyncConnection) -> Sessions:
-    return async_sessionmaker(
-        bind=connection,
-        join_transaction_mode="create_savepoint",
-        expire_on_commit=False,
-        sync_session_class=TenantSession,
-    )
 
 
 @pytest.fixture

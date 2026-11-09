@@ -142,6 +142,9 @@ Conventions:
 
 - A Postgres login role `marketing_app` that does not own the tables and has no `BYPASSRLS`. The API's
   `DATABASE_URL` uses it. Migrations run as the owner through `MIGRATION_DATABASE_URL`.
+- A second login role `marketing_worker`, created the same way (not an owner, no `BYPASSRLS`, not a
+  member of the owner role), before `alembic upgrade head`, which grants it the worker's tables. The
+  connector worker's `WORKER_DATABASE_URL` uses it and the worker refuses to start without it.
 - Cognito: `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_IDS` and a resource-server
   scope matching `REQUIRED_SCOPE`.
 - `ENABLE_DOCS=false`, `CORS_ORIGINS` set to the frontend origin, and `FORWARDED_ALLOW_IPS` set to the

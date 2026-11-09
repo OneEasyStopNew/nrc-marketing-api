@@ -15,7 +15,16 @@ from sqlalchemy.pool import NullPool
 
 from app.api.deps import get_signing_keys
 from app.main import create_app
-from tests.conftest import ROOT, AuthHeaders, IntegrationEnv, SeededTenant, StaticKeys, World
+from tests.conftest import (
+    ROOT,
+    WORKER_ROLE,
+    AuthHeaders,
+    IntegrationEnv,
+    SeededTenant,
+    StaticKeys,
+    World,
+    as_role,
+)
 from tests.test_jobs_api import _creative, _post_job
 
 # The revision before the derived-key change; downgrading to it runs that change's downgrade.
@@ -42,6 +51,7 @@ async def test_three_argument_lease_still_works_and_leases_only_job_runs(
     creative_id = await _creative(client, auth, world.a)
     assert (await _post_job(client, auth, world, creative_id)).status_code == 202
     await _add_asset_event(connection, world)
+    await as_role(connection, WORKER_ROLE)
 
     leased = (
         await connection.execute(text("SELECT * FROM lease_outbox_events('old-worker', 10, 60)"))

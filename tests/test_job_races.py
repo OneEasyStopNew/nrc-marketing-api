@@ -96,7 +96,10 @@ async def test_two_workers_on_one_event_submit_once(
     assert (await _post(http, auth, committed_tenant, creative_id, "race-w-1")).status_code == 202
     settings = get_settings()
     provider, sink = SlowProvider(), FakeSink()
-    engines = [create_engine(settings), create_engine(settings)]
+    engines = [
+        create_engine(settings, test_env.test_worker_database_url),
+        create_engine(settings, test_env.test_worker_database_url),
+    ]
 
     async def worker(sessions: async_sessionmaker[AsyncSession], owner: str) -> int:
         # Keep polling while the other worker may be mid-submit.
@@ -192,7 +195,10 @@ async def test_two_workers_cannot_both_take_the_last_budget_slot(
     # Room for one $0.03 image, not two.
     settings = get_settings().model_copy(update={"generation_global_budget_usd": Decimal("0.05")})
     provider, sink = BarrierProvider(2, Decimal("0.03")), FakeSink()
-    engines = [create_engine(settings), create_engine(settings)]
+    engines = [
+        create_engine(settings, test_env.test_worker_database_url),
+        create_engine(settings, test_env.test_worker_database_url),
+    ]
 
     async def worker(sessions: async_sessionmaker[AsyncSession], owner: str) -> int:
         return await run_once(
@@ -289,7 +295,10 @@ async def test_heartbeat_renews_the_lease_so_no_other_worker_takes_the_event(
     ).status_code == 202
     settings = get_settings()
     provider, sink = GatedProvider(), FakeSink()
-    engines = [create_engine(settings), create_engine(settings)]
+    engines = [
+        create_engine(settings, test_env.test_worker_database_url),
+        create_engine(settings, test_env.test_worker_database_url),
+    ]
     lease = "SELECT leased_until FROM outbox_events WHERE tenant_id = :t"
     try:
         worker_a = asyncio.create_task(
@@ -373,7 +382,10 @@ async def test_expired_lease_is_abandoned_and_the_job_finished_once(
     provider, sink = SimulatedImageProvider(), FakeSink()
     # Commit 1 takes the lease; commit 2 is the one before submit.
     gate = CommitGate(pause_after=2)
-    engines = [create_engine(settings), create_engine(settings)]
+    engines = [
+        create_engine(settings, test_env.test_worker_database_url),
+        create_engine(settings, test_env.test_worker_database_url),
+    ]
     events = (
         "SELECT attempts, failed_attempts, processed_at FROM outbox_events"
         " WHERE tenant_id = :t AND event_type = 'job.run'"

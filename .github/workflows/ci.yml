@@ -32,13 +32,17 @@ jobs:
         run: |
           owner="$(openssl rand -hex 24)"
           app="$(openssl rand -hex 24)"
+          worker="$(openssl rand -hex 24)"
           echo "::add-mask::$owner"
           echo "::add-mask::$app"
+          echo "::add-mask::$worker"
           {
             echo "POSTGRES_PASSWORD=$owner"
             echo "APP_DB_PASSWORD=$app"
+            echo "WORKER_DB_PASSWORD=$worker"
             echo "MIGRATION_DATABASE_URL=postgresql+asyncpg://postgres:$owner@127.0.0.1:5432/marketing"
             echo "TEST_DATABASE_URL=postgresql+asyncpg://marketing_app:$app@127.0.0.1:5432/marketing_test"
+            echo "TEST_WORKER_DATABASE_URL=postgresql+asyncpg://marketing_worker:$worker@127.0.0.1:5432/marketing_test"
             echo "TEST_MIGRATION_DATABASE_URL=postgresql+asyncpg://postgres:$owner@127.0.0.1:5432/marketing_test"
           } >> "$GITHUB_ENV"
 

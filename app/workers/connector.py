@@ -29,11 +29,18 @@ from types import MappingProxyType
 from typing import Final, Protocol, cast, runtime_checkable
 from uuid import UUID
 
+from pydantic import SecretStr, ValidationError
 from sqlalchemy import ARRAY, Row, Text, Update, bindparam, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
 
-from app.core.config import LEASE_MAX_SECONDS, LEASE_MIN_SECONDS, Settings, get_settings
+from app.core.config import (
+    LEASE_MAX_SECONDS,
+    LEASE_MIN_SECONDS,
+    Settings,
+    WorkerDatabaseSettings,
+    get_settings,
+)
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.models import CreativeVersion, Job, OutboxEvent
@@ -954,18 +961,29 @@ def load_provider_secrets(settings: Settings) -> Settings:
         raise WorkerConfigError(str(error)) from None
 
 
+def worker_database_url() -> SecretStr:
+    # The worker connects as marketing_worker, never as the API's role.
+    try:
+        return WorkerDatabaseSettings().worker_database_url
+    except ValidationError:
+        raise WorkerConfigError("WORKER_DATABASE_URL is missing or invalid.") from None
+
+
 async def run_forever(settings: Settings) -> None:
+    database_url = worker_database_url()
     settings = await asyncio.to_thread(load_provider_secrets, settings)
     providers = build_providers(settings)
     try:
-        await _serve(settings, providers)
+        await _serve(settings, providers, database_url)
     finally:
         await close_providers(providers)
     logger.info("connector worker stopped")
 
 
-async def _serve(settings: Settings, providers: Mapping[str, ImageProvider]) -> None:
-    engine = create_engine(settings)
+async def _serve(
+    settings: Settings, providers: Mapping[str, ImageProvider], database_url: SecretStr
+) -> None:
+    engine = create_engine(settings, database_url)
     sessions = create_sessionmaker(engine)
     stop = asyncio.Event()
     _stop_on_signals(stop)

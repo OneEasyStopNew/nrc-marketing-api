@@ -115,6 +115,17 @@ class Settings(BaseSettings):
         return f"{self.cognito_issuer}/.well-known/jwks.json"
 
 
+class WorkerDatabaseSettings(BaseSettings):
+    # The connector worker's connection, as marketing_worker. Required: the worker refuses to
+    # start without it; the API never uses it.
+
+    model_config = SettingsConfigDict(
+        env_file=(".env", ".env.local"), env_file_encoding="utf-8", extra="ignore"
+    )
+
+    worker_database_url: SecretStr
+
+
 class OwnerDatabaseSettings(BaseSettings):
     # Database-owner connection for migrations and seeding. The API never uses it.
 

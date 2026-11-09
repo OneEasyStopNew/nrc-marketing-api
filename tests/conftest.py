@@ -2,6 +2,8 @@
 
 Each test runs in one outer transaction that is rolled back afterwards. Data is seeded as the
 owner, then the connection switches to the marketing_app role so row-level security applies.
+API request sessions run as marketing_app and worker sessions (`sessions`) as marketing_worker,
+each switching role when its transaction begins.
 """
 
 import time
@@ -22,8 +24,14 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from jwt.algorithms import RSAAlgorithm
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
+from sqlalchemy import Connection, event, text
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import Session, SessionTransaction
 from sqlalchemy.pool import NullPool
 
 from app.api.deps import get_db, get_signing_keys
@@ -43,6 +51,8 @@ ISSUER = f"https://cognito-idp.{REGION}.amazonaws.com/{POOL_ID}"
 CLIENT_ID = "test-client"
 SCOPE = "marketing/api"
 KID = "test-key"
+APP_ROLE = "marketing_app"
+WORKER_ROLE = "marketing_worker"
 
 
 class IntegrationEnv(BaseSettings):
@@ -51,6 +61,7 @@ class IntegrationEnv(BaseSettings):
     )
 
     test_database_url: SecretStr
+    test_worker_database_url: SecretStr
     test_migration_database_url: SecretStr
 
 
@@ -64,6 +75,7 @@ def app_environment(test_env: IntegrationEnv) -> Iterator[None]:
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("ENABLE_DOCS", "false")
         patch.setenv("DATABASE_URL", test_env.test_database_url.get_secret_value())
+        patch.setenv("WORKER_DATABASE_URL", test_env.test_worker_database_url.get_secret_value())
         patch.setenv("COGNITO_REGION", REGION)
         patch.setenv("COGNITO_USER_POOL_ID", POOL_ID)
         patch.setenv("COGNITO_CLIENT_IDS", CLIENT_ID)
@@ -200,12 +212,49 @@ async def connection(test_env: IntegrationEnv) -> AsyncIterator[AsyncConnection]
     await engine.dispose()
 
 
-def _session(conn: AsyncConnection) -> AsyncSession:
+class RoleSession(TenantSession):
+    # A test session on the shared connection that acts as session.info["role"], if set.
+    pass
+
+
+@event.listens_for(RoleSession, "after_begin")
+def _apply_role(session: Session, transaction: SessionTransaction, connection: Connection) -> None:
+    role = session.info.get("role")
+    if role in (APP_ROLE, WORKER_ROLE):
+        # Lasts until the outer test transaction ends, or until a savepoint rollback.
+        connection.execute(text(f"SET LOCAL ROLE {role}"))
+
+
+def _session(conn: AsyncConnection, role: str | None = None) -> AsyncSession:
     return AsyncSession(
         bind=conn,
         join_transaction_mode="create_savepoint",
         expire_on_commit=False,
-        sync_session_class=TenantSession,
+        sync_session_class=RoleSession,
+        info={"role": role},
+    )
+
+
+def app_session(conn: AsyncConnection) -> AsyncSession:
+    # As the API's role, on the test's connection.
+    return _session(conn, APP_ROLE)
+
+
+async def as_role(conn: AsyncConnection, role: str) -> None:
+    # Switch the test's own statements to one of the two login roles.
+    assert role in (APP_ROLE, WORKER_ROLE)
+    await conn.execute(text(f"SET LOCAL ROLE {role}"))
+
+
+@pytest.fixture
+def sessions(connection: AsyncConnection) -> async_sessionmaker[AsyncSession]:
+    # The worker's sessions: marketing_worker on the test's connection.
+    return async_sessionmaker(
+        bind=connection,
+        join_transaction_mode="create_savepoint",
+        expire_on_commit=False,
+        sync_session_class=RoleSession,
+        info={"role": WORKER_ROLE},
     )
 
 
@@ -218,7 +267,7 @@ async def world(connection: AsyncConnection) -> World:
         b = await seed_tenant(seed, name="Tenant B", members={"creator-b": ["creator"]})
         await seed.commit()
     # From here on the connection behaves like the API's role: RLS applies, no owner rights.
-    await connection.execute(text("SET LOCAL ROLE marketing_app"))
+    await as_role(connection, APP_ROLE)
     return World(a, b)
 
 
@@ -228,7 +277,7 @@ async def client(
 ) -> AsyncIterator[httpx.AsyncClient]:
     async def request_session() -> AsyncIterator[AsyncSession]:
         # One session per request, like production: uncommitted work is rolled back on close.
-        async with _session(connection) as session:
+        async with app_session(connection) as session:
             yield session
 
     app = create_app()
