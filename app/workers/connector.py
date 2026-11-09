@@ -40,7 +40,7 @@ from app.models import CreativeVersion, Job, OutboxEvent
 from app.models.enums import FORMAT_SPECS, ExecutionState
 from app.models.jobs import ReservationState
 from app.schemas.jobs import JobKind
-from app.services import eligibility
+from app.services import eligibility, spend
 from app.services.assets import StoredImageSink
 from app.services.jobs import (
     HIGGSFIELD_NAME,
@@ -77,6 +77,7 @@ LEASE_MAX_SECONDS: Final = 600
 NO_HANDLER_RETRY_SECONDS: Final = 60.0
 # The provider saw this key with a different body: resending can never reconcile it.
 IDEMPOTENCY_CONFLICT: Final = "PROVIDER_IDEMPOTENCY_CONFLICT"
+BUDGET_EXHAUSTED: Final = "BUDGET_EXHAUSTED"
 STAGE_SUBMITTING: Final = "submitting"
 STAGE_RETRY_WAIT: Final = "retry_wait"
 STAGE_RECONCILE: Final = "reconcile"
@@ -210,6 +211,20 @@ class ImageGenerationHandler:
         )
         if not moved:
             return None
+        # Same transaction as the move to submitting: past the global budget, nothing is sent.
+        estimate = job.provider_cost_estimate_usd_micros
+        budget = _usd_micros(step.settings.generation_global_budget_usd)
+        if estimate is None or not await spend.reserve(
+            db, job.id, str(job.provider), estimate, budget
+        ):
+            await _fail_with(
+                db,
+                job.id,
+                BUDGET_EXHAUSTED,
+                "The global provider budget is used up.",
+                billed=False,
+            )
+            return None
         # Committed before the call, so after a crash the job is reconciled, never resubmitted.
         await db.commit()
         await step.heartbeat(db)
@@ -308,6 +323,16 @@ class ImageGenerationHandler:
                 db, job.id, code, "The provider did not produce an image.", billed=False
             )
             return None
+        actual = None if status.actual_cost_usd is None else _usd_micros(status.actual_cost_usd)
+        logger.info(
+            "provider cost job=%s provider_request=%s model=%s estimate_usd_micros=%s "
+            "actual_usd_micros=%s",
+            job.id,
+            provider_request_id,
+            provider.model,
+            job.provider_cost_estimate_usd_micros,
+            actual,
+        )
         if step.sink is None:
             await transition(
                 db,
@@ -329,7 +354,14 @@ class ImageGenerationHandler:
             if error.retryable:
                 return backoff_seconds(step.event_attempts)
             # Billed for a completed generation that can't be kept.
-            await _fail_with(db, job.id, "OUTPUT_UNAVAILABLE", error.message, billed=True)
+            await _fail_with(
+                db,
+                job.id,
+                "OUTPUT_UNAVAILABLE",
+                error.message,
+                billed=True,
+                actual_usd_micros=actual,
+            )
             return None
         moved = await transition(
             db,
@@ -338,9 +370,11 @@ class ImageGenerationHandler:
             to=ExecutionState.SUCCEEDED,
             stage=STAGE_STORED,
             result_asset_id=asset_id,
+            provider_cost_actual_usd_micros=actual,
         )
         if moved:
             await settle_reservation(db, job.id, ReservationState.COMMITTED)
+            await spend.settle(db, job.id, billed=True, actual_usd_micros=actual)
         return None
 
 
@@ -594,9 +628,18 @@ def _log_review_stop(job: Job, error: ProviderError) -> None:
 
 
 async def _fail_with(
-    db: AsyncSession, job_id: UUID, code: str, message: str, *, billed: bool, **values: object
+    db: AsyncSession,
+    job_id: UUID,
+    code: str,
+    message: str,
+    *,
+    billed: bool,
+    actual_usd_micros: int | None = None,
+    **values: object,
 ) -> None:
-    # Credits are committed only when the provider billed the request.
+    # Credits and provider spend are committed only when the provider billed the request.
+    if actual_usd_micros is not None:
+        values["provider_cost_actual_usd_micros"] = actual_usd_micros
     moved = await transition(
         db,
         job_id,
@@ -609,6 +652,7 @@ async def _fail_with(
     if moved:
         settled = ReservationState.COMMITTED if billed else ReservationState.RELEASED
         await settle_reservation(db, job_id, settled)
+        await spend.settle(db, job_id, billed=billed, actual_usd_micros=actual_usd_micros)
 
 
 async def _park_unknown(db: AsyncSession, job_id: UUID, code: str) -> None:

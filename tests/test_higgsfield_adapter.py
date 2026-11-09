@@ -533,3 +533,29 @@ async def test_from_settings_sends_the_split_key() -> None:
     )
     await provider.submit(request())
     assert seen[0].headers["Authorization"] == "Key id1:sec:ret"
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({}, None),
+        ({"usd": "0.094"}, Decimal("0.094")),
+        ({"usd": 0.08}, Decimal("0.08")),
+        ({"usd": 1}, Decimal(1)),
+        ({"usd": "abc"}, None),
+        ({"usd": "NaN"}, None),
+        ({"usd": "-1"}, None),
+        ({"usd": True}, None),
+        ({"usd": None}, None),
+        ({"usd": {"amount": "0.1"}}, None),
+        ({"cost": "0.1", "credits": 3}, None),
+    ],
+)
+async def test_actual_cost_is_read_only_from_an_explicit_field(
+    body: dict[str, Any], expected: Decimal | None
+) -> None:
+    response = {"status": "completed", "request_id": "r", "images": [{"url": OUTPUT_URL}], **body}
+
+    result = await make(fixed(200, json=response)).get_status("r")
+
+    assert result.actual_cost_usd == expected

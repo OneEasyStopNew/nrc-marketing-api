@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -32,6 +33,19 @@ class SlowProvider(SimulatedImageProvider):
     async def submit(self, request: ImageRequest) -> SubmitResult:
         await asyncio.sleep(0.3)
         return await super().submit(request)
+
+
+class BarrierProvider(SimulatedImageProvider):
+    # SIMULATED; both workers price their job before either reserves, so they really race.
+
+    def __init__(self, workers: int, cost_usd: Decimal) -> None:
+        super().__init__(cost_usd=cost_usd)
+        self._barrier = asyncio.Barrier(workers)
+
+    async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
+        async with asyncio.timeout(10):
+            await self._barrier.wait()
+        return await super().estimate_cost_usd(request)
 
 
 @pytest.fixture
@@ -125,3 +139,97 @@ async def test_parallel_admission_respects_the_active_job_limit(
         test_env, "SELECT count(*) FROM jobs WHERE tenant_id = :t", committed_tenant
     )
     assert count == limit
+
+
+@pytest.fixture
+async def empty_simulator_spend(test_env: IntegrationEnv) -> AsyncIterator[None]:
+    # provider_spend is shared, committed state: start from zero and put it back afterwards.
+    engine = create_async_engine(
+        test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
+    )
+    columns = "reserved_usd_micros, committed_usd_micros"
+    async with engine.begin() as conn:
+        saved = (
+            await conn.execute(
+                text(f"SELECT {columns} FROM provider_spend WHERE provider = 'simulator'")  # noqa: S608
+            )
+        ).one()
+        await conn.execute(
+            text(
+                "UPDATE provider_spend SET reserved_usd_micros = 0, committed_usd_micros = 0"
+                " WHERE provider = 'simulator'"
+            )
+        )
+    try:
+        yield
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE provider_spend SET reserved_usd_micros = :r, committed_usd_micros = :c"
+                    " WHERE provider = 'simulator'"
+                ),
+                {"r": saved.reserved_usd_micros, "c": saved.committed_usd_micros},
+            )
+        await engine.dispose()
+
+
+@pytest.mark.usefixtures("empty_simulator_spend")
+async def test_two_workers_cannot_both_take_the_last_budget_slot(
+    http: httpx.AsyncClient,
+    committed_tenant: SeededTenant,
+    signing_key: RSAPrivateKey,
+    test_env: IntegrationEnv,
+) -> None:
+    auth = AuthHeaders(signing_key)
+    creative_id = await _creative(http, auth, committed_tenant)
+    for key in ("budget-1", "budget-2"):
+        assert (await _post(http, auth, committed_tenant, creative_id, key)).status_code == 202
+    # Room for one $0.03 image, not two.
+    settings = get_settings().model_copy(update={"generation_global_budget_usd": Decimal("0.05")})
+    provider, sink = BarrierProvider(2, Decimal("0.03")), FakeSink()
+    engines = [create_engine(settings), create_engine(settings)]
+
+    async def worker(sessions: async_sessionmaker[AsyncSession], owner: str) -> int:
+        return await run_once(
+            sessions, {"simulator": provider}, sink, settings, owner=owner, max_events=1
+        )
+
+    try:
+        leased = await asyncio.gather(
+            *(worker(create_sessionmaker(e), f"budget-worker-{n}") for n, e in enumerate(engines))
+        )
+    finally:
+        for engine in engines:
+            await engine.dispose()
+
+    assert leased == [1, 1]
+    assert sum(provider.submits.values()) == 1
+    assert len(sink.stored) == 1
+    engine = create_async_engine(
+        test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
+    )
+    async with engine.connect() as conn:
+        outcomes = (
+            await conn.execute(
+                text(
+                    "SELECT state, failure_code, provider_spend_state FROM jobs"
+                    " WHERE tenant_id = :t ORDER BY state"
+                ),
+                {"t": committed_tenant.tenant_id},
+            )
+        ).all()
+        spent = (
+            await conn.execute(
+                text(
+                    "SELECT reserved_usd_micros, committed_usd_micros FROM provider_spend"
+                    " WHERE provider = 'simulator'"
+                )
+            )
+        ).one()
+    await engine.dispose()
+    assert [tuple(row) for row in outcomes] == [
+        ("FAILED", "BUDGET_EXHAUSTED", None),
+        ("SUCCEEDED", None, "COMMITTED"),
+    ]
+    assert tuple(spent) == (0, 30_000)

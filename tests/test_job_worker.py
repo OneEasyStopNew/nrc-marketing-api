@@ -1,5 +1,6 @@
 # Connector worker against the simulated provider: every image here is SIMULATED.
 
+import dataclasses
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -16,7 +17,7 @@ from app.core.config import Settings, get_settings
 from app.db.session import TenantSession, bind_tenant
 from app.models import Asset, CreditReservation, Job
 from app.models.enums import ExecutionState
-from app.models.jobs import ReservationState
+from app.models.jobs import ReservationState, SpendState
 from app.services.jobs import transition
 from app.services.providers.base import (
     FetchedImage,
@@ -145,6 +146,8 @@ class ScriptedProvider(SimulatedImageProvider):
         self.submit_errors: list[Exception] = []
         self.status_error: ProviderError | None = None
         self.fetch_error: ProviderError | None = None
+        # Reported in the COMPLETED status, as a provider stating its actual cost would.
+        self.actual_cost_usd: Decimal | None = None
         self.estimates = 0
         self.before_estimate: Callable[[], Awaitable[None]] | None = None
         self.before_submit: Callable[[], Awaitable[None]] | None = None
@@ -166,7 +169,8 @@ class ScriptedProvider(SimulatedImageProvider):
     async def get_status(self, provider_request_id: str) -> StatusResult:
         if self.status_error is not None:
             raise self.status_error
-        return await super().get_status(provider_request_id)
+        result = await super().get_status(provider_request_id)
+        return dataclasses.replace(result, actual_cost_usd=self.actual_cost_usd)
 
     async def fetch_output(self, result: StatusResult) -> FetchedImage:
         if self.fetch_error is not None:
@@ -176,6 +180,26 @@ class ScriptedProvider(SimulatedImageProvider):
 
 class IdempotencyConflictError(ProviderOutcomeUnknownError):
     code = "PROVIDER_IDEMPOTENCY_CONFLICT"
+
+
+async def _spend(connection: AsyncConnection, provider: str = "simulator") -> tuple[int, int]:
+    # (reserved, committed) micro-USD of the global spend counter.
+    row = (
+        await connection.execute(
+            text(
+                "SELECT reserved_usd_micros, committed_usd_micros FROM provider_spend"
+                " WHERE provider = :p"
+            ),
+            {"p": provider},
+        )
+    ).one()
+    return int(row.reserved_usd_micros), int(row.committed_usd_micros)
+
+
+def _priced(cost: str = "0.094") -> ScriptedProvider:
+    provider = ScriptedProvider()
+    provider.cost_usd = Decimal(cost)
+    return provider
 
 
 async def _run(sessions: Sessions, provider: SimulatedImageProvider, sink: FakeSink) -> int:
@@ -610,3 +634,121 @@ def test_api_key_splits_on_first_colon() -> None:
     ).higgsfield_credentials()
 
     assert (key_id.get_secret_value(), key_secret.get_secret_value()) == ("id-1", "se:cret")
+
+
+async def test_spend_past_the_global_budget_fails_before_submitting(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    budget = int(get_settings().generation_global_budget_usd * 1_000_000)
+    # Earlier generations have used all but $0.05 of the budget.
+    await connection.execute(
+        text("UPDATE provider_spend SET committed_usd_micros = :c WHERE provider = 'simulator'"),
+        {"c": budget - 50_000},
+    )
+    before = await _spend(connection)
+    provider = _priced("0.094")
+
+    await _run(sessions, provider, FakeSink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "BUDGET_EXHAUSTED")
+    assert job.provider_spend_state is None
+    assert reservation is ReservationState.RELEASED
+    assert not provider.submits
+    assert await _spend(connection) == before
+    assert (await _event(connection)).processed_at is not None
+
+
+async def test_completed_generation_commits_its_estimate_once(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    reserved, committed = await _spend(connection)
+
+    await _run(sessions, _priced("0.094"), FakeSink())
+    await _requeue(connection, world)
+    await _run(sessions, _priced("0.094"), FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    assert job.provider_cost_actual_usd_micros is None
+    assert await _spend(connection) == (reserved, committed + 94_000)
+
+
+async def test_actual_cost_is_stored_and_committed_instead_of_the_estimate(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    reserved, committed = await _spend(connection)
+    provider = _priced("0.094")
+    provider.actual_cost_usd = Decimal("0.08")
+
+    await _run(sessions, provider, FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert job.provider_cost_actual_usd_micros == 80_000
+    assert await _spend(connection) == (reserved, committed + 80_000)
+    assert (
+        f"provider cost job={job_id} provider_request={job.provider_request_id}"
+        f" model=simulated-image-v1 estimate_usd_micros=94000 actual_usd_micros=80000"
+    ) in caplog.text
+
+
+async def test_provider_failure_releases_the_reservation(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    before = await _spend(connection)
+    provider = SimulatedImageProvider(SimulatorScenario.PROVIDER_FAILED, cost_usd=Decimal("0.094"))
+
+    await _run(sessions, provider, FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.FAILED
+    assert job.provider_spend_state is SpendState.RELEASED
+    assert await _spend(connection) == before
+
+
+async def test_unknown_outcome_keeps_the_reservation_until_reconciled(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    reserved, committed = await _spend(connection)
+    provider = SimulatedImageProvider(
+        SimulatorScenario.TIMEOUT_AFTER_ACCEPT, cost_usd=Decimal("0.094")
+    )
+
+    await _run(sessions, provider, FakeSink())
+    unknown, _ = await _load(sessions, world, job_id)
+    held = await _spend(connection)
+    await _requeue(connection, world)
+    await _run(sessions, provider, FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert (unknown.state, unknown.provider_spend_state) == (
+        ExecutionState.UNKNOWN,
+        SpendState.RESERVED,
+    )
+    assert held == (reserved + 94_000, committed)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert await _spend(connection) == (reserved, committed + 94_000)
+
+
+async def test_retry_before_acceptance_keeps_one_reservation(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    reserved, committed = await _spend(connection)
+    provider = _priced("0.094")
+    provider.submit_errors = [ProviderRateLimitedError("Simulated rate limit.")]
+
+    await _run(sessions, provider, FakeSink())
+    waiting = await _spend(connection)
+    await _requeue(connection, world)
+    await _run(sessions, provider, FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert waiting == (reserved + 94_000, committed)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert await _spend(connection) == (reserved, committed + 94_000)

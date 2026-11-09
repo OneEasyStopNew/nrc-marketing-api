@@ -6,10 +6,12 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
     Index,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -25,6 +27,13 @@ class ReservationState(StrEnum):
     RESERVED = "RESERVED"
     # Provider outcome unknown: the credits stay counted until an operator or reconcile settles it.
     HELD = "HELD"
+    COMMITTED = "COMMITTED"
+    RELEASED = "RELEASED"
+
+
+class SpendState(StrEnum):
+    # This job's share of the global provider budget (provider_spend).
+    RESERVED = "RESERVED"
     COMMITTED = "COMMITTED"
     RELEASED = "RELEASED"
 
@@ -75,6 +84,10 @@ class Job(Base):
     provider_request_id: Mapped[str | None] = mapped_column(String(200))
     # Provider's price estimate taken before the first submit, in micro-USD (integer money).
     provider_cost_estimate_usd_micros: Mapped[int | None] = mapped_column(BigInteger)
+    # The provider's reported cost, when its status response states one (micro-USD).
+    provider_cost_actual_usd_micros: Mapped[int | None] = mapped_column(BigInteger)
+    # Set with the reservation in provider_spend and changed only by app.services.spend.
+    provider_spend_state: Mapped[SpendState | None] = mapped_column(enum_column(SpendState))
     failure_code: Mapped[str | None] = mapped_column(String(64))
     failure_message: Mapped[str | None] = mapped_column(String(500))
     result_asset_id: Mapped[UUID | None]
@@ -133,4 +146,25 @@ class CreditReservation(Base):
     units_committed: Mapped[int] = mapped_column(default=0)
     state: Mapped[ReservationState] = mapped_column(enum_column(ReservationState))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProviderSpend(Base):
+    """Running spend per provider across all tenants, checked against GENERATION_GLOBAL_BUDGET_USD.
+
+    No tenant data, so no tenant_id and no RLS (an agreed exception, see its migration). Changed
+    only by app.services.spend, inside the transaction of a guarded job transition.
+    """
+
+    __tablename__ = "provider_spend"
+    __table_args__ = (
+        CheckConstraint("reserved_usd_micros >= 0", name="reserved_not_negative"),
+        CheckConstraint("committed_usd_micros >= 0", name="committed_not_negative"),
+    )
+
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    # Estimates of jobs that were submitted (or may have been) and are not settled yet.
+    reserved_usd_micros: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    # Completed generations: the actual cost when the provider reported one, else the estimate.
+    committed_usd_micros: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

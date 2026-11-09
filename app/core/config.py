@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     generation_credits_per_image: int = Field(default=1, ge=1)
     # A job whose provider estimate is above this fails before anything is submitted.
     generation_max_cost_usd_per_image: Decimal = Field(default=Decimal("0.10"), ge=0)
+    # Cap on provider spend across all tenants (reserved estimates plus committed costs), kept per
+    # provider in provider_spend. A job that would pass it fails BUDGET_EXHAUSTED before submit.
+    generation_global_budget_usd: Decimal = Field(default=Decimal(40), ge=0)
     # Stored on each job. Since NRC-10 retryable provider errors are bounded by the deadline
     # instead (the agreed retry policy), so this no longer limits retries.
     generation_max_attempts: int = Field(default=3, ge=1, le=10)

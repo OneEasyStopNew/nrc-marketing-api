@@ -52,6 +52,8 @@ class StatusResult:
     outputs_expire_at: datetime | None = None
     # Safe, provider-supplied reason for FAILED or REJECTED. Never contains credentials.
     failure_code: str | None = None
+    # What the provider says the request cost, only when its response states it explicitly.
+    actual_cost_usd: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

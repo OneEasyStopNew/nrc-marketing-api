@@ -241,6 +241,9 @@ async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTena
                 {"t": seeded.tenant_id},
             )
             for table in reversed(Base.metadata.sorted_tables):
+                if table.name == "provider_spend":
+                    # Not tenant data (one counter per provider).
+                    continue
                 column = table.c.id if table.name == "tenants" else table.c.tenant_id
                 await db.execute(table.delete().where(column == seeded.tenant_id))
             await db.commit()

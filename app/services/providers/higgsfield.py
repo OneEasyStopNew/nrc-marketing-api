@@ -235,6 +235,7 @@ class HiggsfieldProvider:
             output_urls=urls if status is ProviderJobStatus.COMPLETED else (),
             outputs_expire_at=expires_at,
             failure_code=_FAILURE_CODES.get(status),
+            actual_cost_usd=_actual_cost(data, provider_request_id),
         )
 
     async def fetch_output(self, result: StatusResult) -> FetchedImage:
@@ -352,6 +353,29 @@ def _image_urls(images: object) -> tuple[str, ...]:
         for item in images
         if isinstance(item, dict) and isinstance(item.get("url"), str)
     )
+
+
+def _actual_cost(data: dict[str, Any], provider_request_id: str) -> Decimal | None:
+    """The request's cost, only from an explicit cost field in the status response.
+
+    TODO(NRC-10): confirm with the first live status response. The docs (openapi.json
+    RequestStatus, concepts/billing-and-retention) show no cost field; only /estimate answers
+    {"usd": "<decimal>"}. So the same "usd" key is read here, strictly: a decimal string or a
+    JSON number, finite and not negative. Anything else is ignored and the estimate is used.
+    """
+    if "usd" not in data:
+        return None
+    value = data["usd"]
+    amount: Decimal | None = None
+    if isinstance(value, str) or (isinstance(value, int | float) and not isinstance(value, bool)):
+        try:
+            amount = Decimal(str(value))
+        except InvalidOperation:
+            amount = None
+    if amount is None or not amount.is_finite() or amount < 0:
+        logger.warning("higgsfield status unreadable cost request_id=%s", provider_request_id)
+        return None
+    return amount
 
 
 def _parse_expiry(value: object) -> datetime | None:
