@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     aws_endpoint_url_s3: str | None = None
     s3_force_path_style: bool = False
     aws_profile: str | None = None
+    # S3 client: timeouts per request, and botocore's retries after the first attempt (standard
+    # mode).
+    s3_connect_timeout_seconds: float = Field(default=5, gt=0, le=60)
+    s3_read_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    s3_max_retries: int = Field(default=3, ge=1, le=10)
     max_generated_image_bytes: int = Field(default=10_485_760, ge=1024)
     max_image_pixels: int = Field(default=25_000_000, ge=1)
     asset_url_ttl_seconds: int = Field(default=900, ge=60, le=3600)

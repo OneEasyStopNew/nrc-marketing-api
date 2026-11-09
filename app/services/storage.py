@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Fixed parts of the object layout and tags, not per environment: bucket lifecycle rules and
+# validation (NRC-7) match on them.
 _ALLOWED_EXTENSIONS = frozenset({"png", "jpg"})
 GENERATED_IMAGE_FOLDER = "generated-images"
 GENERATED_IMAGE_DOC_TYPE = "generated-image"
@@ -58,9 +60,10 @@ class ObjectStorage:
         session = boto3.Session(profile_name=settings.aws_profile)
         client_config = Config(
             signature_version="s3v4",
-            connect_timeout=5,
-            read_timeout=30,
-            retries={"max_attempts": 3, "mode": "standard"},
+            connect_timeout=settings.s3_connect_timeout_seconds,
+            read_timeout=settings.s3_read_timeout_seconds,
+            # botocore's max_attempts counts retries, not the first attempt.
+            retries={"max_attempts": settings.s3_max_retries, "mode": "standard"},
             s3={"addressing_style": "path"} if settings.s3_force_path_style else {},
         )
         self._client: S3Client = session.client(
