@@ -47,6 +47,7 @@ from app.services.jobs import (
     NON_TERMINAL_STATES,
     STAGE_OUTPUT_READY,
     TERMINAL_STATES,
+    provider_idempotency_key,
     settle_reservation,
     transition,
 )
@@ -518,7 +519,7 @@ async def _image_request(db: AsyncSession, job: Job) -> ImageRequest:
         width_px=spec.width_px,
         height_px=spec.height_px,
         aspect_ratio=spec.aspect_ratio,
-        idempotency_key=str(job.provider_idempotency_key),
+        idempotency_key=job.provider_idempotency_key or provider_idempotency_key(job.id),
     )
 
 

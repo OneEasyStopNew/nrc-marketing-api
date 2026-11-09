@@ -228,6 +228,18 @@ async def test_simulated_timeout_after_accept_reconciles_with_same_request(
     assert reservation is ReservationState.COMMITTED
 
 
+async def test_provider_idempotency_key_is_derived_from_the_job(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    provider = SimulatedImageProvider()
+    accepted, _ = await _load(sessions, world, job_id)
+
+    await _run(sessions, provider, FakeSink())
+
+    assert accepted.provider_idempotency_key == f"nrc-job-{job_id}"
+    assert provider.submits == {f"nrc-job-{job_id}": 1}
+
+
 async def test_terminal_state_does_not_regress(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:

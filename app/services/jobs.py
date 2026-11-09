@@ -94,7 +94,7 @@ async def accept_creative_job(
             deadline_at=datetime.now(UTC) + timedelta(seconds=settings.generation_deadline_seconds),
             provider=provider,
             model=model,
-            provider_idempotency_key=uuid4(),
+            provider_idempotency_key=provider_idempotency_key(job_id),
             created_by=ctx.principal.sub,
         )
     )
@@ -122,6 +122,11 @@ async def accept_creative_job(
     await db.commit()
     logger.info("job accepted job=%s tenant=%s", job_id, ctx.tenant_id)
     return JobAccepted(job_id=job_id, state=ExecutionState.QUEUED), False
+
+
+def provider_idempotency_key(job_id: UUID) -> str:
+    # Derived from the job, so Higgsfield support can trace a request back to it.
+    return f"nrc-job-{job_id}"
 
 
 async def get_job(db: AsyncSession, ctx: TenantContext, job_id: UUID) -> JobRead:

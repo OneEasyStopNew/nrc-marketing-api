@@ -69,8 +69,9 @@ class Job(Base):
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     provider: Mapped[str | None] = mapped_column(String(32))
     model: Mapped[str | None] = mapped_column(String(100))
-    # Set at accept and resent unchanged on every submit, so the provider never bills twice.
-    provider_idempotency_key: Mapped[UUID | None]
+    # "nrc-job-<job id>", set at accept and resent unchanged on every submit, so the provider
+    # never bills twice. Older jobs hold a random UUID in text form.
+    provider_idempotency_key: Mapped[str | None] = mapped_column(String(255))
     provider_request_id: Mapped[str | None] = mapped_column(String(200))
     # Provider's price estimate taken before the first submit, in micro-USD (integer money).
     provider_cost_estimate_usd_micros: Mapped[int | None] = mapped_column(BigInteger)
