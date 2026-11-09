@@ -8,6 +8,7 @@ reconciliation behave like Higgsfield: resubmitting with the same key returns th
 import asyncio
 import io
 from collections import Counter
+from decimal import Decimal
 from enum import StrEnum
 from typing import Final
 from uuid import uuid4
@@ -44,12 +45,22 @@ class SimulatedImageProvider:
     name = SIMULATOR_NAME
     is_simulated = True
 
-    def __init__(self, scenario: SimulatorScenario = SimulatorScenario.SUCCESS) -> None:
+    def __init__(
+        self,
+        scenario: SimulatorScenario = SimulatorScenario.SUCCESS,
+        *,
+        cost_usd: Decimal | None = Decimal(0),
+    ) -> None:
         self.model = SIMULATOR_MODEL
         self.scenario = scenario
+        # Simulated images cost nothing; tests set a price to exercise the cost cap.
+        self.cost_usd = cost_usd
         # Submits per idempotency key, so tests can assert the provider was not called twice.
         self.submits: Counter[str] = Counter()
         self._request_ids: dict[str, str] = {}
+
+    async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
+        return self.cost_usd
 
     async def submit(self, request: ImageRequest) -> SubmitResult:
         self.submits[request.idempotency_key] += 1

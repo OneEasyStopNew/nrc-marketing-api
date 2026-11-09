@@ -1,6 +1,7 @@
 # Connector worker against the simulated provider: every image here is SIMULATED.
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import httpx
@@ -216,25 +217,80 @@ async def test_job_past_deadline_fails_without_submitting(
     assert reservation is ReservationState.RELEASED
 
 
+async def test_simulated_cost_above_cap_fails_without_submitting(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    cap = get_settings().generation_max_cost_usd_per_image
+    provider = SimulatedImageProvider(cost_usd=cap + Decimal("0.01"))
+
+    await _run(sessions, provider, FakeSink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.FAILED
+    assert job.failure_code == "COST_ABOVE_LIMIT"
+    assert job.provider_cost_estimate_usd_micros == int((cap + Decimal("0.01")) * 1_000_000)
+    assert not provider.submits
+    assert reservation is ReservationState.RELEASED
+
+
+async def test_simulated_cost_estimate_is_stored_on_the_job(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    await _run(sessions, SimulatedImageProvider(cost_usd=Decimal("0.094")), FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert job.provider_cost_estimate_usd_micros == 94_000
+
+
+async def test_missing_cost_estimate_never_submits(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    provider = SimulatedImageProvider(cost_usd=None)
+
+    await _run(sessions, provider, FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.FAILED
+    assert not provider.submits
+
+
 def _live(**overrides: object) -> Settings:
     return get_settings().model_copy(update={"generation_mode": "live", **overrides})
 
 
 def test_live_mode_without_keys_refuses_to_start() -> None:
-    settings = _live(higgsfield_api_key_id=None, higgsfield_api_key_secret=None)
+    settings = _live(hf_key=None, higgsfield_model=None, higgsfield_output_hosts=())
 
-    with pytest.raises(WorkerConfigError, match="HIGGSFIELD_API_KEY_ID") as refused:
+    with pytest.raises(WorkerConfigError, match="HF_KEY") as refused:
         build_providers(settings)
 
+    assert "HIGGSFIELD_MODEL, HIGGSFIELD_OUTPUT_HOSTS" in str(refused.value)
     assert "validation-PASS gate" in str(refused.value)
 
 
 def test_live_mode_with_stub_validation_gate_refuses_to_start() -> None:
     settings = _live(
-        higgsfield_api_key_id=SecretStr("test-id"),
-        higgsfield_api_key_secret=SecretStr("test-secret"),
+        hf_key=SecretStr("test-id:test-secret"),
         higgsfield_model="test/model",
+        higgsfield_output_hosts=("images.example.test",),
     )
 
-    with pytest.raises(WorkerConfigError, match="validation-PASS gate is still the stub"):
+    with pytest.raises(WorkerConfigError, match=r"refused: the validation-PASS gate is still"):
         build_providers(settings)
+
+
+@pytest.mark.parametrize("value", ["no-separator-value", ":only-secret", "only-id:", ""])
+def test_malformed_hf_key_is_rejected_without_echoing_it(value: str) -> None:
+    settings = _live(hf_key=SecretStr(value) if value else None)
+
+    with pytest.raises(ValueError, match="HF_KEY") as rejected:
+        settings.higgsfield_credentials()
+
+    assert not value or value not in str(rejected.value)
+
+
+def test_hf_key_splits_on_first_colon() -> None:
+    key_id, key_secret = _live(hf_key=SecretStr("id-1:se:cret")).higgsfield_credentials()
+
+    assert (key_id.get_secret_value(), key_secret.get_secret_value()) == ("id-1", "se:cret")

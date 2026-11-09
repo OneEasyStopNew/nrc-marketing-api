@@ -5,6 +5,7 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     DateTime,
     ForeignKeyConstraint,
     Index,
@@ -65,6 +66,8 @@ class Job(Base):
     # Set at accept and resent unchanged on every submit, so the provider never bills twice.
     provider_idempotency_key: Mapped[UUID | None]
     provider_request_id: Mapped[str | None] = mapped_column(String(200))
+    # Provider's price estimate taken before the first submit, in micro-USD (integer money).
+    provider_cost_estimate_usd_micros: Mapped[int | None] = mapped_column(BigInteger)
     failure_code: Mapped[str | None] = mapped_column(String(64))
     failure_message: Mapped[str | None] = mapped_column(String(500))
     # The foreign key to assets arrives with the assets table (NRC-3).

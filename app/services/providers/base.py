@@ -3,6 +3,7 @@
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import ClassVar, Protocol
 
@@ -75,6 +76,13 @@ class ImageProvider(Protocol):
     name: str
     model: str
     is_simulated: bool
+
+    async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
+        """Price of submitting this exact request, in USD; None if the provider gave no price.
+
+        Not billable. Raises a ProviderError subclass on failure.
+        """
+        ...
 
     async def submit(self, request: ImageRequest) -> SubmitResult:
         """Submit a generation. Raises a ProviderError subclass on failure."""

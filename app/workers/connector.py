@@ -17,12 +17,14 @@ from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from decimal import ROUND_CEILING, Decimal
 from types import MappingProxyType
 from typing import Final, Protocol, cast
 from uuid import UUID
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
@@ -146,19 +148,40 @@ class ImageGenerationHandler:
     ) -> float | None:
         # Reconcile resends the identical request with the same key; the provider returns the
         # original request id instead of starting (and billing) a second generation.
+        request = await _image_request(db, job)
         if not reconcile:
+            values: dict[str, object] = {}
+            # Priced once, before the first submit; retries and reconcile reuse the estimate.
+            if job.provider_cost_estimate_usd_micros is None:
+                try:
+                    micros = await _estimate_usd_micros(provider, request)
+                except ProviderError as error:
+                    return await _retry_or_fail(db, job, error)
+                _log_call("estimate", job, provider, None, micros)
+                if micros > _usd_micros(step.settings.generation_max_cost_usd_per_image):
+                    await _fail_with(
+                        db,
+                        job.id,
+                        "COST_ABOVE_LIMIT",
+                        "The provider's price is above the per-image limit.",
+                        accepted=False,
+                        provider_cost_estimate_usd_micros=micros,
+                    )
+                    return None
+                values["provider_cost_estimate_usd_micros"] = micros
+                set_committed_value(job, "provider_cost_estimate_usd_micros", micros)
             moved = await transition(
                 db,
                 job.id,
                 allowed_from={ExecutionState.QUEUED, ExecutionState.RUNNING},
                 to=ExecutionState.RUNNING,
                 stage=STAGE_SUBMITTING,
+                **values,
             )
             if not moved:
                 return None
             # Committed before the call, so after a crash the job reads as possibly accepted.
             await db.commit()
-        request = await _image_request(db, job)
         try:
             submitted = await provider.submit(request)
         except ProviderOutcomeUnknownError as error:
@@ -182,26 +205,14 @@ class ImageGenerationHandler:
                     "reconcile failed job=%s tenant=%s code=%s", job.id, job.tenant_id, error.code
                 )
                 return None
-            attempts = job.attempt_count + 1
-            if error.retryable and attempts < job.max_attempts:
-                await transition(
-                    db,
-                    job.id,
-                    allowed_from={ExecutionState.RUNNING},
-                    to=ExecutionState.RUNNING,
-                    stage=STAGE_RETRY_WAIT,
-                    attempt_count=attempts,
-                )
-                return max(error.retry_after_seconds or 0.0, backoff_seconds(attempts))
-            # Rejected before acceptance, so nothing was billed.
-            await _fail(db, job.id, error, accepted=False, attempt_count=attempts)
-            return None
+            return await _retry_or_fail(db, job, error)
 
-        logger.info(
-            "provider accepted job=%s tenant=%s provider_request=%s",
-            job.id,
-            job.tenant_id,
+        _log_call(
+            "submit",
+            job,
+            provider,
             submitted.provider_request_id,
+            job.provider_cost_estimate_usd_micros,
         )
         moved = await transition(
             db,
@@ -225,6 +236,9 @@ class ImageGenerationHandler:
         provider_request_id: str,
         step: Step,
     ) -> float | None:
+        _log_call(
+            "status", job, provider, provider_request_id, job.provider_cost_estimate_usd_micros
+        )
         try:
             status = await provider.get_status(provider_request_id)
         except ProviderError as error:
@@ -249,6 +263,9 @@ class ImageGenerationHandler:
                 stage=STAGE_OUTPUT_READY,
             )
             return None
+        _log_call(
+            "fetch", job, provider, provider_request_id, job.provider_cost_estimate_usd_micros
+        )
         try:
             image = await provider.fetch_output(status)
         except ProviderError as error:
@@ -371,6 +388,55 @@ async def _image_request(db: AsyncSession, job: Job) -> ImageRequest:
     )
 
 
+async def _estimate_usd_micros(provider: ImageProvider, request: ImageRequest) -> int:
+    usd = await provider.estimate_cost_usd(request)
+    if usd is None:
+        # Never submit without a price: a missing estimate is a non-retryable provider error.
+        raise ProviderError("The provider returned no cost estimate.")
+    return _usd_micros(usd)
+
+
+def _usd_micros(usd: Decimal) -> int:
+    # Money stays in integer units; round up so the cap is never undercut.
+    return int((usd * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+
+
+def _log_call(
+    call: str,
+    job: Job,
+    provider: ImageProvider,
+    provider_request_id: str | None,
+    cost_usd_micros: int | None,
+) -> None:
+    # Ids and numbers only: never the key, the prompt or output URLs.
+    logger.info(
+        "provider call=%s job=%s tenant=%s provider_request=%s model=%s cost_usd_micros=%s",
+        call,
+        job.id,
+        job.tenant_id,
+        provider_request_id,
+        provider.model,
+        cost_usd_micros,
+    )
+
+
+async def _retry_or_fail(db: AsyncSession, job: Job, error: ProviderError) -> float | None:
+    # For errors before acceptance: back off while attempts remain, then fail without billing.
+    attempts = job.attempt_count + 1
+    if error.retryable and attempts < job.max_attempts:
+        await transition(
+            db,
+            job.id,
+            allowed_from={ExecutionState.QUEUED, ExecutionState.RUNNING},
+            to=ExecutionState.RUNNING,
+            stage=STAGE_RETRY_WAIT,
+            attempt_count=attempts,
+        )
+        return max(error.retry_after_seconds or 0.0, backoff_seconds(attempts))
+    await _fail(db, job.id, error, accepted=False, attempt_count=attempts)
+    return None
+
+
 async def _fail(
     db: AsyncSession, job_id: UUID, error: ProviderError, *, accepted: bool, **values: object
 ) -> None:
@@ -419,20 +485,25 @@ async def _give_up(db: AsyncSession, job: Job, code: str, message: str) -> None:
 
 def check_live_mode(settings: Settings) -> None:
     # Live mode must have real credentials and a real validation gate; it never falls back.
+    problems: list[str] = []
+    try:
+        settings.higgsfield_credentials()
+    except ValueError as error:
+        problems.append(str(error))
     missing = [
         name
         for name, value in (
-            ("HIGGSFIELD_API_KEY_ID", settings.higgsfield_api_key_id),
-            ("HIGGSFIELD_API_KEY_SECRET", settings.higgsfield_api_key_secret),
             ("HIGGSFIELD_MODEL", settings.higgsfield_model),
+            ("HIGGSFIELD_OUTPUT_HOSTS", settings.higgsfield_output_hosts),
         )
         if not value
     ]
-    problems = [f"missing {', '.join(missing)}"] if missing else []
+    if missing:
+        problems.append(f"missing {', '.join(missing)}")
     if eligibility.VALIDATION_GATE_IS_STUB:
         problems.append("the validation-PASS gate is still the stub (NRC-7)")
     if problems:
-        raise WorkerConfigError(f"GENERATION_MODE=live refused: {'; '.join(problems)}.")
+        raise WorkerConfigError(f"GENERATION_MODE=live refused: {'; '.join(problems)}")
 
 
 def build_providers(settings: Settings) -> dict[str, ImageProvider]:

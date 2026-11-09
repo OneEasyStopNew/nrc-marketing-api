@@ -91,6 +91,7 @@ def upgrade() -> None:
         sa.Column("model", sa.String(length=100), nullable=True),
         sa.Column("provider_idempotency_key", sa.Uuid(), nullable=True),
         sa.Column("provider_request_id", sa.String(length=200), nullable=True),
+        sa.Column("provider_cost_estimate_usd_micros", sa.BigInteger(), nullable=True),
         sa.Column("failure_code", sa.String(length=64), nullable=True),
         sa.Column("failure_message", sa.String(length=500), nullable=True),
         sa.Column("result_asset_id", sa.Uuid(), nullable=True),
