@@ -78,6 +78,35 @@ SIMULATED. End to end you will see:
 Without `AWS_S3_BUCKET` the simulator worker still runs, but finished jobs stop at stage
 `output_ready`. `GENERATION_MODE=live` refuses to start without storage.
 
+### Higgsfield (live)
+
+Live mode (`GENERATION_MODE=live`) stays off: the worker refuses to start until the validation-PASS
+gate (NRC-7) exists, as well as without a key, `HIGGSFIELD_MODEL`, `HIGGSFIELD_OUTPUT_HOSTS` or
+storage.
+
+- **Key.** Locally, put it in `.env.local` (git-ignored) as `HIGGSFIELD_API_KEY=<key-id>:<key-secret>`,
+  never in `.env`. On staging the worker reads it at startup from Secrets Manager
+  (`HIGGSFIELD_SECRET_ID=nrc/stg/higgsfield`, JSON entry `HIGGSFIELD_API_KEY` or the legacy `HF_KEY`)
+  through its IAM role and keeps it in memory only.
+- **Connectivity check.** `scripts/higgsfield_smoke.py` runs outside the API. `--help` lists the
+  candidate model ids and their smallest documented settings, with the doc source.
+
+  ```powershell
+  # Free: calls only /estimate and prints model + USD.
+  uv run python -m scripts.higgsfield_smoke estimate --models higgsfield-ai/soul/standard,higgsfield-ai/soul/v2/standard
+  # Real money, one image: refuses without --confirm-spend, above GENERATION_MAX_COST_USD_PER_IMAGE,
+  # or unless AWS_ENDPOINT_URL_S3 points at local SeaweedFS. Prints ids, checksum, size and S3 key.
+  uv run python -m scripts.higgsfield_smoke generate --model higgsfield-ai/soul/standard --confirm-spend
+  ```
+
+- **Cost guard.** Before the first submit the worker prices the image with `/estimate`. Above
+  `GENERATION_MAX_COST_USD_PER_IMAGE` the job fails `COST_ABOVE_LIMIT`. It then reserves the estimate
+  against `GENERATION_GLOBAL_BUDGET_USD` (default 40, across all tenants, table `provider_spend`) in
+  the same transaction that marks it submitting; past the budget it fails `BUDGET_EXHAUSTED` and
+  nothing is sent. Failed, rejected and canceled requests give the amount back, completed ones commit
+  it (the actual cost if Higgsfield ever reports one, else the estimate), and `UNKNOWN` jobs keep it
+  until reconciled.
+
 ## Checks
 
 CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, plus a
@@ -121,6 +150,6 @@ Conventions:
 
 ## Not done yet
 
-Validation (D2), Higgsfield generation and assets (D3), image checks (D4), export (D5), and the
+Validation (D2), live Higgsfield generation through the app (D3, waits for the validation gate), image checks (D4), export (D5), and the
 staging deployment (D6). Cleanup of old idempotency keys and the study import from the approved
 demo study are still to do. The seeded study is synthetic.
