@@ -131,6 +131,43 @@ async def test_generate_refuses_unless_storage_is_local(
     assert "AWS_ENDPOINT_URL_S3" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://s3.us-east-1.amazonaws.com",
+        "https://bucket.s3.amazonaws.com",
+        "http://localhost.example.com:8333",
+        "http://10.0.0.5:8333",
+        "not a url",
+    ],
+)
+async def test_generate_refuses_a_storage_endpoint_that_is_not_local(
+    endpoint: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    api, store = FakeApi(), RecordingStore()
+    settings = _settings(aws_endpoint_url_s3=endpoint)
+
+    code = await _run(["generate", "--model", MODEL, "--confirm-spend"], settings, api, store)
+
+    assert code == 2
+    assert api.paths == []
+    assert store.saved == []
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["http://127.0.0.1:8333", "http://localhost:8333", "http://[::1]:8333", "http://s3.nrc.test"],
+)
+async def test_generate_accepts_a_local_storage_endpoint(endpoint: str) -> None:
+    api, store = FakeApi(), RecordingStore()
+    settings = _settings(aws_endpoint_url_s3=endpoint)
+
+    code = await _run(["generate", "--model", MODEL, "--confirm-spend"], settings, api, store)
+
+    assert code == 0
+    assert len(store.saved) == 1
+
+
 async def test_generate_refuses_without_output_hosts(capsys: pytest.CaptureFixture[str]) -> None:
     api, store = FakeApi(), RecordingStore()
 

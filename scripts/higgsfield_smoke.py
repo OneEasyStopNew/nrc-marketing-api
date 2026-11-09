@@ -55,11 +55,15 @@ CANDIDATES: Final = {
     ),
 }
 SMOKE_PROMPT: Final = "A bright, empty clinic waiting room with plants, editorial photography"
+# A person watches this one run, so these are fixed here rather than per-environment settings.
 POLL_LIMIT_SECONDS: Final = 300.0
 POLL_FIRST_WAIT_SECONDS: Final = 2.0
 POLL_MAX_WAIT_SECONDS: Final = 15.0
 REFUSED: Final = 2
 FAILED: Final = 1
+# Hosts that can only be this machine (RFC 6761 reserves .localhost and .test).
+LOCAL_HOSTS: Final = frozenset({"localhost", "127.0.0.1", "::1"})
+LOCAL_SUFFIXES: Final = (".localhost", ".test")
 
 
 class ImageStore(Protocol):
@@ -117,6 +121,15 @@ def _request(idempotency_key: str) -> ImageRequest:
     )
 
 
+def _is_local(endpoint: str | None) -> bool:
+    # The stored image must stay on this machine: never a real S3 endpoint.
+    try:
+        host = urlsplit(endpoint or "").hostname
+    except ValueError:
+        return False
+    return bool(host) and (host in LOCAL_HOSTS or str(host).endswith(LOCAL_SUFFIXES))
+
+
 def provider_factory(settings: Settings) -> ProviderFactory:
     def make(model: str) -> HiggsfieldProvider:
         candidate = CANDIDATES.get(model)
@@ -154,7 +167,7 @@ async def generate(
     if not confirm_spend:
         print("Refused: generate costs real money. Re-run with --confirm-spend.")
         return REFUSED
-    if not settings.aws_endpoint_url_s3 or not settings.aws_s3_bucket:
+    if not _is_local(settings.aws_endpoint_url_s3) or not settings.aws_s3_bucket:
         print("Refused: AWS_ENDPOINT_URL_S3 and AWS_S3_BUCKET must point at local SeaweedFS.")
         return REFUSED
     if not settings.higgsfield_output_hosts:
@@ -187,7 +200,10 @@ async def _generate(
     print(f"request_id={submitted.provider_request_id}")
     result = await _poll(provider, submitted.provider_request_id, sleep)
     if result is None:
-        print("Stopped polling after 5 minutes; the request may still finish (and be billed).")
+        print(
+            f"Stopped polling after {POLL_LIMIT_SECONDS:.0f} seconds; the request may still "
+            "finish (and be billed)."
+        )
         return FAILED
     print(f"status={result.status.value} actual_cost_usd={result.actual_cost_usd}")
     if result.status is not ProviderJobStatus.COMPLETED:
