@@ -152,3 +152,29 @@ def test_worker_refuses_to_start_without_its_database_url(
 
     with pytest.raises(WorkerConfigError, match="WORKER_DATABASE_URL"):
         worker_database_url()
+
+
+async def test_worker_role_has_exactly_the_table_privileges_it_uses(
+    connection: AsyncConnection,
+) -> None:
+    expected = {
+        "creative_versions": {"SELECT"},
+        "jobs": {"SELECT", "UPDATE"},
+        "credit_reservations": {"SELECT", "UPDATE"},
+        "outbox_events": {"SELECT", "INSERT", "UPDATE"},
+        "assets": {"SELECT", "INSERT"},
+        "provider_spend": {"SELECT", "UPDATE"},
+    }
+    rows = (
+        await connection.execute(
+            text(
+                "SELECT table_name, privilege_type FROM information_schema.role_table_grants"
+                " WHERE grantee = 'marketing_worker'"
+            )
+        )
+    ).all()
+    granted: dict[str, set[str]] = {}
+    for row in rows:
+        granted.setdefault(row.table_name, set()).add(row.privilege_type)
+
+    assert granted == expected
