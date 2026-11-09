@@ -5,6 +5,12 @@ The connector worker is the only cross-tenant reader: it leases due outbox rows 
 lease_outbox_events(), a SECURITY DEFINER function that returns ids only, and then binds the
 tenant of each event, so every other read and write stays under RLS.
 
+Deployment requirements for the lease function:
+- Its owner (the role running this migration) must also own outbox_events.
+- marketing_app must NOT be a member of that owner role, or it would inherit the owner's
+  outbox_lease policy and see every tenant's events.
+- The API and the worker currently share marketing_app; a separate worker role is a follow-up.
+
 Revision ID: ffd6ebe6b868
 Revises: de579cd5c63a
 Create Date: 2026-11-09 15:31:24.080734
@@ -27,7 +33,8 @@ CURRENT_TENANT = "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
 LEASE_FUNCTION = "lease_outbox_events(text, integer, integer)"
 
 # Runs as the migration owner. FORCE RLS applies to the owner too, so the outbox_lease policy
-# lets only this role (the function's owner) see every tenant's outbox rows.
+# lets only this role (the function's owner) see every tenant's outbox rows. batch is clamped
+# to 1..50 and lease_seconds to 5..600, whatever the caller passes.
 CREATE_LEASE_FUNCTION = """
 CREATE FUNCTION lease_outbox_events(owner text, batch integer, lease_seconds integer)
 RETURNS TABLE (event_id uuid, tenant_id uuid, job_id uuid, event_type text)
@@ -40,11 +47,12 @@ AS $$
           AND o.available_at <= clock_timestamp()
           AND (o.leased_until IS NULL OR o.leased_until <= clock_timestamp())
         ORDER BY o.available_at
-        LIMIT batch
+        LIMIT LEAST(GREATEST(batch, 1), 50)
         FOR UPDATE SKIP LOCKED
     )
     UPDATE public.outbox_events AS o
-    SET leased_until = clock_timestamp() + make_interval(secs => lease_seconds),
+    SET leased_until = clock_timestamp()
+            + make_interval(secs => LEAST(GREATEST(lease_seconds, 5), 600)),
         lease_owner = owner,
         attempts = o.attempts + 1
     FROM due
