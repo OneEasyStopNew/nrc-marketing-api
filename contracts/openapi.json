@@ -884,6 +884,7 @@
           "jobs"
         ],
         "summary": "Start image generation for a validated brief (D3)",
+        "description": "Returns at once; poll the Location URL. A retry with the same Idempotency-Key and body returns the original job with Idempotent-Replayed: true.",
         "operationId": "create_creative_job",
         "security": [
           {
@@ -969,8 +970,38 @@
               }
             }
           },
-          "501": {
-            "description": "Not implemented yet.",
+          "404": {
+            "description": "Creative not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "GENERATION_NOT_ELIGIBLE (details.reason), or Idempotency-Key reused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Not the current creative version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GENERATION_LIMIT_REACHED: active jobs or daily credits (retryable).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1059,15 +1090,15 @@
               }
             }
           },
-          "501": {
-            "description": "Not implemented yet.",
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
-            }
+            },
+            "description": "Not Found"
           }
         }
       }

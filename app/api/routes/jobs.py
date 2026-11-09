@@ -1,38 +1,55 @@
-# Generation jobs. Contract published now; implemented in D3.
+# Generation jobs: accept a durable job, then poll its persisted state.
 
-from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
-from app.api.deps import CreativeReader, GenerationRunner, IdempotencyKey
-from app.core.errors import FeatureNotAvailableError
+from app.api.deps import CreativeReader, DbSession, GenerationRunner, IdempotencyKey, SettingsDep
 from app.schemas.common import ErrorBody
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobRead
+from app.services import jobs
 
 router = APIRouter(tags=["jobs"])
-
-_NOT_YET: dict[int | str, dict[str, Any]] = {
-    501: {"model": ErrorBody, "description": "Not implemented yet."}
-}
 
 
 @router.post(
     "/creative-jobs",
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start image generation for a validated brief (D3)",
-    responses=_NOT_YET,
+    description="Returns at once; poll the Location URL. A retry with the same Idempotency-Key "
+    "and body returns the original job with Idempotent-Replayed: true.",
+    responses={
+        404: {"model": ErrorBody, "description": "Creative not found or not permitted."},
+        409: {
+            "model": ErrorBody,
+            "description": "GENERATION_NOT_ELIGIBLE (details.reason), or Idempotency-Key reused.",
+        },
+        412: {"model": ErrorBody, "description": "Not the current creative version."},
+        429: {
+            "model": ErrorBody,
+            "description": "GENERATION_LIMIT_REACHED: active jobs or daily credits (retryable).",
+        },
+    },
 )
 async def create_creative_job(
-    body: CreativeJobCreate, ctx: GenerationRunner, idempotency_key: IdempotencyKey
+    body: CreativeJobCreate,
+    ctx: GenerationRunner,
+    db: DbSession,
+    settings: SettingsDep,
+    idempotency_key: IdempotencyKey,
+    response: Response,
 ) -> JobAccepted:
-    raise FeatureNotAvailableError("Image generation is not implemented yet.")
+    accepted, replayed = await jobs.accept_creative_job(db, ctx, body, idempotency_key, settings)
+    response.headers["Location"] = f"/v1/marketing/jobs/{accepted.job_id}"
+    if replayed:
+        response.headers["Idempotent-Replayed"] = "true"
+    return accepted
 
 
 @router.get(
     "/jobs/{job_id}",
     summary="Persisted job state; polling never starts another generation (D3)",
-    responses=_NOT_YET,
+    responses={404: {"model": ErrorBody}},
 )
-async def get_job(job_id: UUID, ctx: CreativeReader) -> JobRead:
-    raise FeatureNotAvailableError("Image generation is not implemented yet.")
+async def get_job(job_id: UUID, ctx: CreativeReader, db: DbSession) -> JobRead:
+    return await jobs.get_job(db, ctx, job_id)
