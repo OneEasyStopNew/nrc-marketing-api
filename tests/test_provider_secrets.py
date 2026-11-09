@@ -13,7 +13,11 @@ from mypy_boto3_secretsmanager import SecretsManagerClient
 from pydantic import SecretStr
 
 from app.core.config import Settings, get_settings
-from app.services.provider_secrets import ProviderSecretError, with_higgsfield_key
+from app.services.providers.higgsfield import (
+    ProviderSecretError,
+    higgsfield_credentials,
+    with_higgsfield_key,
+)
 from app.workers.connector import WorkerConfigError, load_provider_secrets
 
 SECRET_ID = "nrc/stg/higgsfield"  # noqa: S105 (a secret name, not a value)
@@ -61,7 +65,7 @@ def test_key_is_read_from_the_secret(
 
     loaded = with_higgsfield_key(_settings(), client)
 
-    key_id, key_secret = loaded.higgsfield_credentials()
+    key_id, key_secret = higgsfield_credentials(loaded)
     assert (key_id.get_secret_value(), key_secret.get_secret_value()) == (
         "kid-STUBBED",
         "ksecret-STUBBED-VALUE",

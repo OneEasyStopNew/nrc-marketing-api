@@ -11,15 +11,18 @@ only text-to-image request schema found is openapi.json "/higgsfield-ai/soul/sta
 No live call has been made; see the TODO(NRC-10) markers for what a live account must confirm.
 """
 
+import json
 import logging
 import math
 import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 from urllib.parse import urlsplit
 
+import boto3
 import httpx
+from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import SecretStr
 
 from app.core.config import Settings
@@ -39,11 +42,22 @@ from app.services.providers.base import (
     SubmitResult,
 )
 
+# Type stubs are a dev dependency only; never import them at runtime.
+if TYPE_CHECKING:
+    from mypy_boto3_secretsmanager import SecretsManagerClient
+
 logger = logging.getLogger(__name__)
 
+# Stored as jobs.provider and provider_spend.provider (seeded by migration 440a8d5dba9a).
+HIGGSFIELD_NAME: Final = "higgsfield"
+# The Secrets Manager secret's JSON entry; the same name as the setting it fills.
+KEY_ENTRY_NAME: Final = "HIGGSFIELD_API_KEY"
+
+# Protocol facts from the Higgsfield docs, not tunable: header and id formats.
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[\x21-\x7e]{1,255}$")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _CREDENTIAL_RE = re.compile(r"^[\x21-\x7e]+$")
+# Sanity bound on the provider's Retry-After; the job deadline (a setting) bounds retries anyway.
 _MAX_RETRY_AFTER_SECONDS = 3600.0
 # Documented 422 detail when a key is reused with different parameters (concepts/idempotency).
 _IDEMPOTENCY_CONFLICT_TEXT = "idempotency-key was already used with different request parameters"
@@ -68,9 +82,6 @@ _CONFIG_STATUSES = frozenset({401, 404})
 # Payment Required, so it is treated the same. Both are terminal: nothing was generated.
 _BALANCE_STATUSES = frozenset({402, 403})
 
-# Output downloads run under the worker's lease too; never longer than this.
-_MAX_FETCH_TIMEOUT_SECONDS = 30.0
-
 # Failures where the request provably never left this process.
 _NOT_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
@@ -85,7 +96,7 @@ class HiggsfieldIdempotencyConflictError(ProviderOutcomeUnknownError):
 
 
 class HiggsfieldProvider:
-    name = "higgsfield"
+    name = HIGGSFIELD_NAME
     is_simulated = False
 
     def __init__(
@@ -136,12 +147,12 @@ class HiggsfieldProvider:
         resolution: str | None = None,
     ) -> HiggsfieldProvider:
         # An empty HIGGSFIELD_OUTPUT_HOSTS fails closed (no output host is allowed); live mode
-        # refuses to start without it (connector.check_live_mode).
+        # refuses to start without it (missing_live_settings).
         model = model or settings.higgsfield_model
         if not model:
             raise ProviderConfigError("Higgsfield is not configured; missing HIGGSFIELD_MODEL")
         try:
-            api_key_id, api_key_secret = settings.higgsfield_credentials()
+            api_key_id, api_key_secret = higgsfield_credentials(settings)
         except ValueError as error:
             raise ProviderConfigError(str(error)) from None
         return cls(
@@ -427,10 +438,13 @@ def create_provider(
 ) -> HiggsfieldProvider:
     """The live provider, with its own API client and SSRF-safe output fetcher.
 
-    The worker calls this with settings only (connector._higgsfield_provider); the smoke script
+    The worker calls this with settings only (connector.build_providers); the smoke script
     picks the model and resolution. Close it with aclose().
     """
-    fetch_timeout = min(_MAX_FETCH_TIMEOUT_SECONDS, settings.worker_lease_seconds / 2)
+    # Output downloads run under the worker's lease too.
+    fetch_timeout = min(
+        settings.provider_output_fetch_timeout_seconds, settings.worker_lease_seconds / 2
+    )
     return HiggsfieldProvider.from_settings(
         settings,
         build_api_client(settings),
@@ -438,3 +452,83 @@ def create_provider(
         model=model,
         resolution=resolution,
     )
+
+
+def higgsfield_credentials(settings: Settings) -> tuple[SecretStr, SecretStr]:
+    """Split HIGGSFIELD_API_KEY into (key id, key secret) at the first ':'.
+
+    Not a field validator, because pydantic echoes input values in its errors.
+
+    Raises:
+        ValueError: HIGGSFIELD_API_KEY is missing or malformed. The message never contains
+            the value.
+    """
+    key = settings.higgsfield_api_key
+    raw = key.get_secret_value() if key else ""
+    key_id, separator, key_secret = raw.partition(":")
+    if not separator or not key_id.strip() or not key_secret.strip():
+        raise ValueError("HIGGSFIELD_API_KEY is missing or not in the form <key-id>:<key-secret>.")
+    return SecretStr(key_id), SecretStr(key_secret)
+
+
+def missing_live_settings(settings: Settings) -> list[str]:
+    # What live mode lacks for Higgsfield; messages name settings, never values.
+    problems: list[str] = []
+    try:
+        higgsfield_credentials(settings)
+    except ValueError as error:
+        problems.append(str(error))
+    missing = [
+        name
+        for name, value in (
+            ("HIGGSFIELD_MODEL", settings.higgsfield_model),
+            ("HIGGSFIELD_OUTPUT_HOSTS", settings.higgsfield_output_hosts),
+        )
+        if not value
+    ]
+    if missing:
+        problems.append(f"missing {', '.join(missing)}")
+    return problems
+
+
+# Staging and production: the key comes from AWS Secrets Manager at worker startup.
+
+
+class ProviderSecretError(RuntimeError):
+    # Messages name the secret id and JSON keys, never the secret's content.
+    pass
+
+
+def with_higgsfield_key(settings: Settings, client: SecretsManagerClient | None = None) -> Settings:
+    """Return settings that hold the Higgsfield key, reading it from Secrets Manager if needed.
+
+    Only when HIGGSFIELD_SECRET_ID is set and HIGGSFIELD_API_KEY is not. The key stays in memory
+    (a copy of the frozen settings); it is never written anywhere or logged. On servers the
+    default credential chain (the pod's IAM role) authorizes the read; no access keys are used.
+
+    Raises:
+        ProviderSecretError: the secret cannot be read, is not JSON, or has no usable entry.
+    """
+    secret_id = settings.higgsfield_secret_id
+    # An empty HIGGSFIELD_API_KEY= line in .env counts as not set.
+    key = settings.higgsfield_api_key
+    if not secret_id or (key is not None and key.get_secret_value()):
+        return settings
+    if client is None:
+        client = boto3.Session().client("secretsmanager", region_name=settings.aws_region)
+    try:
+        response = client.get_secret_value(SecretId=secret_id)
+    except BotoCoreError, ClientError:
+        # Not chained: botocore messages can include request details.
+        raise ProviderSecretError(f"Could not read secret {secret_id}.") from None
+    try:
+        data = json.loads(response.get("SecretString") or "")
+    except ValueError:
+        raise ProviderSecretError(f"Secret {secret_id} is not a JSON object.") from None
+    if not isinstance(data, dict):
+        raise ProviderSecretError(f"Secret {secret_id} is not a JSON object.")
+    value = data.get(KEY_ENTRY_NAME)
+    if not isinstance(value, str) or not value:
+        raise ProviderSecretError(f"Secret {secret_id} has no {KEY_ENTRY_NAME} entry.")
+    logger.info("higgsfield key loaded from secret=%s", secret_id)
+    return settings.model_copy(update={"higgsfield_api_key": SecretStr(value)})

@@ -62,12 +62,15 @@ class Settings(BaseSettings):
     worker_no_handler_retry_seconds: float = Field(default=60, gt=0, le=3600)
     higgsfield_base_url: str = "https://api.higgsfield.ai"
     higgsfield_model: str | None = None
-    # "<key-id>:<key-secret>", the Higgsfield SDK's format. Read it via higgsfield_credentials().
+    # "<key-id>:<key-secret>", the Higgsfield SDK's format. Parsed by
+    # app.services.providers.higgsfield.higgsfield_credentials.
     higgsfield_api_key: SecretStr | None = None
     # Staging/production: AWS Secrets Manager secret holding the key (e.g. nrc/stg/higgsfield).
     # The worker reads it at startup when HIGGSFIELD_API_KEY is not set.
     higgsfield_secret_id: str | None = None
     higgsfield_output_hosts: Annotated[tuple[str, ...], NoDecode] = ()
+    # Downloading one provider output; the worker also caps it at half its lease.
+    provider_output_fetch_timeout_seconds: float = Field(default=30, gt=0, le=300)
 
     # Media storage (NRC-3). The bucket comes only from configuration, never from code.
     aws_region: str = "us-east-1"
@@ -86,23 +89,6 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return tuple(item.strip() for item in value.split(",") if item.strip())
         return value
-
-    def higgsfield_credentials(self) -> tuple[SecretStr, SecretStr]:
-        """Split HIGGSFIELD_API_KEY into (key id, key secret) at the first ':'.
-
-        Not a field validator, because pydantic echoes input values in its errors.
-
-        Raises:
-            ValueError: HIGGSFIELD_API_KEY is missing or malformed. The message never contains
-                the value.
-        """
-        raw = self.higgsfield_api_key.get_secret_value() if self.higgsfield_api_key else ""
-        key_id, separator, key_secret = raw.partition(":")
-        if not separator or not key_id.strip() or not key_secret.strip():
-            raise ValueError(
-                "HIGGSFIELD_API_KEY is missing or not in the form <key-id>:<key-secret>."
-            )
-        return SecretStr(key_id), SecretStr(key_secret)
 
     @property
     def cognito_issuer(self) -> str:

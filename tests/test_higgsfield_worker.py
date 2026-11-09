@@ -284,7 +284,9 @@ def _output_server(png: bytes) -> SafeFetcher:
         return ["93.184.216.34"]
 
     return SafeFetcher(
-        httpx.AsyncClient(transport=httpx.MockTransport(cdn)), resolver=public_resolver
+        httpx.AsyncClient(transport=httpx.MockTransport(cdn)),
+        timeout_seconds=get_settings().provider_output_fetch_timeout_seconds,
+        resolver=public_resolver,
     )
 
 

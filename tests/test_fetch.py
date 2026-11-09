@@ -60,7 +60,7 @@ def _fetcher(
         return handler(request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(record))
-    return SafeFetcher(client, resolver=_resolver(*addresses)), seen
+    return SafeFetcher(client, timeout_seconds=30, resolver=_resolver(*addresses)), seen
 
 
 def _ok(
@@ -241,7 +241,7 @@ async def test_streamed_body_over_cap_aborts_early() -> None:
         return httpx.Response(200, headers={"content-type": "image/png"}, stream=Endless())
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    fetcher = SafeFetcher(client, resolver=_resolver("93.184.216.34"))
+    fetcher = SafeFetcher(client, timeout_seconds=30, resolver=_resolver("93.184.216.34"))
     with pytest.raises(ProviderOutputError, match="size limit"):
         await fetcher(URL, allowed_hosts=ALLOWED, max_bytes=5000)
     assert len(pulled) < 10

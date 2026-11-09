@@ -33,6 +33,7 @@ from app.services.providers.base import (
     StatusResult,
     SubmitResult,
 )
+from app.services.providers.higgsfield import higgsfield_credentials
 from app.services.providers.simulator import SimulatedImageProvider, SimulatorScenario
 from app.workers.connector import (
     EVENT_HANDLERS,
@@ -795,15 +796,13 @@ def test_malformed_api_key_is_rejected_without_echoing_it(value: str) -> None:
     settings = _live(higgsfield_api_key=SecretStr(value) if value else None)
 
     with pytest.raises(ValueError, match="HIGGSFIELD_API_KEY") as rejected:
-        settings.higgsfield_credentials()
+        higgsfield_credentials(settings)
 
     assert not value or value not in str(rejected.value)
 
 
 def test_api_key_splits_on_first_colon() -> None:
-    key_id, key_secret = _live(
-        higgsfield_api_key=SecretStr("id-1:se:cret")
-    ).higgsfield_credentials()
+    key_id, key_secret = higgsfield_credentials(_live(higgsfield_api_key=SecretStr("id-1:se:cret")))
 
     assert (key_id.get_secret_value(), key_secret.get_secret_value()) == ("id-1", "se:cret")
 

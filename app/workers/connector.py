@@ -14,7 +14,6 @@ repeated step is harmless (guarded transitions, the stored provider idempotency 
 """
 
 import asyncio
-import importlib
 import logging
 import os
 import secrets
@@ -26,7 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 from types import MappingProxyType
-from typing import Final, Protocol, cast, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import SecretStr, ValidationError
@@ -50,7 +49,6 @@ from app.schemas.jobs import JobKind
 from app.services import eligibility, spend
 from app.services.assets import StoredImageSink, emit_asset_generated
 from app.services.jobs import (
-    HIGGSFIELD_NAME,
     NON_TERMINAL_STATES,
     RUN_EVENT,
     STAGE_OUTPUT_READY,
@@ -59,7 +57,6 @@ from app.services.jobs import (
     settle_reservation,
     transition,
 )
-from app.services.provider_secrets import ProviderSecretError, with_higgsfield_key
 from app.services.providers.base import (
     TERMINAL_PROVIDER_STATUSES,
     FetchedImage,
@@ -69,6 +66,13 @@ from app.services.providers.base import (
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
     SubmitResult,
+)
+from app.services.providers.higgsfield import (
+    HIGGSFIELD_NAME,
+    ProviderSecretError,
+    create_provider,
+    missing_live_settings,
+    with_higgsfield_key,
 )
 from app.services.providers.simulator import SIMULATOR_NAME, SimulatedImageProvider
 from app.services.storage import ObjectStorage
@@ -904,21 +908,7 @@ def check_worker_settings(settings: Settings) -> None:
 
 def check_live_mode(settings: Settings) -> None:
     # Live mode must have real credentials and a real validation gate; it never falls back.
-    problems: list[str] = []
-    try:
-        settings.higgsfield_credentials()
-    except ValueError as error:
-        problems.append(str(error))
-    missing = [
-        name
-        for name, value in (
-            ("HIGGSFIELD_MODEL", settings.higgsfield_model),
-            ("HIGGSFIELD_OUTPUT_HOSTS", settings.higgsfield_output_hosts),
-        )
-        if not value
-    ]
-    if missing:
-        problems.append(f"missing {', '.join(missing)}")
+    problems = missing_live_settings(settings)
     if not settings.aws_s3_bucket:
         # Without storage, finished jobs would park forever; production never runs that way.
         problems.append("missing AWS_S3_BUCKET (generated images need storage)")
@@ -933,24 +923,7 @@ def build_providers(settings: Settings) -> dict[str, ImageProvider]:
     if settings.generation_mode == "simulator":
         return {SIMULATOR_NAME: SimulatedImageProvider()}
     check_live_mode(settings)
-    return {HIGGSFIELD_NAME: _higgsfield_provider(settings)}
-
-
-def _higgsfield_provider(settings: Settings) -> ImageProvider:
-    # Imported lazily: the adapter ships separately (NRC-10) and only live mode needs it.
-    module_name = "app.services.providers.higgsfield"
-    try:
-        module = importlib.import_module(module_name)
-    except ModuleNotFoundError as error:
-        if error.name != module_name:
-            raise
-        raise WorkerConfigError(
-            f"GENERATION_MODE=live needs the Higgsfield adapter ({module_name}, NRC-10)."
-        ) from error
-    factory = getattr(module, "create_provider", None)
-    if factory is None:
-        raise WorkerConfigError(f"{module_name} has no create_provider(settings).")
-    return cast(ImageProvider, factory(settings))
+    return {HIGGSFIELD_NAME: create_provider(settings)}
 
 
 def load_provider_secrets(settings: Settings) -> Settings:

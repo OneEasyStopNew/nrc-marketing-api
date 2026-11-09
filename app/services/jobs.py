@@ -18,13 +18,13 @@ from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobKind, JobRead
 from app.services import eligibility, idempotency
+from app.services.providers.higgsfield import HIGGSFIELD_NAME
 from app.services.providers.simulator import SIMULATOR_MODEL, SIMULATOR_NAME
 
 logger = logging.getLogger(__name__)
 
 CREATE_ROUTE: Final = "POST /creative-jobs"
 RUN_EVENT: Final = "job.run"
-HIGGSFIELD_NAME: Final = "higgsfield"
 TERMINAL_STATES: Final = frozenset(
     {ExecutionState.SUCCEEDED, ExecutionState.FAILED, ExecutionState.CANCELLED}
 )
