@@ -33,7 +33,7 @@ from sqlalchemy import ARRAY, Row, Text, Update, bindparam, func, select, text, 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
 
-from app.core.config import Settings, get_settings
+from app.core.config import LEASE_MAX_SECONDS, LEASE_MIN_SECONDS, Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.models import CreativeVersion, Job, OutboxEvent
@@ -68,22 +68,23 @@ from app.services.storage import ObjectStorage
 
 logger = logging.getLogger(__name__)
 
+# Derived at runtime: identifies this process in outbox_events.lease_owner.
 DEFAULT_OWNER: Final = f"{socket.gethostname()}:{os.getpid()}"
-MAX_EVENTS_PER_RUN: Final = 10
-# An event leased more often than this is given up (the job FAILED, or UNKNOWN if billed).
-MAX_EVENT_ATTEMPTS: Final = 20
-# Same clamp as lease_outbox_events() applies in the database.
-LEASE_MIN_SECONDS: Final = 5
-LEASE_MAX_SECONDS: Final = 600
-NO_HANDLER_RETRY_SECONDS: Final = 60.0
 # The provider saw this key with a different body: resending can never reconcile it.
 IDEMPOTENCY_CONFLICT: Final = "PROVIDER_IDEMPOTENCY_CONFLICT"
 BUDGET_EXHAUSTED: Final = "BUDGET_EXHAUSTED"
+MODEL_CHANGED: Final = "MODEL_CHANGED"
+ATTEMPTS_EXHAUSTED: Final = "ATTEMPTS_EXHAUSTED"
+NO_HANDLER: Final = "NO_HANDLER"
+# The provider billed a completed generation that could not be stored.
+OUTPUT_UNAVAILABLE: Final = "OUTPUT_UNAVAILABLE"
 STAGE_SUBMITTING: Final = "submitting"
 STAGE_RETRY_WAIT: Final = "retry_wait"
 STAGE_RECONCILE: Final = "reconcile"
 STAGE_WAITING: Final = "waiting_provider"
 STAGE_STORED: Final = "stored"
+# The provider reported the generation completed (so billed) and the worker is fetching it.
+STAGE_FETCHING: Final = "fetching_output"
 # Event types this worker has handlers for. Others (asset.generated, until the NRC-7 validation
 # handler subscribes) are never leased, so they are not retried or given up meanwhile.
 HANDLED_EVENT_TYPES: Final = (RUN_EVENT,)
@@ -150,8 +151,8 @@ class JobHandler(Protocol):
        external call when the step must survive a crash. The worker commits after handle returns.
     3. Return None when the job needs no further events, or the seconds after which the same event
        should run again (backoff via available_at instead of sleeping).
-    An exception is logged and the event runs again once its lease expires, at most
-    MAX_EVENT_ATTEMPTS times.
+    An exception is logged and the event runs again once its lease expires. Each expired lease
+    counts as a failure; after GENERATION_MAX_ATTEMPTS failures the job is given up (_give_up).
     """
 
     async def handle(self, db: AsyncSession, job: Job, step: Step) -> float | None: ...
@@ -189,6 +190,16 @@ class ImageGenerationHandler:
     async def _submit(
         self, db: AsyncSession, job: Job, provider: ImageProvider, step: Step
     ) -> float | None:
+        if provider.model != job.model:
+            # Never sent (QUEUED or a retry before acceptance), so nothing was billed.
+            await _fail_with(
+                db,
+                job.id,
+                MODEL_CHANGED,
+                "The configured model changed after the job was accepted.",
+                billed=False,
+            )
+            return None
         request = await _image_request(db, job)
         values: dict[str, object] = {}
         # Priced once, before the first submit; retries and reconcile reuse the estimate.
@@ -246,7 +257,7 @@ class ImageGenerationHandler:
             # request, so only the same-key resend (reconcile) is safe from here on.
             await _park_unknown(db, job.id, error.code)
             if error.code == IDEMPOTENCY_CONFLICT:
-                _log_review_stop(job, error)
+                _log_review_stop(job, error.code)
                 return None
             return max(error.retry_after_seconds or 0.0, backoff_seconds(1))
         except ProviderError as error:
@@ -260,7 +271,8 @@ class ImageGenerationHandler:
         # request id instead of starting (and billing) a second generation. Never re-estimated.
         if provider.model != job.model:
             # A different model changes the request body, so the key could never match it.
-            await _park_unknown(db, job.id, "MODEL_CHANGED")
+            await _park_unknown(db, job.id, MODEL_CHANGED)
+            _log_review_stop(job, MODEL_CHANGED)
             return None
         request = await _image_request(db, job)
         await step.heartbeat(db)
@@ -271,7 +283,7 @@ class ImageGenerationHandler:
             transient = error.retryable or isinstance(error, ProviderOutcomeUnknownError)
             if transient and error.code != IDEMPOTENCY_CONFLICT:
                 return max(error.retry_after_seconds or 0.0, backoff_seconds(step.event_attempts))
-            _log_review_stop(job, error)
+            _log_review_stop(job, error.code)
             return None
         return await self._accepted(db, job, provider, submitted, step)
 
@@ -355,6 +367,19 @@ class ImageGenerationHandler:
                 stage=STAGE_OUTPUT_READY,
             )
             return None
+        if job.stage != STAGE_FETCHING:
+            moved = await transition(
+                db,
+                job.id,
+                allowed_from={ExecutionState.WAITING_PROVIDER},
+                to=ExecutionState.WAITING_PROVIDER,
+                stage=STAGE_FETCHING,
+            )
+            if not moved:
+                return None
+            set_committed_value(job, "stage", STAGE_FETCHING)
+            # Committed before the download: if it never succeeds, the job is known to be billed.
+            await db.commit()
         await step.heartbeat(db)
         _log_call(
             "fetch", job, provider, provider_request_id, job.provider_cost_estimate_usd_micros
@@ -376,7 +401,7 @@ class ImageGenerationHandler:
             await _fail_with(
                 db,
                 job.id,
-                "OUTPUT_UNAVAILABLE",
+                OUTPUT_UNAVAILABLE,
                 error.message,
                 billed=True,
                 actual_usd_micros=actual,
@@ -432,9 +457,12 @@ async def run_once(
     now: datetime | None = None,
     owner: str = DEFAULT_OWNER,
     handlers: Mapping[JobKind, JobHandler] = HANDLERS,
-    max_events: int = MAX_EVENTS_PER_RUN,
+    max_events: int | None = None,
 ) -> int:
-    # Lease and run up to max_events due events, one lease per event. Returns how many ran.
+    # Lease and run up to max_events (default WORKER_MAX_EVENTS_PER_RUN) due events, one lease
+    # per event. Returns how many ran.
+    if max_events is None:
+        max_events = settings.worker_max_events_per_run
     run = _Run(sessions, providers, sink, settings, owner, lease_seconds(settings), handlers, now)
     leased = 0
     while leased < max_events:
@@ -463,7 +491,7 @@ async def run_once(
                 event.event_id,
             )
         except Exception:
-            # The lease expires and the event runs again, at most MAX_EVENT_ATTEMPTS times.
+            # The lease expires unfinished, which the next lease counts as a failed attempt.
             logger.exception(
                 "job event failed job=%s tenant=%s event=%s",
                 event.job_id,
@@ -474,6 +502,7 @@ async def run_once(
 
 
 def lease_seconds(settings: Settings) -> int:
+    # Settings validate this range; the clamp also covers copies made without validation.
     return min(max(settings.worker_lease_seconds, LEASE_MIN_SECONDS), LEASE_MAX_SECONDS)
 
 
@@ -510,25 +539,43 @@ async def _run_handler(run: _Run, event: Row[tuple[UUID, UUID, UUID, str]]) -> N
 
         await heartbeat(db)
         job = await db.get(Job, event.job_id)
-        attempts = await db.scalar(
-            select(OutboxEvent.attempts).where(OutboxEvent.id == event.event_id)
-        )
+        counts = (
+            await db.execute(
+                select(OutboxEvent.attempts, OutboxEvent.failed_attempts).where(
+                    OutboxEvent.id == event.event_id
+                )
+            )
+        ).one()
+        max_failures = run.settings.generation_max_attempts
         handler = run.handlers.get(JobKind(job.kind)) if job and job.kind in JobKind else None
         if job is None or handler is None:
-            logger.error("no handler for job=%s tenant=%s", event.job_id, event.tenant_id)
-            await _finish_event(
-                db, run, event.event_id, NO_HANDLER_RETRY_SECONDS, error_code="NO_HANDLER"
+            # Counts as a failure, so a job nobody can run is not retried forever.
+            failures = counts.failed_attempts + 1
+            logger.error(
+                "no handler for job=%s tenant=%s failures=%s",
+                event.job_id,
+                event.tenant_id,
+                failures,
             )
-        elif (attempts or 0) > MAX_EVENT_ATTEMPTS:
-            await _give_up(db, job, "ATTEMPTS_EXHAUSTED", "The job was retried too many times.")
-            await _finish_event(db, run, event.event_id, None, error_code="ATTEMPTS_EXHAUSTED")
+            retry = (
+                None if failures >= max_failures else run.settings.worker_no_handler_retry_seconds
+            )
+            if retry is None and job is not None and job.state is ExecutionState.QUEUED:
+                # Never started, so nothing was sent: free its slot and credits.
+                await _fail_with(
+                    db, job.id, NO_HANDLER, "No worker can run this kind of job.", billed=False
+                )
+            await _finish_event(db, run, event.event_id, retry, error_code=NO_HANDLER, failed=True)
+        elif counts.failed_attempts >= max_failures:
+            await _give_up(db, job, ATTEMPTS_EXHAUSTED, "The job failed too many times.")
+            await _finish_event(db, run, event.event_id, None, error_code=ATTEMPTS_EXHAUSTED)
         else:
             step = Step(
                 run.providers,
                 run.sink,
                 run.settings,
                 run.now or datetime.now(UTC),
-                attempts or 1,
+                counts.attempts,
                 heartbeat,
             )
             await _finish_event(db, run, event.event_id, await handler.handle(db, job, step))
@@ -555,12 +602,16 @@ async def _finish_event(
     retry_after: float | None,
     *,
     error_code: str | None = None,
+    failed: bool = False,
 ) -> None:
+    # Clearing leased_until marks the lease as finished, so the next lease counts no failure.
     values: dict[str, object] = {
         "leased_until": None,
         "lease_owner": None,
         "last_error_code": error_code,
     }
+    if failed:
+        values["failed_attempts"] = OutboxEvent.failed_attempts + 1
     if retry_after is None:
         values["processed_at"] = func.now()
     else:
@@ -653,12 +704,10 @@ async def _retry_or_fail(db: AsyncSession, job: Job, error: ProviderError) -> fl
     return None
 
 
-def _log_review_stop(job: Job, error: ProviderError) -> None:
+def _log_review_stop(job: Job, code: str) -> None:
+    # The job stays UNKNOWN with its credits HELD; scripts/list_unknown_jobs.py lists it.
     logger.warning(
-        "reconcile stopped for operator review job=%s tenant=%s code=%s",
-        job.id,
-        job.tenant_id,
-        error.code,
+        "job stopped for operator review job=%s tenant=%s code=%s", job.id, job.tenant_id, code
     )
 
 
@@ -709,14 +758,32 @@ async def _park_unknown(db: AsyncSession, job_id: UUID, code: str) -> None:
 
 
 async def _give_up(db: AsyncSession, job: Job, code: str, message: str) -> None:
-    # FAILED when the provider certainly never got the request, otherwise UNKNOWN for review.
+    """Stop working on a job past its deadline or attempt cap. The worker never leases it again.
+
+    - The provider completed (billed) the generation but the output was never stored: FAILED
+      OUTPUT_UNAVAILABLE with the credits and spend committed.
+    - The provider may have the request (submitted, accepted, or already UNKNOWN): UNKNOWN with
+      the credits HELD, for an operator (scripts/list_unknown_jobs.py lists these jobs).
+    - Otherwise the provider never got it: FAILED with everything released.
+    """
     if job.state is ExecutionState.UNKNOWN:
+        _log_review_stop(job, code)
+        return
+    if job.state is ExecutionState.WAITING_PROVIDER and job.stage == STAGE_FETCHING:
+        await _fail_with(
+            db,
+            job.id,
+            OUTPUT_UNAVAILABLE,
+            "The provider's image could not be stored in time.",
+            billed=True,
+        )
         return
     maybe_accepted = job.state is ExecutionState.WAITING_PROVIDER or (
         job.state is ExecutionState.RUNNING and job.stage == STAGE_SUBMITTING
     )
     if maybe_accepted:
         await _park_unknown(db, job.id, code)
+        _log_review_stop(job, code)
     else:
         await _fail_with(db, job.id, code, message, billed=False)
 

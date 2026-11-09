@@ -6,13 +6,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Final
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
 from app.core.config import Settings
 from app.core.errors import DependencyUnavailableError, GenerationLimitError, NotFoundError
-from app.models import Creative, CreditReservation, Job, OutboxEvent
+from app.db.session import bind_tenant
+from app.models import Creative, CreditReservation, Job, OutboxEvent, Tenant
 from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobKind, JobRead
@@ -209,6 +210,38 @@ async def settle_reservation(db: AsyncSession, job_id: UUID, to: ReservationStat
         .values(**values)
         .execution_options(synchronize_session=False)
     )
+
+
+async def jobs_awaiting_review(db: AsyncSession) -> list[tuple[UUID, UUID]]:
+    """(tenant id, job id) of UNKNOWN jobs the worker has stopped working on, across tenants.
+
+    The worker gives up on them (no unprocessed outbox event is left) while the provider may have
+    billed them, so their credits stay HELD until an operator settles each one. Binds each tenant
+    in turn, so it works under row-level security with any role that can read tenants and jobs.
+    """
+    pending = (
+        select(OutboxEvent.id)
+        .where(
+            OutboxEvent.tenant_id == Job.tenant_id,
+            OutboxEvent.job_id == Job.id,
+            OutboxEvent.processed_at.is_(None),
+        )
+        .correlate(Job)
+    )
+    found: list[tuple[UUID, UUID]] = []
+    for tenant_id in (await db.scalars(select(Tenant.id).order_by(Tenant.id))).all():
+        await bind_tenant(db, tenant_id)
+        job_ids = await db.scalars(
+            select(Job.id)
+            .where(
+                Job.tenant_id == tenant_id,
+                Job.state == ExecutionState.UNKNOWN,
+                ~exists(pending),
+            )
+            .order_by(Job.updated_at)
+        )
+        found.extend((tenant_id, job_id) for job_id in job_ids)
+    return found
 
 
 def _provider_for(settings: Settings) -> tuple[str, str]:

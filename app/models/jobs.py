@@ -127,7 +127,11 @@ class OutboxEvent(Base):
     )
     leased_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_owner: Mapped[str | None] = mapped_column(String(128))
+    # Every lease, polls included (drives the poll backoff).
     attempts: Mapped[int] = mapped_column(default=0)
+    # Failures only: a lease that expired unfinished, or no handler. Capped by
+    # GENERATION_MAX_ATTEMPTS; polls and advisory-lock misses never count.
+    failed_attempts: Mapped[int] = mapped_column(server_default=text("0"))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

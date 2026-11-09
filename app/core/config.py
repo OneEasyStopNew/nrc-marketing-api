@@ -7,6 +7,10 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+# lease_outbox_events() clamps its lease to the same range in SQL; keep the two in sync.
+LEASE_MIN_SECONDS = 5
+LEASE_MAX_SECONDS = 600
+
 
 class Settings(BaseSettings):
     # Typed configuration. Required values have no default, so a missing one fails at startup.
@@ -45,12 +49,17 @@ class Settings(BaseSettings):
     # Cap on provider spend across all tenants (reserved estimates plus committed costs), kept per
     # provider in provider_spend. A job that would pass it fails BUDGET_EXHAUSTED before submit.
     generation_global_budget_usd: Decimal = Field(default=Decimal(40), ge=0)
-    # Stored on each job. Since NRC-10 retryable provider errors are bounded by the deadline
-    # instead (the agreed retry policy), so this no longer limits retries.
+    # Failed processing attempts per outbox event (a crash, an expired lease, no handler) before
+    # the worker gives up. Polls and retryable provider errors don't count: the job deadline
+    # bounds those (the agreed retry policy).
     generation_max_attempts: int = Field(default=3, ge=1, le=10)
     generation_deadline_seconds: int = Field(default=900, ge=60, le=86_400)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
-    worker_lease_seconds: int = Field(default=60, ge=5, le=3600)
+    worker_lease_seconds: int = Field(default=60, ge=LEASE_MIN_SECONDS, le=LEASE_MAX_SECONDS)
+    # Events one worker leases and runs, one at a time, before it polls again.
+    worker_max_events_per_run: int = Field(default=10, ge=1, le=100)
+    # Retry delay for an event whose job has no handler (e.g. a kind deployed before its worker).
+    worker_no_handler_retry_seconds: float = Field(default=60, gt=0, le=3600)
     higgsfield_base_url: str = "https://api.higgsfield.ai"
     higgsfield_model: str | None = None
     # "<key-id>:<key-secret>", the Higgsfield SDK's format. Read it via higgsfield_credentials().

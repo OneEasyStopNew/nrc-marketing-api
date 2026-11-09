@@ -26,6 +26,7 @@ import app.workers.connector
 import app.services.providers.higgsfield
 import app.services.provider_secrets
 import app.services.storage
+import scripts.list_unknown_jobs
 import scripts.higgsfield_smoke
 """
 
