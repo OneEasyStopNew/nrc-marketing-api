@@ -48,7 +48,13 @@ class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
+        # Referenced by assets, so an asset records exactly the version its job generated.
+        UniqueConstraint("id", "tenant_id", "creative_id", "creative_version"),
         ForeignKeyConstraint(["tenant_id", "creative_id"], ["creatives.tenant_id", "creatives.id"]),
+        ForeignKeyConstraint(
+            ["creative_id", "creative_version"],
+            ["creative_versions.creative_id", "creative_versions.version"],
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "study_snapshot_id"],
             ["study_snapshots.tenant_id", "study_snapshots.id"],

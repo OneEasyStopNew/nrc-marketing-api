@@ -21,6 +21,10 @@ class Asset(Base):
         UniqueConstraint("job_id"),
         ForeignKeyConstraint(["tenant_id", "creative_id"], ["creatives.tenant_id", "creatives.id"]),
         ForeignKeyConstraint(["tenant_id", "job_id"], ["jobs.tenant_id", "jobs.id"]),
+        ForeignKeyConstraint(
+            ["job_id", "tenant_id", "creative_id", "creative_version"],
+            ["jobs.id", "jobs.tenant_id", "jobs.creative_id", "jobs.creative_version"],
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)

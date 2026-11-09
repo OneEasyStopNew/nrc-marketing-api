@@ -11,6 +11,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import Row, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
@@ -899,3 +900,36 @@ async def test_asset_is_rolled_back_when_the_job_is_already_terminal(
     assert assets == 0
     assert handoffs == 0
     assert (await _event(connection)).processed_at is not None
+
+
+@pytest.mark.parametrize("field", ["creative_id", "creative_version"])
+async def test_asset_must_record_its_jobs_creative_version(
+    sessions: Sessions, job_id: UUID, world: World, field: str
+) -> None:
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        job = await db.get(Job, job_id)
+        assert job is not None
+        lineage: dict[str, object] = {
+            "creative_id": job.creative_id,
+            "creative_version": job.creative_version,
+        }
+        lineage[field] = uuid4() if field == "creative_id" else job.creative_version + 1
+        db.add(
+            Asset(
+                tenant_id=job.tenant_id,
+                job_id=job.id,
+                origin="generated",
+                bucket="fake",
+                s3_key="fake/lineage.png",
+                mime_type="image/png",
+                width_px=1,
+                height_px=1,
+                size_bytes=1,
+                checksum_sha256="0" * 64,
+                created_by=job.created_by,
+                **lineage,
+            )
+        )
+        with pytest.raises(IntegrityError, match="foreign key"):
+            await db.flush()
