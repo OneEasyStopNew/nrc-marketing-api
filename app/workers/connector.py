@@ -44,7 +44,7 @@ from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.models import CreativeVersion, Job, OutboxEvent
 from app.models.enums import FORMAT_SPECS, ExecutionState
-from app.models.jobs import ReservationState
+from app.models.jobs import FAILURE_MESSAGE_MAX_CHARS, ReservationState
 from app.schemas.jobs import JobKind
 from app.services import eligibility, spend
 from app.services.assets import StoredImageSink, emit_asset_generated
@@ -216,9 +216,11 @@ class JobHandler(Protocol):
     async def handle(self, db: AsyncSession, job: Job, step: Step) -> float | None: ...
 
 
-def backoff_seconds(attempt: int, *, base: float = 2.0, cap: float = 60.0) -> float:
-    # Exponential, with jitter between 50% and 100% so many jobs don't retry in lockstep.
-    return min(cap, base * 2.0 ** max(attempt - 1, 0)) * _jitter.uniform(0.5, 1.0)
+def backoff_seconds(attempt: int, settings: Settings) -> float:
+    # Exponential from WORKER_BACKOFF_BASE_SECONDS up to WORKER_BACKOFF_MAX_SECONDS, with jitter
+    # between 50% and 100% so many jobs don't retry in lockstep.
+    delay = settings.worker_backoff_base_seconds * 2.0 ** max(attempt - 1, 0)
+    return min(settings.worker_backoff_max_seconds, delay) * _jitter.uniform(0.5, 1.0)
 
 
 class ImageGenerationHandler:
@@ -266,7 +268,7 @@ class ImageGenerationHandler:
             try:
                 micros = await _estimate_usd_micros(provider, request)
             except ProviderError as error:
-                return await _retry_or_fail(db, job, error)
+                return await _retry_or_fail(db, job, error, step.settings)
             _log_call("estimate", job, provider, None, micros)
             if micros > _usd_micros(step.settings.generation_max_cost_usd_per_image):
                 await _fail_with(
@@ -317,9 +319,9 @@ class ImageGenerationHandler:
             if error.code == IDEMPOTENCY_CONFLICT:
                 _log_review_stop(job, error.code)
                 return None
-            return max(error.retry_after_seconds or 0.0, backoff_seconds(1))
+            return max(error.retry_after_seconds or 0.0, backoff_seconds(1, step.settings))
         except ProviderError as error:
-            return await _retry_or_fail(db, job, error)
+            return await _retry_or_fail(db, job, error, step.settings)
         return await self._accepted(db, job, provider, submitted, step)
 
     async def _reconcile(
@@ -340,7 +342,10 @@ class ImageGenerationHandler:
             await _park_unknown(db, job.id, error.code)
             transient = error.retryable or isinstance(error, ProviderOutcomeUnknownError)
             if transient and error.code != IDEMPOTENCY_CONFLICT:
-                return max(error.retry_after_seconds or 0.0, backoff_seconds(step.event_attempts))
+                return max(
+                    error.retry_after_seconds or 0.0,
+                    backoff_seconds(step.event_attempts, step.settings),
+                )
             _log_review_stop(job, error.code)
             return None
         return await self._accepted(db, job, provider, submitted, step)
@@ -392,13 +397,16 @@ class ImageGenerationHandler:
             status = await provider.get_status(provider_request_id)
         except ProviderError as error:
             if error.retryable or isinstance(error, ProviderOutcomeUnknownError):
-                return max(error.retry_after_seconds or 0.0, backoff_seconds(step.event_attempts))
+                return max(
+                    error.retry_after_seconds or 0.0,
+                    backoff_seconds(step.event_attempts, step.settings),
+                )
             # Accepted, but no longer visible (e.g. 401 after a key rotation): hold the credits
             # and reconcile later, which stops for review if the cause persists.
             await _park_unknown(db, job.id, error.code)
-            return backoff_seconds(step.event_attempts)
+            return backoff_seconds(step.event_attempts, step.settings)
         if status.status not in TERMINAL_PROVIDER_STATUSES:
-            return backoff_seconds(step.event_attempts)
+            return backoff_seconds(step.event_attempts, step.settings)
         if status.status is not ProviderJobStatus.COMPLETED:
             code = status.failure_code or f"PROVIDER_{status.status.value.upper()}"
             # The provider bills completed generations only.
@@ -454,7 +462,7 @@ class ImageGenerationHandler:
                 raise
         except ProviderError as error:
             if error.retryable:
-                return backoff_seconds(step.event_attempts)
+                return backoff_seconds(step.event_attempts, step.settings)
             # Billed for a completed generation that can't be kept.
             await _fail_with(
                 db,
@@ -607,7 +615,7 @@ async def _process(run: _Run, event: Row[tuple[UUID, UUID, UUID, str]]) -> None:
             # Another worker is still on this job: hand the event back for a later try.
             async with run.sessions() as db:
                 await bind_tenant(db, event.tenant_id)
-                await _finish_event(db, run, event.event_id, backoff_seconds(1))
+                await _finish_event(db, run, event.event_id, backoff_seconds(1, run.settings))
                 await db.commit()
             return
         try:
@@ -787,7 +795,9 @@ def _log_call(
     )
 
 
-async def _retry_or_fail(db: AsyncSession, job: Job, error: ProviderError) -> float | None:
+async def _retry_or_fail(
+    db: AsyncSession, job: Job, error: ProviderError, settings: Settings
+) -> float | None:
     """For errors where the provider certainly did not accept the request.
 
     Retryable ones (429, 423, 5xx on estimate or status, connect failures) back off and try
@@ -804,7 +814,7 @@ async def _retry_or_fail(db: AsyncSession, job: Job, error: ProviderError) -> fl
             stage=STAGE_RETRY_WAIT,
             attempt_count=attempts,
         )
-        return max(error.retry_after_seconds or 0.0, backoff_seconds(attempts))
+        return max(error.retry_after_seconds or 0.0, backoff_seconds(attempts, settings))
     logger.warning(
         "provider refused job=%s tenant=%s code=%s reason=%s",
         job.id,
@@ -842,7 +852,7 @@ async def _fail_with(
         allowed_from=NON_TERMINAL_STATES,
         to=ExecutionState.FAILED,
         failure_code=code,
-        failure_message=message[:500],
+        failure_message=message[:FAILURE_MESSAGE_MAX_CHARS],
         **values,
     )
     if moved:

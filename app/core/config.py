@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     generation_max_attempts: int = Field(default=3, ge=1, le=10)
     generation_deadline_seconds: int = Field(default=900, ge=60, le=86_400)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
+    # Retry and poll backoff per event: doubles from the base up to the max, with jitter.
+    worker_backoff_base_seconds: float = Field(default=2.0, gt=0, le=60)
+    worker_backoff_max_seconds: float = Field(default=60.0, gt=0, le=3600)
     worker_lease_seconds: int = Field(default=60, ge=LEASE_MIN_SECONDS, le=LEASE_MAX_SECONDS)
     # Events one worker leases and runs, one at a time, before it polls again.
     worker_max_events_per_run: int = Field(default=10, ge=1, le=100)

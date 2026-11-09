@@ -40,6 +40,7 @@ _TAKES_SLOT: Final = or_(
         Job.stage.is_distinct_from(STAGE_OUTPUT_READY),
     ),
 )
+# The "daily" in GENERATION_DAILY_CREDIT_CEILING_PER_TENANT: part of that setting's meaning.
 _CREDIT_WINDOW: Final = timedelta(hours=24)
 
 

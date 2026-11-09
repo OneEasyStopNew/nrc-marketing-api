@@ -22,6 +22,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 from app.models.enums import ExecutionState, enum_column
 
+# jobs.failure_message column size; writers truncate to it.
+FAILURE_MESSAGE_MAX_CHARS = 500
+
 
 class ReservationState(StrEnum):
     RESERVED = "RESERVED"
@@ -95,7 +98,7 @@ class Job(Base):
     # Set with the reservation in provider_spend and changed only by app.services.spend.
     provider_spend_state: Mapped[SpendState | None] = mapped_column(enum_column(SpendState))
     failure_code: Mapped[str | None] = mapped_column(String(64))
-    failure_message: Mapped[str | None] = mapped_column(String(500))
+    failure_message: Mapped[str | None] = mapped_column(String(FAILURE_MESSAGE_MAX_CHARS))
     result_asset_id: Mapped[UUID | None]
     created_by: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

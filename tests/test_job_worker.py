@@ -41,6 +41,7 @@ from app.workers.connector import (
     LeasedEvent,
     Step,
     WorkerConfigError,
+    backoff_seconds,
     build_providers,
     run_once,
 )
@@ -982,3 +983,16 @@ async def test_asset_must_record_its_jobs_creative_version(
         )
         with pytest.raises(IntegrityError, match="foreign key"):
             await db.flush()
+
+
+@pytest.mark.parametrize(("attempt", "ceiling"), [(1, 3.0), (2, 6.0), (3, 10.0), (9, 10.0)])
+def test_backoff_doubles_from_the_base_up_to_the_configured_max(
+    attempt: int, ceiling: float
+) -> None:
+    settings = get_settings().model_copy(
+        update={"worker_backoff_base_seconds": 3.0, "worker_backoff_max_seconds": 10.0}
+    )
+
+    delays = [backoff_seconds(attempt, settings) for _ in range(50)]
+
+    assert all(ceiling / 2 <= delay <= ceiling for delay in delays)
