@@ -559,9 +559,9 @@ def _live(**overrides: object) -> Settings:
 
 
 def test_live_mode_without_keys_refuses_to_start() -> None:
-    settings = _live(hf_key=None, higgsfield_model=None, higgsfield_output_hosts=())
+    settings = _live(higgsfield_api_key=None, higgsfield_model=None, higgsfield_output_hosts=())
 
-    with pytest.raises(WorkerConfigError, match="HF_KEY") as refused:
+    with pytest.raises(WorkerConfigError, match="HIGGSFIELD_API_KEY") as refused:
         build_providers(settings)
 
     assert "HIGGSFIELD_MODEL, HIGGSFIELD_OUTPUT_HOSTS" in str(refused.value)
@@ -570,7 +570,7 @@ def test_live_mode_without_keys_refuses_to_start() -> None:
 
 def test_live_mode_with_stub_validation_gate_refuses_to_start() -> None:
     settings = _live(
-        hf_key=SecretStr("test-id:test-secret"),
+        higgsfield_api_key=SecretStr("test-id:test-secret"),
         higgsfield_model="test/model",
         higgsfield_output_hosts=("images.example.test",),
     )
@@ -580,16 +580,18 @@ def test_live_mode_with_stub_validation_gate_refuses_to_start() -> None:
 
 
 @pytest.mark.parametrize("value", ["no-separator-value", ":only-secret", "only-id:", ""])
-def test_malformed_hf_key_is_rejected_without_echoing_it(value: str) -> None:
-    settings = _live(hf_key=SecretStr(value) if value else None)
+def test_malformed_api_key_is_rejected_without_echoing_it(value: str) -> None:
+    settings = _live(higgsfield_api_key=SecretStr(value) if value else None)
 
-    with pytest.raises(ValueError, match="HF_KEY") as rejected:
+    with pytest.raises(ValueError, match="HIGGSFIELD_API_KEY") as rejected:
         settings.higgsfield_credentials()
 
     assert not value or value not in str(rejected.value)
 
 
-def test_hf_key_splits_on_first_colon() -> None:
-    key_id, key_secret = _live(hf_key=SecretStr("id-1:se:cret")).higgsfield_credentials()
+def test_api_key_splits_on_first_colon() -> None:
+    key_id, key_secret = _live(
+        higgsfield_api_key=SecretStr("id-1:se:cret")
+    ).higgsfield_credentials()
 
     assert (key_id.get_secret_value(), key_secret.get_secret_value()) == ("id-1", "se:cret")

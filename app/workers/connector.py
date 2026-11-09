@@ -50,6 +50,7 @@ from app.services.jobs import (
     settle_reservation,
     transition,
 )
+from app.services.provider_secrets import ProviderSecretError, with_higgsfield_key
 from app.services.providers.base import (
     TERMINAL_PROVIDER_STATUSES,
     FetchedImage,
@@ -676,7 +677,16 @@ def _higgsfield_provider(settings: Settings) -> ImageProvider:
     return cast(ImageProvider, factory(settings))
 
 
+def load_provider_secrets(settings: Settings) -> Settings:
+    # Staging/production read the Higgsfield key from Secrets Manager; it stays in memory only.
+    try:
+        return with_higgsfield_key(settings)
+    except ProviderSecretError as error:
+        raise WorkerConfigError(str(error)) from None
+
+
 async def run_forever(settings: Settings) -> None:
+    settings = await asyncio.to_thread(load_provider_secrets, settings)
     providers = build_providers(settings)
     engine = create_engine(settings)
     sessions = create_sessionmaker(engine)

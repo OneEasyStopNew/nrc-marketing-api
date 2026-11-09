@@ -100,11 +100,11 @@ class HiggsfieldProvider:
         key_secret = api_key_secret.get_secret_value()
         if not _CREDENTIAL_RE.fullmatch(key_id) or ":" in key_id:
             raise ProviderConfigError(
-                "HIGGSFIELD_API_KEY_ID is empty or contains invalid characters"
+                "HIGGSFIELD_API_KEY key id is empty or contains invalid characters"
             )
         if not _CREDENTIAL_RE.fullmatch(key_secret):
             raise ProviderConfigError(
-                "HIGGSFIELD_API_KEY_SECRET is empty or contains invalid characters"
+                "HIGGSFIELD_API_KEY key secret is empty or contains invalid characters"
             )
         parts = urlsplit(base_url)
         if parts.scheme != "https" or not parts.hostname:
@@ -120,40 +120,34 @@ class HiggsfieldProvider:
 
     @classmethod
     def from_settings(
-        cls, settings: Settings, client: httpx.AsyncClient, fetcher: OutputFetcher
+        cls,
+        settings: Settings,
+        client: httpx.AsyncClient,
+        fetcher: OutputFetcher,
+        *,
+        model: str | None = None,
+        resolution: str | None = None,
     ) -> HiggsfieldProvider:
-        missing = [
-            env
-            for env, value in (
-                ("HIGGSFIELD_MODEL", settings.higgsfield_model),
-                ("HIGGSFIELD_API_KEY_ID", settings.higgsfield_api_key_id),
-                ("HIGGSFIELD_API_KEY_SECRET", settings.higgsfield_api_key_secret),
-                ("HIGGSFIELD_OUTPUT_HOSTS", settings.higgsfield_output_hosts),
-            )
-            if not value
-        ]
-        if missing:
-            raise ProviderConfigError(f"Higgsfield is not configured; missing {', '.join(missing)}")
-        assert settings.higgsfield_model is not None  # noqa: S101 (narrowing for mypy)
-        assert settings.higgsfield_api_key_id is not None  # noqa: S101
-        assert settings.higgsfield_api_key_secret is not None  # noqa: S101
+        # An empty HIGGSFIELD_OUTPUT_HOSTS fails closed (no output host is allowed); live mode
+        # refuses to start without it (connector.check_live_mode).
+        model = model or settings.higgsfield_model
+        if not model:
+            raise ProviderConfigError("Higgsfield is not configured; missing HIGGSFIELD_MODEL")
+        try:
+            api_key_id, api_key_secret = settings.higgsfield_credentials()
+        except ValueError as error:
+            raise ProviderConfigError(str(error)) from None
         return cls(
             client=client,
             base_url=settings.higgsfield_base_url,
-            model=settings.higgsfield_model,
-            api_key_id=settings.higgsfield_api_key_id,
-            api_key_secret=settings.higgsfield_api_key_secret,
+            model=model,
+            api_key_id=api_key_id,
+            api_key_secret=api_key_secret,
             fetcher=fetcher,
             allowed_output_hosts=frozenset(h.lower() for h in settings.higgsfield_output_hosts),
             max_output_bytes=settings.max_generated_image_bytes,
+            resolution=resolution,
         )
-
-    @classmethod
-    def split_hf_key(cls, value: SecretStr) -> tuple[SecretStr, SecretStr]:
-        key_id, sep, key_secret = value.get_secret_value().partition(":")
-        if not sep or not key_id or not key_secret:
-            raise ProviderConfigError("HF_KEY must have the form key_id:key_secret")
-        return SecretStr(key_id), SecretStr(key_secret)
 
     def __repr__(self) -> str:
         return f"HiggsfieldProvider(model={self.model!r})"

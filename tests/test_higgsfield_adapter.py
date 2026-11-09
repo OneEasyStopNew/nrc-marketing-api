@@ -290,8 +290,7 @@ def settings(**overrides: Any) -> Settings:
         "cognito_client_ids": ("c",),
         "required_scope": "marketing/api",
         "higgsfield_model": MODEL,
-        "higgsfield_api_key_id": KEY_ID,
-        "higgsfield_api_key_secret": KEY_SECRET,
+        "higgsfield_api_key": f"{KEY_ID}:{KEY_SECRET}",
         "higgsfield_output_hosts": ("CDN.example.com",),
     }
     values.update(overrides)
@@ -310,9 +309,9 @@ def test_from_settings_builds_provider() -> None:
     ("override", "missing"),
     [
         ({"higgsfield_model": None}, "HIGGSFIELD_MODEL"),
-        ({"higgsfield_api_key_id": None}, "HIGGSFIELD_API_KEY_ID"),
-        ({"higgsfield_api_key_secret": None}, "HIGGSFIELD_API_KEY_SECRET"),
-        ({"higgsfield_output_hosts": ()}, "HIGGSFIELD_OUTPUT_HOSTS"),
+        ({"higgsfield_api_key": None}, "HIGGSFIELD_API_KEY"),
+        ({"higgsfield_api_key": f"{KEY_ID}{KEY_SECRET}"}, "HIGGSFIELD_API_KEY"),
+        ({"higgsfield_api_key": f"{KEY_ID}:"}, "HIGGSFIELD_API_KEY"),
     ],
 )
 def test_from_settings_names_missing_setting(override: dict[str, Any], missing: str) -> None:
@@ -388,11 +387,11 @@ async def test_idempotency_conflict_is_outcome_unknown() -> None:
 @pytest.mark.parametrize(
     ("key_id", "secret", "setting"),
     [
-        ("", KEY_SECRET, "HIGGSFIELD_API_KEY_ID"),
-        ("a:b", KEY_SECRET, "HIGGSFIELD_API_KEY_ID"),
-        ("kéy", KEY_SECRET, "HIGGSFIELD_API_KEY_ID"),
-        (KEY_ID, "", "HIGGSFIELD_API_KEY_SECRET"),
-        (KEY_ID, "sec ret\n", "HIGGSFIELD_API_KEY_SECRET"),
+        ("", KEY_SECRET, "HIGGSFIELD_API_KEY key id"),
+        ("a:b", KEY_SECRET, "HIGGSFIELD_API_KEY key id"),
+        ("kéy", KEY_SECRET, "HIGGSFIELD_API_KEY key id"),
+        (KEY_ID, "", "HIGGSFIELD_API_KEY key secret"),
+        (KEY_ID, "sec ret\n", "HIGGSFIELD_API_KEY key secret"),
     ],
 )
 def test_bad_credentials_rejected_in_init(key_id: str, secret: str, setting: str) -> None:
@@ -518,11 +517,17 @@ async def test_estimate_classifies_like_status() -> None:
         await make(fixed(429, headers={"Retry-After": "3"})).estimate_cost_usd(request())
 
 
-def test_split_hf_key() -> None:
-    key_id, secret = HiggsfieldProvider.split_hf_key(SecretStr("id1:sec:ret"))
-    assert (key_id.get_secret_value(), secret.get_secret_value()) == ("id1", "sec:ret")
-    for bad in ("nocolonXYZ", ":secretXYZ", "idXYZ:"):
-        with pytest.raises(ProviderConfigError) as info:
-            HiggsfieldProvider.split_hf_key(SecretStr(bad))
-        assert "HF_KEY" in str(info.value)
-        assert bad not in str(info.value)
+async def test_from_settings_sends_the_split_key() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return accepted(req)
+
+    provider = HiggsfieldProvider.from_settings(
+        settings(higgsfield_api_key="id1:sec:ret", higgsfield_output_hosts=()),
+        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        RecordingFetcher(),
+    )
+    await provider.submit(request())
+    assert seen[0].headers["Authorization"] == "Key id1:sec:ret"

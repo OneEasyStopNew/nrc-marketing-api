@@ -284,7 +284,7 @@ def test_live_mode_without_storage_refuses_to_start() -> None:
         update={
             "generation_mode": "live",
             "aws_s3_bucket": None,
-            "hf_key": SecretStr("test-id:test-secret"),
+            "higgsfield_api_key": SecretStr("test-id:test-secret"),
             "higgsfield_model": "test/model",
             "higgsfield_output_hosts": ("images.example.test",),
         }
