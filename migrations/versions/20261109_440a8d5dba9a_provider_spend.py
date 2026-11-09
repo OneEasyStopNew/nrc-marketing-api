@@ -1,9 +1,9 @@
 """Global provider spend guard: provider_spend counters, plus per-job spend state and actual cost.
 
-provider_spend holds one row per provider and no tenant data, so it has no tenant_id and no RLS.
-PENDING APPROVAL: this is an exception to the tenant_id + RLS rule for every table, asked of
-Dinesh (alternative: a SECURITY DEFINER function like the outbox lease). marketing_app gets
-SELECT and UPDATE only: it can neither add nor delete providers.
+provider_spend holds one row per provider and no tenant data, so it has no tenant_id and no RLS:
+an exception to the tenant_id + RLS rule, approved by Dinesh. Rows are created and seeded here
+only; the app role gets SELECT and UPDATE, never INSERT or DELETE. 3fb9adf5dfbe moves those two
+privileges to the worker role (marketing_worker), the only one that uses the table.
 
 Revision ID: 440a8d5dba9a
 Revises: 8f8284b27c6f

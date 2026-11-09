@@ -166,8 +166,9 @@ class CreditReservation(Base):
 class ProviderSpend(Base):
     """Running spend per provider across all tenants, checked against GENERATION_GLOBAL_BUDGET_USD.
 
-    No tenant data, so no tenant_id and no RLS (an agreed exception, see its migration). Changed
-    only by app.services.spend, inside the transaction of a guarded job transition.
+    No tenant data, so no tenant_id and no RLS (an approved exception, see its migration). Only
+    marketing_worker may read or update it, through app.services.spend, inside the transaction of
+    a guarded job transition.
     """
 
     __tablename__ = "provider_spend"
