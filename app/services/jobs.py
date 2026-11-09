@@ -28,7 +28,7 @@ TERMINAL_STATES: Final = frozenset(
     {ExecutionState.SUCCEEDED, ExecutionState.FAILED, ExecutionState.CANCELLED}
 )
 NON_TERMINAL_STATES: Final = frozenset(ExecutionState) - TERMINAL_STATES
-# Provider finished but no storage is wired yet (NRC-3): the job is parked at this result.
+# Provider finished but the worker has no storage configured: the job is parked at this result.
 STAGE_OUTPUT_READY: Final = "output_ready"
 # Jobs that take an active-generation slot. Parked and UNKNOWN jobs don't: UNKNOWN credits
 # stay HELD, so the daily credit ceiling still bounds them.

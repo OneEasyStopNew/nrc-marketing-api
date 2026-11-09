@@ -16,6 +16,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.request_context import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.db.session import create_engine, create_sessionmaker
+from app.services.storage import ObjectStorage
 
 API_PREFIX = "/v1/marketing"
 API_VERSION = "0.1.0"
@@ -31,6 +32,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.signing_keys = JwksClient(
                 http, settings.cognito_jwks_url, ttl_seconds=settings.jwks_cache_ttl_seconds
             )
+            # Without a bucket the asset endpoint answers 503; nothing else needs storage.
+            app.state.storage = ObjectStorage(settings) if settings.aws_s3_bucket else None
             yield
     finally:
         await engine.dispose()
