@@ -8,12 +8,16 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from app.services.media import MediaRejectedError, inspect_image
+from app.services.media import MediaRejectedError, inspect_header
 from app.services.providers.base import FetchedImage, ProviderOutputError
 
 _ALLOWED_TYPES = frozenset({"image/png", "image/jpeg"})
-# Only the signature matters here; the caller enforces its own pixel limit later.
-_SIGNATURE_MAX_PIXELS = 400_000_000
+_SITE_LOCAL_V6 = ipaddress.IPv6Network("fec0::/10")
+
+
+def build_fetch_client() -> httpx.AsyncClient:
+    # trust_env=False so proxy environment variables cannot route around the address checks.
+    return httpx.AsyncClient(trust_env=False, follow_redirects=False)
 
 
 async def _default_resolver(host: str) -> list[str]:
@@ -26,8 +30,11 @@ def _is_public(address: str) -> bool:
         ip = ipaddress.ip_address(address.split("%", 1)[0])
     except ValueError:
         return False
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip in _SITE_LOCAL_V6:
+            return False
     return not (
         ip.is_private
         or ip.is_loopback
@@ -59,13 +66,15 @@ class SafeFetcher:
         self, url: str, *, allowed_hosts: frozenset[str], max_bytes: int
     ) -> FetchedImage:
         host = self._validate_url(url, allowed_hosts)
-        await self._check_addresses(host)
         try:
-            return await asyncio.wait_for(self._download(url, host, max_bytes), self._timeout)
+            return await asyncio.wait_for(self._run(url, host, max_bytes), self._timeout)
         except TimeoutError as exc:
             raise ProviderOutputError("Fetching the provider output timed out") from exc
-        except httpx.HTTPError as exc:
-            raise ProviderOutputError("Fetching the provider output failed") from exc
+        except httpx.InvalidURL, UnicodeError:
+            raise ProviderOutputError("The provider output URL is invalid") from None
+        except httpx.HTTPError:
+            # Not chained: httpx messages can include the URL, which carries a signature.
+            raise ProviderOutputError("Fetching the provider output failed") from None
 
     @staticmethod
     def _validate_url(url: str, allowed_hosts: frozenset[str]) -> str:
@@ -82,6 +91,10 @@ class SafeFetcher:
         if not host or host not in allowed_hosts:
             raise ProviderOutputError("The provider output host is not allowed")
         return host
+
+    async def _run(self, url: str, host: str, max_bytes: int) -> FetchedImage:
+        await self._check_addresses(host)
+        return await self._download(url, host, max_bytes)
 
     async def _check_addresses(self, host: str) -> None:
         try:
@@ -114,8 +127,9 @@ class SafeFetcher:
                     raise ProviderOutputError("The provider output exceeds the size limit")
                 chunks.append(chunk)
         content = b"".join(chunks)
+        # Header and structure only. Full decode happens later with the real pixel cap.
         try:
-            info = inspect_image(content, max_pixels=_SIGNATURE_MAX_PIXELS)
+            info = await asyncio.to_thread(inspect_header, content)
         except MediaRejectedError as exc:
             raise ProviderOutputError("The provider output is not a valid image") from exc
         if info.mime_type != content_type:

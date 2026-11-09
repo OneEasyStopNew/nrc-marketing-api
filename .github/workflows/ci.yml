@@ -45,6 +45,15 @@ jobs:
       - name: Start Postgres and SeaweedFS
         run: docker compose up -d --wait
 
+      - name: Wait for the SeaweedFS S3 port
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:8333; then exit 0; fi
+            sleep 2
+          done
+          echo "SeaweedFS S3 did not come up on port 8333" >&2
+          exit 1
+
       # Local-only dummy values from docker/seaweedfs-s3.json; they open only the CI container.
       - name: Configure test media storage
         run: |

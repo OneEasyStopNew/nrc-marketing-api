@@ -1,3 +1,7 @@
+import asyncio
+import struct
+import time
+import zlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from io import BytesIO
 
@@ -5,7 +9,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from app.services.fetch import SafeFetcher
+from app.services.fetch import SafeFetcher, build_fetch_client
 from app.services.providers.base import FetchedImage, ProviderOutputError
 
 HOST = "cdn.provider.example"
@@ -18,6 +22,20 @@ def _image(fmt: str) -> bytes:
     buffer = BytesIO()
     Image.new("RGB", (16, 16), (10, 120, 200)).save(buffer, format=fmt)
     return buffer.getvalue()
+
+
+def _huge_png(width: int, height: int) -> bytes:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(kind + data)
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", crc)
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(b"\x00"))
+        + chunk(b"IEND", b"")
+    )
 
 
 PNG = _image("PNG")
@@ -93,8 +111,53 @@ async def test_empty_allowlist_rejects_everything() -> None:
 async def test_userinfo_trick_is_rejected() -> None:
     fetcher, seen = _fetcher(_ok())
     with pytest.raises(ProviderOutputError):
-        await _fetch(fetcher, f"https://{HOST}@evil.example/out/1.png")
+        await _fetch(fetcher, f"https://evil@{HOST}/out/1.png")
     assert seen == []
+
+
+@pytest.mark.parametrize("url", [f"https://{HOST}:notaport/x.png", "https://[::1/x.png"])
+async def test_malformed_urls_are_rejected(url: str) -> None:
+    fetcher, seen = _fetcher(_ok())
+    with pytest.raises(ProviderOutputError):
+        await _fetch(fetcher, url)
+    assert seen == []
+
+
+async def test_invalid_url_raised_by_httpx_is_wrapped() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.InvalidURL("bad url with secret-signature")
+
+    fetcher, _ = _fetcher(handler)
+    with pytest.raises(ProviderOutputError) as raised:
+        await _fetch(fetcher)
+    assert "secret-signature" not in str(raised.value)
+    assert raised.value.__cause__ is None
+
+
+async def test_slow_resolver_hits_the_overall_timeout() -> None:
+    async def slow(host: str) -> list[str]:
+        await asyncio.sleep(5)
+        return ["93.184.216.34"]
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_ok()))
+    fetcher = SafeFetcher(client, resolver=slow, timeout_seconds=0.05)
+    with pytest.raises(ProviderOutputError, match="timed out"):
+        await _fetch(fetcher)
+
+
+async def test_tiny_file_with_huge_dimensions_passes_header_check_without_decoding() -> None:
+    # 50000 x 50000 PNG of a single colour is a few KB but would decode to 2.5 billion pixels.
+    huge = _huge_png(50_000, 50_000)
+    assert len(huge) < 100_000
+    fetcher, _ = _fetcher(_ok(huge))
+    started = time.perf_counter()
+    result = await _fetch(fetcher)
+    assert result.content == huge
+    assert time.perf_counter() - started < 2
+
+
+def test_default_client_ignores_proxy_environment() -> None:
+    assert build_fetch_client()._trust_env is False
 
 
 @pytest.mark.parametrize(
@@ -111,6 +174,7 @@ async def test_userinfo_trick_is_rejected() -> None:
         "::1",
         "fe80::1",
         "fc00::1",
+        "fec0::1",
         "ff02::1",
         "::",
         "::ffff:127.0.0.1",
@@ -220,9 +284,12 @@ async def test_server_error_is_rejected_without_leaking_the_url() -> None:
 
 async def test_transport_error_is_wrapped_without_leaking_the_url() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("boom", request=request)
+        raise httpx.ConnectError(f"cannot connect to {request.url}", request=request)
 
     fetcher, _ = _fetcher(handler)
     with pytest.raises(ProviderOutputError) as raised:
         await _fetch(fetcher)
-    assert "secret-signature" not in str(raised.value)
+    text = f"{raised.value} {raised.value.message} {raised.value.__cause__!r}"
+    assert "secret-signature" not in text
+    assert "X-Signature" not in text
+    assert raised.value.__cause__ is None

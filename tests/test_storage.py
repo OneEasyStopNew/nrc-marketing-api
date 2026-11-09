@@ -1,6 +1,7 @@
 """Object storage against the local SeaweedFS (bucket nrc-test-media)."""
 
 import hashlib
+import os
 import re
 from urllib.parse import parse_qs, urlsplit
 
@@ -12,6 +13,7 @@ from app.core.config import Settings, get_settings
 from app.services.storage import (
     GENERATED_IMAGE_RETENTION,
     ObjectStorage,
+    StorageError,
     StorageNotConfiguredError,
 )
 
@@ -27,8 +29,10 @@ def _seaweedfs_reachable() -> bool:
     return True
 
 
+# Locally the tests skip without SeaweedFS; in CI (CI env var set) they run and so fail loudly.
 needs_seaweedfs = pytest.mark.skipif(
-    not _seaweedfs_reachable(), reason=f"SeaweedFS is not reachable at {ENDPOINT}"
+    "CI" not in os.environ and not _seaweedfs_reachable(),
+    reason=f"SeaweedFS is not reachable at {ENDPOINT}",
 )
 
 
@@ -115,3 +119,42 @@ async def test_each_save_gets_a_new_key(storage: ObjectStorage) -> None:
 
     assert first.key != second.key
     assert first.checksum_sha256 == second.checksum_sha256
+
+
+async def test_presigned_ttl_is_clamped_to_the_configured_maximum(storage: ObjectStorage) -> None:
+    url = await storage.presigned_get("generated-images/x.png", expires_in=86_400)
+    expires = int(parse_qs(urlsplit(url).query)["X-Amz-Expires"][0])
+    assert expires == get_settings().asset_url_ttl_seconds
+
+
+async def test_unsupported_extension_is_rejected(storage: ObjectStorage) -> None:
+    with pytest.raises(ValueError, match="ext"):
+        await storage.save_generated_image(b"x", ext="svg", content_type="image/png")
+
+
+async def test_unreachable_endpoint_raises_safe_storage_error(settings: Settings) -> None:
+    broken = ObjectStorage(
+        settings.model_copy(update={"aws_endpoint_url_s3": "http://127.0.0.1:1"})
+    )
+    with pytest.raises(StorageError) as raised:
+        await broken.save_generated_image(b"x", ext="png", content_type="image/png")
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__
+    assert BUCKET not in str(raised.value)
+    assert "127.0.0.1" not in str(raised.value)
+    with pytest.raises(StorageError):
+        await broken.read("generated-images/x.png")
+
+
+async def test_missing_version_id_is_logged_and_kept_none(
+    storage: ObjectStorage, caplog: pytest.LogCaptureFixture
+) -> None:
+    class NoVersion:
+        def put_object(self, **kwargs: object) -> dict[str, str]:
+            return {}
+
+    storage._client = NoVersion()  # type: ignore[assignment]
+    with caplog.at_level("WARNING"):
+        stored = await storage.save_generated_image(b"x", ext="png", content_type="image/png")
+    assert stored.version_id is None
+    assert "no version id" in caplog.text

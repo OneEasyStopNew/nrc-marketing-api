@@ -1,3 +1,6 @@
+import struct
+import zlib
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 import pytest
@@ -79,7 +82,52 @@ def test_truncated_files_are_rejected(fmt: str) -> None:
     assert raised.value.code == "MEDIA_CORRUPT"
 
 
-def test_global_pillow_limit_is_restored() -> None:
+def test_global_pillow_limit_is_never_mutated_by_inspection() -> None:
     before = Image.MAX_IMAGE_PIXELS
     inspect_image(_image("PNG"), max_pixels=MAX_PIXELS)
-    assert before == Image.MAX_IMAGE_PIXELS
+    with pytest.raises(MediaRejectedError):
+        inspect_image(_image("PNG", (200, 100)), max_pixels=10_000)
+    assert before is None
+    assert Image.MAX_IMAGE_PIXELS is None
+
+
+def test_concurrent_calls_with_different_limits_are_independent() -> None:
+    big = _image("PNG", (200, 100))
+
+    def attempt(limit: int) -> bool:
+        try:
+            inspect_image(big, max_pixels=limit)
+        except MediaRejectedError:
+            return False
+        return True
+
+    limits = [10_000, 1_000_000] * 20
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(attempt, limits))
+    assert results == [limit >= 20_000 for limit in limits]
+    assert Image.MAX_IMAGE_PIXELS is None
+
+
+def test_oversized_dimensions_are_rejected_before_decoding() -> None:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        )
+
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 50_000, 50_000, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00"))
+        + chunk(b"IEND", b"")
+    )
+    with pytest.raises(MediaRejectedError) as raised:
+        inspect_image(png, max_pixels=MAX_PIXELS)
+    assert raised.value.code == "MEDIA_TOO_LARGE"
+
+
+def test_mpo_is_accepted_as_jpeg() -> None:
+    buffer = BytesIO()
+    first = Image.new("RGB", (20, 10), (1, 2, 3))
+    first.save(buffer, format="MPO", save_all=True, append_images=[first])
+    info = inspect_image(buffer.getvalue(), max_pixels=MAX_PIXELS)
+    assert (info.mime_type, info.ext) == ("image/jpeg", "jpg")
