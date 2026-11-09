@@ -18,6 +18,15 @@ down_revision: str | None = "a3c5e7b91d24"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+UUID_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+# Terminal states as app.services.jobs.TERMINAL_STATES had them at this revision.
+UNFINISHED_DERIVED_KEYS = sa.text(
+    "SELECT count(*) FROM jobs"
+    " WHERE state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')"
+    " AND provider_idempotency_key IS NOT NULL"
+    " AND provider_idempotency_key !~* :uuid_pattern"
+)
+
 
 def upgrade() -> None:
     op.alter_column(
@@ -31,7 +40,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Derived "nrc-job-..." keys have no UUID form and become NULL; UUID keys are kept.
+    # Derived "nrc-job-..." keys have no UUID form. The older code would resend a missing key as
+    # "None" and could be billed twice, so refuse while an unfinished job holds one. row_security
+    # off makes Postgres raise instead of silently hiding rows when RLS applies to this role.
+    bind = op.get_bind()
+    bind.execute(sa.text("SET LOCAL row_security = off"))
+    unfinished = bind.scalar(UNFINISHED_DERIVED_KEYS, {"uuid_pattern": UUID_PATTERN})
+    bind.execute(sa.text("RESET row_security"))
+    if unfinished:
+        raise RuntimeError(
+            f"Refusing to downgrade 8f8284b27c6f: {unfinished} unfinished job(s) hold a derived "
+            "provider idempotency key. Let them finish (or fail them) and run it again."
+        )
+    # Only finished jobs can hold a derived key here, and they are never resent: those become NULL.
     op.alter_column(
         "jobs",
         "provider_idempotency_key",
@@ -39,8 +60,7 @@ def downgrade() -> None:
         type_=sa.Uuid(),
         existing_nullable=True,
         postgresql_using=(
-            "CASE WHEN provider_idempotency_key ~* "
-            "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' "
+            f"CASE WHEN provider_idempotency_key ~* '{UUID_PATTERN}' "
             "THEN provider_idempotency_key::uuid END"
         ),
     )
