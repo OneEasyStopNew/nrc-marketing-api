@@ -2,14 +2,17 @@
 
 import json
 import logging
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from mypy_boto3_secretsmanager import SecretsManagerClient
 from pydantic import SecretStr
 
 from app.core.config import Settings
+
+# Type stubs are a dev dependency only; never import them at runtime.
+if TYPE_CHECKING:
+    from mypy_boto3_secretsmanager import SecretsManagerClient
 
 logger = logging.getLogger(__name__)
 

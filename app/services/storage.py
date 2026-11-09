@@ -6,15 +6,18 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
-from mypy_boto3_s3 import S3Client
 
 from app.core.config import Settings
+
+# Type stubs are a dev dependency only; never import them at runtime.
+if TYPE_CHECKING:
+    from mypy_boto3_s3 import S3Client
 
 logger = logging.getLogger(__name__)
 
