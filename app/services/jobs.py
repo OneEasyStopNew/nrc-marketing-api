@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Final
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
@@ -27,7 +27,18 @@ HIGGSFIELD_NAME: Final = "higgsfield"
 TERMINAL_STATES: Final = frozenset(
     {ExecutionState.SUCCEEDED, ExecutionState.FAILED, ExecutionState.CANCELLED}
 )
-ACTIVE_STATES: Final = frozenset(ExecutionState) - TERMINAL_STATES
+NON_TERMINAL_STATES: Final = frozenset(ExecutionState) - TERMINAL_STATES
+# Provider finished but no storage is wired yet (NRC-3): the job is parked at this result.
+STAGE_OUTPUT_READY: Final = "output_ready"
+# Jobs that take an active-generation slot. Parked and UNKNOWN jobs don't: UNKNOWN credits
+# stay HELD, so the daily credit ceiling still bounds them.
+_TAKES_SLOT: Final = or_(
+    Job.state.in_((ExecutionState.QUEUED, ExecutionState.RUNNING)),
+    and_(
+        Job.state == ExecutionState.WAITING_PROVIDER,
+        Job.stage.is_distinct_from(STAGE_OUTPUT_READY),
+    ),
+)
 _CREDIT_WINDOW: Final = timedelta(hours=24)
 
 
@@ -211,7 +222,7 @@ async def _check_limits(db: AsyncSession, tenant_id: UUID, settings: Settings) -
         .where(
             Job.tenant_id == tenant_id,
             Job.kind == JobKind.IMAGE_GENERATION.value,
-            Job.state.in_(ACTIVE_STATES),
+            _TAKES_SLOT,
         )
     )
     if (active or 0) >= settings.generation_max_active_jobs_per_tenant:
