@@ -826,6 +826,19 @@ async def _retry_or_fail(
     return None
 
 
+def _log_stuck_unknown(job: Job, reason: str) -> None:
+    # Given up while the provider may have the request: no worker touches it again and its
+    # credits stay HELD, so alerting needs to see it. Ids only.
+    logger.error(
+        "job stuck in UNKNOWN job=%s tenant=%s provider_request=%s stage=%s reason=%s",
+        job.id,
+        job.tenant_id,
+        job.provider_request_id,
+        job.stage,
+        reason,
+    )
+
+
 def _log_review_stop(job: Job, code: str) -> None:
     # The job stays UNKNOWN with its credits HELD; scripts/list_unknown_jobs.py lists it.
     logger.warning(
@@ -889,7 +902,7 @@ async def _give_up(db: AsyncSession, job: Job, code: str, message: str) -> None:
     - Otherwise the provider never got it: FAILED with everything released.
     """
     if job.state is ExecutionState.UNKNOWN:
-        _log_review_stop(job, code)
+        _log_stuck_unknown(job, code)
         return
     if job.state is ExecutionState.WAITING_PROVIDER and job.stage == STAGE_FETCHING:
         await _fail_with(
@@ -905,7 +918,7 @@ async def _give_up(db: AsyncSession, job: Job, code: str, message: str) -> None:
     )
     if maybe_accepted:
         await _park_unknown(db, job.id, code)
-        _log_review_stop(job, code)
+        _log_stuck_unknown(job, code)
     else:
         await _fail_with(db, job.id, code, message, billed=False)
 

@@ -660,7 +660,11 @@ async def _awaiting_review(connection: AsyncConnection) -> list[tuple[UUID, UUID
 
 
 async def test_unbilled_unknown_job_past_the_cap_is_listed_for_review(
-    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider = ScriptedProvider()
     provider.submit_errors = [ProviderOutcomeUnknownError("Simulated lost response.")]
@@ -680,6 +684,39 @@ async def test_unbilled_unknown_job_past_the_cap_is_listed_for_review(
     assert await _awaiting_review(connection) == [(world.a.tenant_id, job_id)]
     # Given up: no worker leases it again.
     assert await _run(sessions, provider, FakeSink()) == 0
+    [stuck] = [r for r in caplog.records if "stuck in UNKNOWN" in r.getMessage()]
+    assert stuck.levelname == "ERROR"
+    assert f"job={job_id} tenant={world.a.tenant_id}" in stuck.getMessage()
+    assert stuck.getMessage().endswith("reason=ATTEMPTS_EXHAUSTED")
+
+
+async def test_accepted_job_past_its_deadline_is_parked_unknown_and_logged_as_an_error(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = ScriptedProvider()
+    provider.pending_polls = 1
+    await _run(sessions, provider, FakeSink())
+    waiting, _ = await _load(sessions, world, job_id)
+    await _requeue(connection, world)
+    later = datetime.now(UTC) + timedelta(days=2)
+
+    await run_once(sessions, {"simulator": provider}, FakeSink(), get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert waiting.state is ExecutionState.WAITING_PROVIDER
+    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "DEADLINE_EXCEEDED")
+    # Accepted but unfinished: the provider may still bill it, so the credits stay held.
+    assert reservation is ReservationState.HELD
+    [stuck] = [r for r in caplog.records if "stuck in UNKNOWN" in r.getMessage()]
+    assert stuck.levelname == "ERROR"
+    assert (
+        f"job={job_id} tenant={world.a.tenant_id} provider_request={waiting.provider_request_id}"
+        f" stage=waiting_provider reason=DEADLINE_EXCEEDED"
+    ) in stuck.getMessage()
 
 
 async def test_model_change_before_submit_fails_without_sending(
