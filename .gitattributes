@@ -1,0 +1,2 @@
+# Keep LF line endings on every OS (CI, Docker and the Python tooling run on Linux)
+* text=auto eol=lf

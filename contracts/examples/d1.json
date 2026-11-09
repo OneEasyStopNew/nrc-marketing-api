@@ -1,0 +1,196 @@
+{
+  "_note": "D1 sample responses for frontend mocks. All data is synthetic. Validated against the API schemas by tests/test_contract.py.",
+  "me": {
+    "request": "GET /v1/marketing/me",
+    "status": 200,
+    "schema": "MeRead",
+    "body": {
+      "sub": "3c8f1a2b-4d5e-4f60-8a7b-9c0d1e2f3a05",
+      "username": "creator.demo",
+      "memberships": [
+        {
+          "tenant_id": "7b0e6a52-3c1d-4c8e-9a51-2f4d8e6b1a01",
+          "tenant_name": "NRC Demo (synthetic)",
+          "roles": ["creator"],
+          "capabilities": ["creative:read", "creative:write", "generation:run", "validation:run"]
+        }
+      ]
+    }
+  },
+  "context": {
+    "request": "GET /v1/marketing/context  (X-Tenant-Id: 7b0e6a52-...)",
+    "status": 200,
+    "schema": "ContextRead",
+    "body": {
+      "tenant_id": "7b0e6a52-3c1d-4c8e-9a51-2f4d8e6b1a01",
+      "tenant_name": "NRC Demo (synthetic)",
+      "roles": ["creator"],
+      "capabilities": ["creative:read", "creative:write", "generation:run", "validation:run"],
+      "studies": [
+        {
+          "study_id": "c3a1f9d2-5b7e-4f10-8d2a-6e9b4c7a2b02",
+          "study_title": "[SYNTHETIC] Demo study",
+          "study_external_ref": null,
+          "snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
+          "version": 1,
+          "recruitment_status": "recruiting",
+          "language": "en",
+          "facts": {
+            "condition": "high blood pressure",
+            "eligibility_summary": "Adults aged 18 to 75 who have been told they have high blood pressure.",
+            "min_age": 18,
+            "max_age": 75,
+            "sites": ["Synthetic Demo Site"],
+            "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
+            "required_disclosures": ["This is a research study. Taking part is voluntary."],
+            "compensation_statement": null,
+            "contact_url": "https://example.org/synthetic-demo-study"
+          },
+          "source_ref": "synthetic:demo-seed-v1",
+          "approved_by": "synthetic-fixture",
+          "approved_at": "2026-11-04T09:00:00Z",
+          "is_synthetic": true
+        }
+      ],
+      "languages": ["en"],
+      "post_formats": [
+        {"channel": "facebook", "post_format": "feed_image", "aspect_ratio": "1:1", "width_px": 1080, "height_px": 1080}
+      ]
+    }
+  },
+  "creative_created": {
+    "request": "POST /v1/marketing/creatives  (Idempotency-Key: 2f6c9e1a8b7d4c3e)",
+    "status": 201,
+    "headers": {"ETag": "\"1\"", "Location": "/v1/marketing/creatives/9f4b2c1e-7d6a-4e8b-a3c5-1d2e3f4a5b04"},
+    "schema": "CreativeRead",
+    "body": {
+      "id": "9f4b2c1e-7d6a-4e8b-a3c5-1d2e3f4a5b04",
+      "study_id": "c3a1f9d2-5b7e-4f10-8d2a-6e9b4c7a2b02",
+      "version": 1,
+      "original_prompt": "Invite adults with high blood pressure to learn about our study. Guaranteed results!",
+      "current_prompt": "Invite adults with high blood pressure to learn about our study. Guaranteed results!",
+      "caption": "Learn about a blood pressure research study near you.",
+      "language": "en",
+      "channel": "facebook",
+      "post_format": "feed_image",
+      "study_snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
+      "study_snapshot_version": 1,
+      "asset_id": null,
+      "created_by": "3c8f1a2b-4d5e-4f60-8a7b-9c0d1e2f3a05",
+      "created_at": "2026-11-04T10:15:00Z",
+      "updated_at": "2026-11-04T10:15:00Z",
+      "validation_runs": []
+    }
+  },
+  "creative_edited": {
+    "request": "PATCH /v1/marketing/creatives/9f4b2c1e-...  (If-Match: \"1\")  {\"current_prompt\": \"...\"}",
+    "status": 200,
+    "headers": {"ETag": "\"2\""},
+    "schema": "CreativeRead",
+    "body": {
+      "id": "9f4b2c1e-7d6a-4e8b-a3c5-1d2e3f4a5b04",
+      "study_id": "c3a1f9d2-5b7e-4f10-8d2a-6e9b4c7a2b02",
+      "version": 2,
+      "original_prompt": "Invite adults with high blood pressure to learn about our study. Guaranteed results!",
+      "current_prompt": "Invite adults with high blood pressure to learn about our research study.",
+      "caption": "Learn about a blood pressure research study near you.",
+      "language": "en",
+      "channel": "facebook",
+      "post_format": "feed_image",
+      "study_snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
+      "study_snapshot_version": 1,
+      "asset_id": null,
+      "created_by": "3c8f1a2b-4d5e-4f60-8a7b-9c0d1e2f3a05",
+      "created_at": "2026-11-04T10:15:00Z",
+      "updated_at": "2026-11-04T10:20:00Z",
+      "validation_runs": []
+    }
+  },
+  "creative_versions": {
+    "request": "GET /v1/marketing/creatives/9f4b2c1e-.../versions?limit=20",
+    "status": 200,
+    "schema": "CreativeVersionPage",
+    "body": {
+      "items": [
+        {
+          "version": 2,
+          "current_prompt": "Invite adults with high blood pressure to learn about our research study.",
+          "caption": "Learn about a blood pressure research study near you.",
+          "study_snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
+          "language": "en",
+          "channel": "facebook",
+          "post_format": "feed_image",
+          "created_by": "3c8f1a2b-4d5e-4f60-8a7b-9c0d1e2f3a05",
+          "created_at": "2026-11-04T10:20:00Z"
+        },
+        {
+          "version": 1,
+          "current_prompt": "Invite adults with high blood pressure to learn about our study. Guaranteed results!",
+          "caption": "Learn about a blood pressure research study near you.",
+          "study_snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
+          "language": "en",
+          "channel": "facebook",
+          "post_format": "feed_image",
+          "created_by": "3c8f1a2b-4d5e-4f60-8a7b-9c0d1e2f3a05",
+          "created_at": "2026-11-04T10:15:00Z"
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  "error_401": {
+    "request": "any route without a valid access token",
+    "status": 401,
+    "headers": {"WWW-Authenticate": "Bearer"},
+    "schema": "ErrorBody",
+    "body": {"code": "UNAUTHENTICATED", "message": "Access token is invalid or expired.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e10", "details": null, "retryable": false}
+  },
+  "error_403": {
+    "request": "X-Tenant-Id of a tenant you are not a member of, or a role without the capability",
+    "status": 403,
+    "schema": "ErrorBody",
+    "body": {"code": "FORBIDDEN", "message": "You are not an active member of this tenant.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e11", "details": null, "retryable": false}
+  },
+  "error_404": {
+    "request": "GET a creative from another tenant or study (indistinguishable from a missing one)",
+    "status": 404,
+    "schema": "ErrorBody",
+    "body": {"code": "NOT_FOUND", "message": "Creative not found.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e12", "details": null, "retryable": false}
+  },
+  "error_409_idempotency": {
+    "request": "POST /creatives reusing an Idempotency-Key with a different body",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {"code": "IDEMPOTENCY_KEY_REUSED", "message": "This Idempotency-Key was already used with a different request.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e13", "details": null, "retryable": false}
+  },
+  "error_409_study_closed": {
+    "request": "POST /creatives for a closed study",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {"code": "STUDY_CLOSED", "message": "The study is closed, so new creatives cannot be started.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e14", "details": null, "retryable": false}
+  },
+  "error_412_stale_edit": {
+    "request": "PATCH /creatives/{id} with If-Match: \"1\" after someone saved version 2",
+    "status": 412,
+    "schema": "ErrorBody",
+    "body": {"code": "VERSION_CONFLICT", "message": "The creative changed since you loaded it. Reload and reapply your edit.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e15", "details": {"current_version": 2}, "retryable": false}
+  },
+  "error_422_fields": {
+    "request": "POST /creatives with language \"fr\"",
+    "status": 422,
+    "schema": "ErrorBody",
+    "body": {"code": "VALIDATION_FAILED", "message": "The request has invalid fields.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e16", "details": {"fields": [{"loc": ["body", "language"], "msg": "Input should be 'en'", "type": "enum"}]}, "retryable": false}
+  },
+  "error_428_if_match": {
+    "request": "PATCH /creatives/{id} without If-Match",
+    "status": 428,
+    "schema": "ErrorBody",
+    "body": {"code": "PRECONDITION_REQUIRED", "message": "Send If-Match with the version you edited, e.g. If-Match: \"3\".", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e17", "details": null, "retryable": false}
+  },
+  "error_501_not_implemented": {
+    "request": "POST /validations before D2 ships",
+    "status": 501,
+    "schema": "ErrorBody",
+    "body": {"code": "NOT_IMPLEMENTED", "message": "Validation is not implemented yet.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e18", "details": null, "retryable": false}
+  }
+}

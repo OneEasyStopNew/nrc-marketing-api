@@ -1,0 +1,11 @@
+.env
+.venv
+.git
+**/__pycache__
+.mypy_cache
+.ruff_cache
+.pytest_cache
+tests
+contracts
+docker
+scripts

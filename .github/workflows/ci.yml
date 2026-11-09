@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, types, migrations, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.1"
+          enable-cache: true
+
+      # Throwaway database passwords, generated per run so none is committed.
+      - name: Configure test database credentials
+        run: |
+          owner="$(openssl rand -hex 24)"
+          app="$(openssl rand -hex 24)"
+          echo "::add-mask::$owner"
+          echo "::add-mask::$app"
+          {
+            echo "POSTGRES_PASSWORD=$owner"
+            echo "APP_DB_PASSWORD=$app"
+            echo "MIGRATION_DATABASE_URL=postgresql+asyncpg://postgres:$owner@127.0.0.1:5432/marketing"
+            echo "TEST_DATABASE_URL=postgresql+asyncpg://marketing_app:$app@127.0.0.1:5432/marketing_test"
+            echo "TEST_MIGRATION_DATABASE_URL=postgresql+asyncpg://postgres:$owner@127.0.0.1:5432/marketing_test"
+          } >> "$GITHUB_ENV"
+
+      - name: Start Postgres
+        run: docker compose up -d --wait
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Lint (includes security rules)
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy app tests migrations scripts
+
+      - name: Migrations apply, match the models and have one head
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+          test "$(uv run alembic heads | wc -l)" -eq 1
+
+      - name: Tests
+        run: uv run pytest
+
+  audit:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.1"
+
+      - name: pip-audit on the locked runtime dependencies
+        run: |
+          uv export --locked --no-dev --no-emit-project --format requirements-txt -o requirements-audit.txt
+          uvx pip-audit@2.10.0 -r requirements-audit.txt --require-hashes --disable-pip

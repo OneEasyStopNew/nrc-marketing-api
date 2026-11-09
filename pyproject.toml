@@ -1,0 +1,58 @@
+[project]
+name = "nrc-marketing"
+version = "0.1.0"
+description = "NRC Marketing backend service"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "alembic>=1.16",
+    "asyncpg>=0.31",
+    "fastapi>=0.120",
+    "httpx>=0.28",
+    "pydantic>=2.12",
+    "pydantic-settings>=2.10",
+    "pyjwt[crypto]>=2.10",
+    "sqlalchemy[asyncio]>=2.0.40",
+    # 1.6 added RequestBodyLimitMiddleware, which app.main relies on.
+    "starlette>=1.6",
+    "uvicorn>=0.35",
+]
+
+[dependency-groups]
+dev = [
+    "asgi-lifespan>=2.1",
+    "cryptography>=44",
+    "mypy>=1.17",
+    "pytest>=8.4",
+    "pytest-asyncio>=1.1",
+    "ruff>=0.12",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "S", "UP", "SIM", "PERF", "DTZ", "PLE", "PLW", "RUF", "PT", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+# Asserts and literal status codes are the point of tests.
+"tests/**" = ["S101", "PLR2004"]
+
+[tool.deptry.per_rule_ignores]
+# asyncpg is loaded by SQLAlchemy from the database URL; uvicorn is started by the Docker CMD.
+DEP002 = ["asyncpg", "uvicorn"]
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error"]
+strict = true

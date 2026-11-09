@@ -1,0 +1,25 @@
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.tmp
+
+# Documents are kept outside the repo, never committed
+*.docx
+*.pdf
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
