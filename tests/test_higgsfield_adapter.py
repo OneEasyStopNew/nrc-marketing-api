@@ -4,6 +4,7 @@ import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -24,7 +25,11 @@ from app.services.providers.base import (
     ProviderUnavailableError,
     StatusResult,
 )
-from app.services.providers.higgsfield import HiggsfieldProvider
+from app.services.providers.higgsfield import (
+    HiggsfieldIdempotencyConflictError,
+    HiggsfieldInsufficientBalanceError,
+    HiggsfieldProvider,
+)
 
 KEY_ID = "kid-SECRETID-123"
 KEY_SECRET = "ksecret-SECRETVALUE-456"  # noqa: S105
@@ -156,7 +161,7 @@ async def test_submit_malformed_or_5xx_is_outcome_unknown(handler: Handler) -> N
         await make(handler).submit(request())
 
 
-@pytest.mark.parametrize("code", [401, 403, 404, 423])
+@pytest.mark.parametrize("code", [401, 404])
 async def test_config_statuses(code: int) -> None:
     with pytest.raises(ProviderConfigError):
         await make(fixed(code, json={"detail": "nope"})).submit(request())
@@ -166,7 +171,7 @@ async def test_config_statuses(code: int) -> None:
 
 @pytest.mark.parametrize("code", [400, 422])
 async def test_rejected_statuses(code: int) -> None:
-    detail = "Idempotency-Key was already used with different request parameters."
+    detail = "Some validation problem."
     with pytest.raises(ProviderRejectedError):
         await make(fixed(code, json={"detail": detail})).submit(request())
 
@@ -215,17 +220,6 @@ async def test_status_url_is_derived_from_base_url() -> None:
     assert result.status is ProviderJobStatus.IN_PROGRESS
     assert str(seen[0].url) == f"https://api.higgsfield.ai/requests/{REQUEST_ID}/status"
     assert seen[0].headers["Authorization"] == f"Key {KEY_ID}:{KEY_SECRET}"
-
-
-async def test_status_request_id_cannot_escape_path() -> None:
-    seen: list[httpx.Request] = []
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        seen.append(req)
-        return httpx.Response(200, json={"status": "queued", "request_id": "x"})
-
-    await make(handler).get_status("../other?x=1")
-    assert seen[0].url.host == "api.higgsfield.ai"
     assert seen[0].url.query == b""
 
 
@@ -267,7 +261,7 @@ async def test_naive_expiry_is_made_aware() -> None:
     body = {
         "status": "completed",
         "request_id": "r",
-        "images": [],
+        "images": [{"url": OUTPUT_URL}],
         "expires_at": "2030-01-01T00:00:00",
     }
     result = await make(fixed(200, json=body)).get_status("r")
@@ -359,3 +353,176 @@ async def test_secrets_prompts_and_urls_never_leak(caplog: pytest.LogCaptureFixt
             assert item not in repr(exc)
     for item in forbidden:
         assert item not in caplog.text
+
+
+async def test_423_is_retryable_unavailable_but_submit_503_stays_unknown() -> None:
+    with pytest.raises(ProviderUnavailableError):
+        await make(fixed(423, json={"detail": "x"})).submit(request())
+    with pytest.raises(ProviderUnavailableError):
+        await make(fixed(423, json={"detail": "x"})).get_status(REQUEST_ID)
+    with pytest.raises(ProviderOutcomeUnknownError):
+        await make(fixed(503, json={"detail": "x"})).submit(request())
+
+
+async def test_403_is_insufficient_balance() -> None:
+    with pytest.raises(HiggsfieldInsufficientBalanceError) as info:
+        await make(fixed(403, json={"detail": "x"})).submit(request())
+    assert isinstance(info.value, ProviderConfigError)
+    assert info.value.code == "PROVIDER_INSUFFICIENT_BALANCE"
+
+
+async def test_status_404_message_says_not_found_or_expired() -> None:
+    with pytest.raises(ProviderConfigError) as info:
+        await make(fixed(404, json={"detail": "x"})).get_status(REQUEST_ID)
+    assert "not found or has expired" in str(info.value)
+
+
+async def test_idempotency_conflict_is_outcome_unknown() -> None:
+    detail = "IDEMPOTENCY-KEY was already used with different request parameters."
+    with pytest.raises(HiggsfieldIdempotencyConflictError) as info:
+        await make(fixed(422, json={"detail": detail})).submit(request())
+    assert isinstance(info.value, ProviderOutcomeUnknownError)
+    assert info.value.code == "PROVIDER_IDEMPOTENCY_CONFLICT"
+
+
+@pytest.mark.parametrize(
+    ("key_id", "secret", "setting"),
+    [
+        ("", KEY_SECRET, "HIGGSFIELD_API_KEY_ID"),
+        ("a:b", KEY_SECRET, "HIGGSFIELD_API_KEY_ID"),
+        ("kéy", KEY_SECRET, "HIGGSFIELD_API_KEY_ID"),
+        (KEY_ID, "", "HIGGSFIELD_API_KEY_SECRET"),
+        (KEY_ID, "sec ret\n", "HIGGSFIELD_API_KEY_SECRET"),
+    ],
+)
+def test_bad_credentials_rejected_in_init(key_id: str, secret: str, setting: str) -> None:
+    with pytest.raises(ProviderConfigError) as info:
+        HiggsfieldProvider(
+            client=httpx.AsyncClient(),
+            base_url="https://api.higgsfield.ai",
+            model=MODEL,
+            api_key_id=SecretStr(key_id),
+            api_key_secret=SecretStr(secret),
+            fetcher=RecordingFetcher(),
+            allowed_output_hosts=frozenset({"cdn.example.com"}),
+            max_output_bytes=1,
+        )
+    assert setting in str(info.value)
+    assert KEY_SECRET not in str(info.value)
+
+
+def test_http_base_url_rejected() -> None:
+    with pytest.raises(ProviderConfigError) as info:
+        HiggsfieldProvider(
+            client=httpx.AsyncClient(),
+            base_url="http://api.higgsfield.ai",
+            model=MODEL,
+            api_key_id=SecretStr(KEY_ID),
+            api_key_secret=SecretStr(KEY_SECRET),
+            fetcher=RecordingFetcher(),
+            allowed_output_hosts=frozenset({"cdn.example.com"}),
+            max_output_bytes=1,
+        )
+    assert "HIGGSFIELD_BASE_URL" in str(info.value)
+
+
+@pytest.mark.parametrize(
+    "exc", [UnicodeEncodeError("ascii", "x", 0, 1, "bad"), httpx.InvalidURL("x")]
+)
+async def test_unicode_and_invalid_url_errors_do_not_surface_raw(exc: Exception) -> None:
+    with pytest.raises(ProviderConfigError) as info:
+        await make(raising(exc)).submit(request())
+    assert info.value.__cause__ is None
+    assert "bad" not in str(info.value)
+
+
+async def test_completed_without_images_is_output_error() -> None:
+    with pytest.raises(ProviderOutputError):
+        await make(fixed(200, json={"status": "completed", "request_id": "r"})).get_status("r")
+
+
+async def test_unknown_status_string_stays_retryable() -> None:
+    with pytest.raises(ProviderUnavailableError):
+        await make(fixed(200, json={"status": "mystery", "request_id": "r"})).get_status("r")
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [("99999", 3600.0), ("nan", None), ("inf", None), ("-5", None), ("7", 7.0)],
+)
+async def test_retry_after_is_finite_and_capped(header: str, expected: float | None) -> None:
+    handler = fixed(429, headers={"Retry-After": header})
+    with pytest.raises(ProviderRateLimitedError) as info:
+        await make(handler).submit(request())
+    assert info.value.retry_after_seconds == expected
+
+
+async def test_retry_after_body_value_capped() -> None:
+    body = {"detail": {"retry_after_seconds": 10**9}}
+    with pytest.raises(ProviderRateLimitedError) as info:
+        await make(fixed(429, json=body)).submit(request())
+    assert info.value.retry_after_seconds == 3600.0
+
+
+async def test_invalid_request_ids() -> None:
+    with pytest.raises(ProviderOutputError):
+        await make(accepted).get_status("../other?x=1")
+    with pytest.raises(ProviderOutputError):
+        await make(accepted).get_status("a" * 129)
+    bad = fixed(200, json={"status": "queued", "request_id": "../x"})
+    with pytest.raises(ProviderOutcomeUnknownError):
+        await make(bad).submit(request())
+
+
+async def test_estimate_cost_posts_same_body_without_idempotency_key() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return httpx.Response(200, json={"usd": "0.094"})
+
+    assert await make(handler).estimate_cost_usd(request()) == Decimal("0.094")
+    sent = seen[0]
+    assert sent.method == "POST"
+    assert str(sent.url) == f"https://api.higgsfield.ai/estimate/{MODEL}"
+    assert "Idempotency-Key" not in sent.headers
+    assert sent.headers["Authorization"] == f"Key {KEY_ID}:{KEY_SECRET}"
+    assert json.loads(sent.content) == {"prompt": PROMPT, "aspect_ratio": "4:3"}
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        fixed(200, json={}),
+        fixed(200, json={"usd": 0.094}),
+        fixed(200, json={"usd": "abc"}),
+        fixed(200, json={"usd": "NaN"}),
+        fixed(200, json={"usd": "-1"}),
+        fixed(200, content=b"nope"),
+        fixed(500, json={"detail": "x"}),
+        raising(httpx.ReadTimeout("boom")),
+    ],
+    ids=["missing", "number", "garbage", "nan", "negative", "bad-json", "http-500", "read-timeout"],
+)
+async def test_estimate_failures_are_unavailable(handler: Handler) -> None:
+    with pytest.raises(ProviderUnavailableError):
+        await make(handler).estimate_cost_usd(request())
+
+
+async def test_estimate_classifies_like_status() -> None:
+    with pytest.raises(ProviderConfigError):
+        await make(fixed(401, json={"detail": "x"})).estimate_cost_usd(request())
+    with pytest.raises(HiggsfieldInsufficientBalanceError):
+        await make(fixed(403, json={"detail": "x"})).estimate_cost_usd(request())
+    with pytest.raises(ProviderRateLimitedError):
+        await make(fixed(429, headers={"Retry-After": "3"})).estimate_cost_usd(request())
+
+
+def test_split_hf_key() -> None:
+    key_id, secret = HiggsfieldProvider.split_hf_key(SecretStr("id1:sec:ret"))
+    assert (key_id.get_secret_value(), secret.get_secret_value()) == ("id1", "sec:ret")
+    for bad in ("nocolonXYZ", ":secretXYZ", "idXYZ:"):
+        with pytest.raises(ProviderConfigError) as info:
+            HiggsfieldProvider.split_hf_key(SecretStr(bad))
+        assert "HF_KEY" in str(info.value)
+        assert bad not in str(info.value)

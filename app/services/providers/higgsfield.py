@@ -12,10 +12,12 @@ No live call has been made; see the TODO(NRC-10) markers for what a live account
 """
 
 import logging
+import math
 import re
 from datetime import UTC, datetime
-from typing import Any
-from urllib.parse import quote
+from decimal import Decimal, InvalidOperation
+from typing import Any, ClassVar
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import SecretStr
@@ -39,6 +41,11 @@ from app.services.providers.base import (
 logger = logging.getLogger(__name__)
 
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[\x21-\x7e]{1,255}$")
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_CREDENTIAL_RE = re.compile(r"^[\x21-\x7e]+$")
+_MAX_RETRY_AFTER_SECONDS = 3600.0
+# Documented 422 detail when a key is reused with different parameters (concepts/idempotency).
+_IDEMPOTENCY_CONFLICT_TEXT = "idempotency-key was already used with different request parameters"
 
 _STATUS_MAP = {
     "queued": ProviderJobStatus.QUEUED,
@@ -55,10 +62,19 @@ _FAILURE_CODES = {
     ProviderJobStatus.REJECTED: "content_rejected",
 }
 
-_CONFIG_STATUSES = frozenset({401, 403, 404, 423})
+_CONFIG_STATUSES = frozenset({401, 404})
 
 # Failures where the request provably never left this process.
 _NOT_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
+class HiggsfieldInsufficientBalanceError(ProviderConfigError):
+    code: ClassVar[str] = "PROVIDER_INSUFFICIENT_BALANCE"
+
+
+class HiggsfieldIdempotencyConflictError(ProviderOutcomeUnknownError):
+    # The key was already used with a different body, so the original request may be billed.
+    code: ClassVar[str] = "PROVIDER_IDEMPOTENCY_CONFLICT"
 
 
 class HiggsfieldProvider:
@@ -80,12 +96,23 @@ class HiggsfieldProvider:
         # (openapi.json lists 2K|4K for soul/standard); None omits it and uses the model default.
         resolution: str | None = None,
     ) -> None:
+        key_id = api_key_id.get_secret_value()
+        key_secret = api_key_secret.get_secret_value()
+        if not _CREDENTIAL_RE.fullmatch(key_id) or ":" in key_id:
+            raise ProviderConfigError(
+                "HIGGSFIELD_API_KEY_ID is empty or contains invalid characters"
+            )
+        if not _CREDENTIAL_RE.fullmatch(key_secret):
+            raise ProviderConfigError(
+                "HIGGSFIELD_API_KEY_SECRET is empty or contains invalid characters"
+            )
+        parts = urlsplit(base_url)
+        if parts.scheme != "https" or not parts.hostname:
+            raise ProviderConfigError("HIGGSFIELD_BASE_URL must be an https URL")
         self.model = model.strip("/")
         self._client = client
         self._base_url = base_url.rstrip("/")
-        self._authorization = SecretStr(
-            f"Key {api_key_id.get_secret_value()}:{api_key_secret.get_secret_value()}"
-        )
+        self._authorization = SecretStr(f"Key {key_id}:{key_secret}")
         self._fetcher = fetcher
         self._allowed_hosts = allowed_output_hosts
         self._max_bytes = max_output_bytes
@@ -121,22 +148,23 @@ class HiggsfieldProvider:
             max_output_bytes=settings.max_generated_image_bytes,
         )
 
+    @classmethod
+    def split_hf_key(cls, value: SecretStr) -> tuple[SecretStr, SecretStr]:
+        key_id, sep, key_secret = value.get_secret_value().partition(":")
+        if not sep or not key_id or not key_secret:
+            raise ProviderConfigError("HF_KEY must have the form key_id:key_secret")
+        return SecretStr(key_id), SecretStr(key_secret)
+
     def __repr__(self) -> str:
         return f"HiggsfieldProvider(model={self.model!r})"
 
     async def submit(self, request: ImageRequest) -> SubmitResult:
         if not _IDEMPOTENCY_KEY_RE.fullmatch(request.idempotency_key):
             raise ProviderRejectedError("Idempotency key must be 1-255 visible ASCII characters")
-        body: dict[str, str] = {"prompt": request.prompt, "aspect_ratio": request.aspect_ratio}
-        if self._resolution is not None:
-            body["resolution"] = self._resolution
-        # The API takes no width/height; sizing is by aspect_ratio (and resolution).
-        # TODO(NRC-10): confirm with live account that aspect_ratio values from the job are valid
-        # for the pinned model (documented enum: 1:1 4:3 3:4 3:2 2:3 5:4 4:5 16:9 9:16 21:9).
         response = await self._send(
             "POST",
             f"{self._base_url}/{self.model}",
-            json=body,
+            json=self._body(request),
             headers={"Idempotency-Key": request.idempotency_key},
             sent_unknown=True,
         )
@@ -144,7 +172,11 @@ class HiggsfieldProvider:
         data = self._json_object(response, submit=True)
         request_id = data.get("request_id")
         status = _STATUS_MAP.get(str(data.get("status")))
-        if not isinstance(request_id, str) or not request_id or status is None:
+        if (
+            not isinstance(request_id, str)
+            or status is None
+            or not _REQUEST_ID_RE.fullmatch(request_id)
+        ):
             logger.warning(
                 "higgsfield submit malformed response status_code=%s", response.status_code
             )
@@ -152,11 +184,40 @@ class HiggsfieldProvider:
         logger.info("higgsfield submitted request_id=%s status=%s", request_id, status.value)
         return SubmitResult(provider_request_id=request_id, status=status)
 
-    async def get_status(self, provider_request_id: str) -> StatusResult:
-        # The URL is rebuilt from base_url rather than trusting a returned status_url.
-        url = f"{self._base_url}/requests/{quote(provider_request_id, safe='')}/status"
-        response = await self._send("GET", url, sent_unknown=False)
+    def _body(self, request: ImageRequest) -> dict[str, str]:
+        body = {"prompt": request.prompt, "aspect_ratio": request.aspect_ratio}
+        if self._resolution is not None:
+            body["resolution"] = self._resolution
+        # The API takes no width/height; sizing is by aspect_ratio (and resolution).
+        # TODO(NRC-10): confirm with live account that aspect_ratio values from the job are valid
+        # for the pinned model (documented enum: 1:1 4:3 3:4 3:2 2:3 5:4 4:5 16:9 9:16 21:9).
+        return body
+
+    async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
+        # Not a submission: no Idempotency-Key, and nothing billable can happen.
+        response = await self._send(
+            "POST",
+            f"{self._base_url}/estimate/{self.model}",
+            json=self._body(request),
+            sent_unknown=False,
+        )
         self._raise_for_status(response, submit=False)
+        usd = self._json_object(response, submit=False).get("usd")
+        try:
+            amount = Decimal(usd) if isinstance(usd, str) else None
+        except InvalidOperation:
+            amount = None
+        if amount is None or not amount.is_finite() or amount < 0:
+            raise ProviderUnavailableError("Higgsfield returned an unreadable cost estimate")
+        return amount
+
+    async def get_status(self, provider_request_id: str) -> StatusResult:
+        if not _REQUEST_ID_RE.fullmatch(provider_request_id):
+            raise ProviderOutputError("Higgsfield request id has an invalid format")
+        # The URL is rebuilt from base_url rather than trusting a returned status_url.
+        url = f"{self._base_url}/requests/{provider_request_id}/status"
+        response = await self._send("GET", url, sent_unknown=False)
+        self._raise_for_status(response, submit=False, status_lookup=True)
         data = self._json_object(response, submit=False)
         status = _STATUS_MAP.get(str(data.get("status")))
         if status is None:
@@ -167,6 +228,8 @@ class HiggsfieldProvider:
             )
             raise ProviderUnavailableError("Higgsfield returned an unreadable status response")
         urls = _image_urls(data.get("images"))
+        if status is ProviderJobStatus.COMPLETED and not urls:
+            raise ProviderOutputError("Higgsfield completed the request without an output image")
         expires_at = _parse_expiry(data.get("expires_at"))
         logger.info("higgsfield status request_id=%s status=%s", provider_request_id, status.value)
         return StatusResult(
@@ -202,6 +265,10 @@ class HiggsfieldProvider:
         # `from None` drops the httpx chain, whose text can embed the URL.
         except _NOT_SENT_ERRORS:
             raise ProviderUnavailableError("Could not connect to Higgsfield") from None
+        except UnicodeError, httpx.InvalidURL:
+            raise ProviderConfigError(
+                "Higgsfield request could not be built; check HIGGSFIELD_* settings"
+            ) from None
         except httpx.TransportError:
             if sent_unknown:
                 raise ProviderOutcomeUnknownError(
@@ -209,7 +276,9 @@ class HiggsfieldProvider:
                 ) from None
             raise ProviderUnavailableError("Higgsfield status request failed") from None
 
-    def _raise_for_status(self, response: httpx.Response, *, submit: bool) -> None:
+    def _raise_for_status(
+        self, response: httpx.Response, *, submit: bool, status_lookup: bool = False
+    ) -> None:
         code = response.status_code
         if 200 <= code < 300:
             return
@@ -217,6 +286,18 @@ class HiggsfieldProvider:
         if code == 429:
             raise ProviderRateLimitedError(
                 "Higgsfield rate limit reached", retry_after_seconds=_retry_after(response)
+            )
+        if code == 423:
+            raise ProviderUnavailableError("Higgsfield model is temporarily blocked (HTTP 423)")
+        if code == 403:
+            raise HiggsfieldInsufficientBalanceError(
+                "Higgsfield account has insufficient balance or the key is disabled (HTTP 403)"
+            )
+        if code == 404 and status_lookup:
+            raise ProviderConfigError("Higgsfield request was not found or has expired (HTTP 404)")
+        if code == 422 and _IDEMPOTENCY_CONFLICT_TEXT in response.text.lower():
+            raise HiggsfieldIdempotencyConflictError(
+                "Higgsfield idempotency key was reused with different parameters"
             )
         if code in _CONFIG_STATUSES:
             raise ProviderConfigError(
@@ -249,15 +330,20 @@ def _retry_after(response: httpx.Response) -> float | None:
         except ValueError:
             # HTTP-date form is not documented for Higgsfield; fall through to the body.
             seconds = -1.0
-        if seconds >= 0:
-            return seconds
+        if math.isfinite(seconds) and seconds >= 0:
+            return min(seconds, _MAX_RETRY_AFTER_SECONDS)
     try:
         detail = response.json().get("detail")
         body_value = detail.get("retry_after_seconds") if isinstance(detail, dict) else None
     except ValueError, AttributeError:
         return None
-    if isinstance(body_value, int | float) and not isinstance(body_value, bool) and body_value >= 0:
-        return float(body_value)
+    if (
+        isinstance(body_value, int | float)
+        and not isinstance(body_value, bool)
+        and math.isfinite(body_value)
+        and body_value >= 0
+    ):
+        return min(float(body_value), _MAX_RETRY_AFTER_SECONDS)
     return None
 
 
