@@ -22,6 +22,8 @@ from app.services.storage import ObjectStorage, StorageError
 logger = logging.getLogger(__name__)
 
 ASSET_GENERATED_EVENT: Final = "asset.generated"
+# Payload contract version, agreed with the NRC-7 handler; bump it on any incompatible change.
+ASSET_GENERATED_EVENT_VERSION: Final = 1
 
 
 class ImageStorageUnavailableError(ProviderError):
@@ -102,6 +104,7 @@ async def emit_asset_generated(db: AsyncSession, asset_id: UUID) -> None:
             job_id=asset.job_id,
             event_type=ASSET_GENERATED_EVENT,
             payload={
+                "event_version": ASSET_GENERATED_EVENT_VERSION,
                 "job_id": str(asset.job_id),
                 "asset_id": str(asset.id),
                 "tenant_id": str(asset.tenant_id),

@@ -85,9 +85,6 @@ STAGE_WAITING: Final = "waiting_provider"
 STAGE_STORED: Final = "stored"
 # The provider reported the generation completed (so billed) and the worker is fetching it.
 STAGE_FETCHING: Final = "fetching_output"
-# Event types this worker has handlers for. Others (asset.generated, until the NRC-7 validation
-# handler subscribes) are never leased, so they are not retried or given up meanwhile.
-HANDLED_EVENT_TYPES: Final = (RUN_EVENT,)
 _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type"
     " FROM lease_outbox_events(:owner, 1, :lease, :event_types)"
@@ -108,6 +105,12 @@ class _Closable(Protocol):
 
 class LeaseLostError(Exception):
     # Another worker owns the event now. The current step is rolled back and the job left alone.
+    pass
+
+
+class NoHandlerError(Exception):
+    # Raised by an event handler that cannot run this event (e.g. no handler for the job's kind).
+    # Counts as a failed attempt; the event is retried after WORKER_NO_HANDLER_RETRY_SECONDS.
     pass
 
 
@@ -138,8 +141,51 @@ class Step:
     heartbeat: Callable[[AsyncSession], Awaitable[None]]
 
 
+@dataclass(frozen=True, slots=True)
+class LeasedEvent:
+    # One outbox event, read under its tenant after this worker leased it.
+
+    id: UUID
+    tenant_id: UUID
+    job_id: UUID
+    event_type: str
+    # Ids only (never prompts or URLs); its shape is the event type's contract.
+    payload: Mapping[str, object]
+    # Leases so far, including this one; failed_attempts counts only the failed ones.
+    attempts: int
+    failed_attempts: int
+
+
+class EventHandler(Protocol):
+    """Handles every outbox event of one type. Subscribe by registering it in EVENT_HANDLERS.
+
+    The worker leases exactly the event types registered there, so subscribing is one line, e.g.
+    `ASSET_GENERATED_EVENT: ImageCheckHandler(),`; nothing else in the worker changes.
+
+    Delivery is at least once: after a crash, a hang or a lost lease the same event runs again,
+    possibly on another worker, so handle() must be idempotent (guarded transitions, unique
+    keys, idempotency keys on external calls). Events of one job never run concurrently (an
+    advisory lock per job_id).
+
+    handle(): the session is bound to the event's tenant, so RLS applies. Call
+    `await step.heartbeat(db)` before every external call or slow step; it raises LeaseLostError
+    when another worker took the event over. The worker commits after handle returns. Return
+    None when the event is done, or the seconds after which it should run again (backoff via
+    available_at, never sleeping). Raise NoHandlerError when this event cannot be handled here.
+    An exception leaves the lease to expire, which counts as a failed attempt.
+
+    give_up(): called once, in the event's transaction, when the event has failed
+    GENERATION_MAX_ATTEMPTS times (code ATTEMPTS_EXHAUSTED or NO_HANDLER). Leave the related
+    records in a state an operator can see; the event is then closed and never leased again.
+    """
+
+    async def handle(self, db: AsyncSession, event: LeasedEvent, step: Step) -> float | None: ...
+
+    async def give_up(self, db: AsyncSession, event: LeasedEvent, code: str) -> None: ...
+
+
 class JobHandler(Protocol):
-    """Runs the next step of one kind of job. Register one per JobKind in HANDLERS.
+    """Runs the next step of one kind of job. Register one per JobKind in JOB_HANDLERS.
 
     To add a kind (e.g. validation, NRC-7):
     1. Add the JobKind value. Create the job row with that kind plus one outbox_events row
@@ -153,6 +199,7 @@ class JobHandler(Protocol):
        should run again (backoff via available_at instead of sleeping).
     An exception is logged and the event runs again once its lease expires. Each expired lease
     counts as a failure; after GENERATION_MAX_ATTEMPTS failures the job is given up (_give_up).
+    "job.run" events reach these handlers through JobRunHandler, the EVENT_HANDLERS entry.
     """
 
     async def handle(self, db: AsyncSession, job: Job, step: Step) -> float | None: ...
@@ -431,8 +478,41 @@ class ImageGenerationHandler:
         return None
 
 
-HANDLERS: Final[Mapping[JobKind, JobHandler]] = MappingProxyType(
+JOB_HANDLERS: Final[Mapping[JobKind, JobHandler]] = MappingProxyType(
     {JobKind.IMAGE_GENERATION: ImageGenerationHandler()}
+)
+
+
+class JobRunHandler:
+    # "job.run": runs the next step of the event's job with the handler for its kind.
+
+    def __init__(self, job_handlers: Mapping[JobKind, JobHandler]) -> None:
+        self._job_handlers = job_handlers
+
+    async def handle(self, db: AsyncSession, event: LeasedEvent, step: Step) -> float | None:
+        job = await db.get(Job, event.job_id)
+        handler = self._job_handlers.get(JobKind(job.kind)) if job and job.kind in JobKind else None
+        if job is None or handler is None:
+            raise NoHandlerError
+        return await handler.handle(db, job, step)
+
+    async def give_up(self, db: AsyncSession, event: LeasedEvent, code: str) -> None:
+        job = await db.get(Job, event.job_id)
+        if job is not None:
+            await _give_up(db, job, code, _GIVE_UP_MESSAGES[code])
+
+
+_GIVE_UP_MESSAGES: Final = MappingProxyType(
+    {
+        ATTEMPTS_EXHAUSTED: "The job failed too many times.",
+        NO_HANDLER: "No worker can run this kind of job.",
+    }
+)
+
+# The one subscription registry, keyed by outbox event type. The worker leases exactly these
+# types; others (asset.generated until NRC-7 registers its handler) wait untouched.
+EVENT_HANDLERS: Final[Mapping[str, EventHandler]] = MappingProxyType(
+    {RUN_EVENT: JobRunHandler(JOB_HANDLERS)}
 )
 
 
@@ -444,7 +524,7 @@ class _Run:
     settings: Settings
     owner: str
     lease_seconds: int
-    handlers: Mapping[JobKind, JobHandler]
+    event_handlers: Mapping[str, EventHandler]
     now: datetime | None
 
 
@@ -456,14 +536,16 @@ async def run_once(
     *,
     now: datetime | None = None,
     owner: str = DEFAULT_OWNER,
-    handlers: Mapping[JobKind, JobHandler] = HANDLERS,
+    event_handlers: Mapping[str, EventHandler] = EVENT_HANDLERS,
     max_events: int | None = None,
 ) -> int:
     # Lease and run up to max_events (default WORKER_MAX_EVENTS_PER_RUN) due events, one lease
     # per event. Returns how many ran.
     if max_events is None:
         max_events = settings.worker_max_events_per_run
-    run = _Run(sessions, providers, sink, settings, owner, lease_seconds(settings), handlers, now)
+    run = _Run(
+        sessions, providers, sink, settings, owner, lease_seconds(settings), event_handlers, now
+    )
     leased = 0
     while leased < max_events:
         async with sessions() as db:
@@ -473,7 +555,7 @@ async def run_once(
                     {
                         "owner": owner,
                         "lease": run.lease_seconds,
-                        "event_types": list(HANDLED_EVENT_TYPES),
+                        "event_types": list(event_handlers),
                     },
                 )
             ).one_or_none()
@@ -538,48 +620,67 @@ async def _run_handler(run: _Run, event: Row[tuple[UUID, UUID, UUID, str]]) -> N
                 raise LeaseLostError
 
         await heartbeat(db)
-        job = await db.get(Job, event.job_id)
-        counts = (
+        row = (
             await db.execute(
-                select(OutboxEvent.attempts, OutboxEvent.failed_attempts).where(
-                    OutboxEvent.id == event.event_id
-                )
+                select(
+                    OutboxEvent.payload, OutboxEvent.attempts, OutboxEvent.failed_attempts
+                ).where(OutboxEvent.id == event.event_id)
             )
         ).one()
+        leased = LeasedEvent(
+            event.event_id,
+            event.tenant_id,
+            event.job_id,
+            event.event_type,
+            MappingProxyType(row.payload),
+            row.attempts,
+            row.failed_attempts,
+        )
+        handler = run.event_handlers.get(leased.event_type)
         max_failures = run.settings.generation_max_attempts
-        handler = run.handlers.get(JobKind(job.kind)) if job and job.kind in JobKind else None
-        if job is None or handler is None:
-            # Counts as a failure, so a job nobody can run is not retried forever.
-            failures = counts.failed_attempts + 1
-            logger.error(
-                "no handler for job=%s tenant=%s failures=%s",
-                event.job_id,
-                event.tenant_id,
-                failures,
-            )
-            retry = (
-                None if failures >= max_failures else run.settings.worker_no_handler_retry_seconds
-            )
-            if retry is None and job is not None and job.state is ExecutionState.QUEUED:
-                # Never started, so nothing was sent: free its slot and credits.
-                await _fail_with(
-                    db, job.id, NO_HANDLER, "No worker can run this kind of job.", billed=False
-                )
-            await _finish_event(db, run, event.event_id, retry, error_code=NO_HANDLER, failed=True)
-        elif counts.failed_attempts >= max_failures:
-            await _give_up(db, job, ATTEMPTS_EXHAUSTED, "The job failed too many times.")
-            await _finish_event(db, run, event.event_id, None, error_code=ATTEMPTS_EXHAUSTED)
+        if handler is not None and leased.failed_attempts >= max_failures:
+            await handler.give_up(db, leased, ATTEMPTS_EXHAUSTED)
+            await _finish_event(db, run, leased.id, None, error_code=ATTEMPTS_EXHAUSTED)
         else:
             step = Step(
                 run.providers,
                 run.sink,
                 run.settings,
                 run.now or datetime.now(UTC),
-                counts.attempts,
+                leased.attempts,
                 heartbeat,
             )
-            await _finish_event(db, run, event.event_id, await handler.handle(db, job, step))
+            try:
+                if handler is None:
+                    raise NoHandlerError
+                retry = await handler.handle(db, leased, step)
+            except NoHandlerError:
+                await _no_handler(db, run, leased, handler)
+            else:
+                await _finish_event(db, run, leased.id, retry)
         await db.commit()
+
+
+async def _no_handler(
+    db: AsyncSession, run: _Run, event: LeasedEvent, handler: EventHandler | None
+) -> None:
+    # Counts as a failure, so an event nobody can run is not retried forever.
+    failures = event.failed_attempts + 1
+    logger.error(
+        "no handler for event=%s type=%s job=%s tenant=%s failures=%s",
+        event.id,
+        event.event_type,
+        event.job_id,
+        event.tenant_id,
+        failures,
+    )
+    if failures < run.settings.generation_max_attempts:
+        retry: float | None = run.settings.worker_no_handler_retry_seconds
+    else:
+        retry = None
+        if handler is not None:
+            await handler.give_up(db, event, NO_HANDLER)
+    await _finish_event(db, run, event.id, retry, error_code=NO_HANDLER, failed=True)
 
 
 def _fenced(event_id: UUID, owner: str) -> Update:

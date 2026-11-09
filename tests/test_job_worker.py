@@ -34,7 +34,15 @@ from app.services.providers.base import (
     SubmitResult,
 )
 from app.services.providers.simulator import SimulatedImageProvider, SimulatorScenario
-from app.workers.connector import WorkerConfigError, build_providers, run_once
+from app.workers.connector import (
+    EVENT_HANDLERS,
+    JobRunHandler,
+    LeasedEvent,
+    Step,
+    WorkerConfigError,
+    build_providers,
+    run_once,
+)
 from tests.conftest import AuthHeaders, World
 from tests.test_jobs_api import _creative, _post_job
 
@@ -612,8 +620,9 @@ async def test_event_without_a_handler_is_given_up_after_the_cap(
 ) -> None:
     settings = get_settings()
 
+    no_kinds = {"job.run": JobRunHandler({})}
     for _ in range(settings.generation_max_attempts):
-        assert await run_once(sessions, {}, FakeSink(), settings, handlers={}) == 1
+        assert await run_once(sessions, {}, FakeSink(), settings, event_handlers=no_kinds) == 1
         await connection.execute(text("UPDATE outbox_events SET available_at = clock_timestamp()"))
 
     event = await _event(connection)
@@ -623,7 +632,7 @@ async def test_event_without_a_handler_is_given_up_after_the_cap(
         settings.generation_max_attempts,
     )
     assert event.processed_at is not None
-    assert await run_once(sessions, {}, FakeSink(), settings, handlers={}) == 0
+    assert await run_once(sessions, {}, FakeSink(), settings, event_handlers=no_kinds) == 0
     # It never started, so it fails without billing and frees its slot.
     assert (job.state, job.failure_code) == (ExecutionState.FAILED, "NO_HANDLER")
     assert reservation is ReservationState.RELEASED
@@ -691,6 +700,53 @@ async def test_model_change_before_submit_fails_without_sending(
     assert reservation is ReservationState.RELEASED
     assert provider.estimates == 0
     assert not provider.submits
+
+
+class RecordingHandler:
+    # A subscriber such as NRC-7's image check: records what it is given.
+
+    def __init__(self) -> None:
+        self.handled: list[LeasedEvent] = []
+
+    async def handle(self, db: AsyncSession, event: LeasedEvent, step: Step) -> float | None:
+        await step.heartbeat(db)
+        self.handled.append(event)
+        return None
+
+    async def give_up(self, db: AsyncSession, event: LeasedEvent, code: str) -> None:
+        raise AssertionError("not expected")
+
+
+async def test_registering_a_handler_is_all_it_takes_to_receive_an_event_type(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    sink, settings = FakeSink(), get_settings()
+    await _run(sessions, SimulatedImageProvider(), sink)
+    checker = RecordingHandler()
+    subscribed = {**EVENT_HANDLERS, "asset.generated": checker}
+
+    without = await run_once(sessions, {"simulator": SimulatedImageProvider()}, sink, settings)
+    leased = await run_once(
+        sessions,
+        {"simulator": SimulatedImageProvider()},
+        sink,
+        settings,
+        event_handlers=subscribed,
+    )
+
+    assert (without, leased) == (0, 1)
+    [event] = checker.handled
+    assert (event.event_type, event.job_id, event.tenant_id) == (
+        "asset.generated",
+        job_id,
+        world.a.tenant_id,
+    )
+    assert event.payload["event_version"] == 1
+    assert event.payload["asset_id"] == str(sink.stored[0])
+    processed = await connection.scalar(
+        text("SELECT processed_at FROM outbox_events WHERE event_type = 'asset.generated'")
+    )
+    assert processed is not None
 
 
 async def test_jobs_parked_without_storage_do_not_block_new_jobs(

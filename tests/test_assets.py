@@ -353,6 +353,7 @@ async def test_success_queues_one_asset_generated_event_that_this_worker_never_l
     event = events[0]
     assert (event.attempts, event.lease_owner, event.processed_at) == (0, None, None)
     assert event.payload == {
+        "event_version": 1,
         "job_id": str(job_id),
         "asset_id": asset_id,
         "tenant_id": str(world.a.tenant_id),
