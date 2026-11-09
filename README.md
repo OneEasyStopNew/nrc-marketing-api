@@ -23,6 +23,39 @@ uv run uvicorn app.main:create_app --factory --port 8000
 API docs are at http://127.0.0.1:8000/docs when `ENABLE_DOCS=true`. Calls need a real Cognito access
 token, so set the `COGNITO_*` values from Bhushan first.
 
+### Local object storage (SeaweedFS)
+
+`docker compose up -d --wait` also starts SeaweedFS, an S3-compatible server on
+`http://127.0.0.1:8333`. It replaces MinIO. Generated images are stored there locally and in a private
+S3 bucket on servers.
+
+1. Add a profile to `~/.aws/config`:
+
+   ```ini
+   [profile nrc-local]
+   region = us-east-1
+   ```
+
+2. Add its credentials to `~/.aws/credentials`. These values only open the local container (see
+   `docker/seaweedfs-s3.json`); they are not AWS keys.
+
+   ```ini
+   [nrc-local]
+   aws_access_key_id = localdev
+   aws_secret_access_key = localdev-password
+   ```
+
+3. In `.env` set `AWS_PROFILE=nrc-local`, `AWS_S3_BUCKET=nrc-local-media`,
+   `AWS_ENDPOINT_URL_S3=http://127.0.0.1:8333` and `S3_FORCE_PATH_STYLE=true`.
+4. Create the bucket (versioning on). The script refuses to run unless `AWS_ENDPOINT_URL_S3` is set,
+   so it can never touch real AWS:
+
+   ```powershell
+   uv run python -m scripts.create_local_bucket
+   ```
+
+The storage tests use the bucket `nrc-test-media` and skip themselves when SeaweedFS is not running.
+
 ## Checks
 
 CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, plus a
