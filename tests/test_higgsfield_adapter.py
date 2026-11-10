@@ -495,6 +495,24 @@ async def test_estimate_cost_posts_same_body_without_idempotency_key() -> None:
     assert json.loads(sent.content) == {"prompt": PROMPT, "aspect_ratio": "4:3"}
 
 
+async def test_unsupported_aspect_ratio_fails_before_any_request() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return httpx.Response(200, json={"usd": "0.094"})
+
+    odd = ImageRequest(
+        prompt=PROMPT, width_px=1, height_px=1, aspect_ratio="21:9", idempotency_key="k"
+    )
+    provider = make(handler)
+    with pytest.raises(ProviderRejectedError):
+        await provider.estimate_cost_usd(odd)
+    with pytest.raises(ProviderRejectedError):
+        await provider.submit(odd)
+    assert seen == []
+
+
 @pytest.mark.parametrize(
     "handler",
     [
@@ -575,6 +593,7 @@ async def test_create_provider_owns_https_clients_below_the_lease_and_closes_the
     assert isinstance(fetcher, SafeFetcher)
     assert provider.model == MODEL
     assert provider._resolution == "2K"
+    assert create_provider(config)._resolution == "1080p"
     assert provider._allowed_hosts == frozenset({"cdn.example.com"})
     assert api.timeout.read == 5
     assert api.trust_env is False

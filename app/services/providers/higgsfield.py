@@ -51,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 # The Secrets Manager secret's JSON entry; the same name as the setting it fills.
 KEY_ENTRY_NAME: Final = "HIGGSFIELD_API_KEY"
+# Accepted by soul/v2/standard (live /estimate probe, 10 Nov 2026); anything else is a 400.
+SUPPORTED_ASPECT_RATIOS: Final = frozenset({"9:16", "16:9", "4:3", "3:4", "1:1", "2:3", "3:2"})
 
 # Protocol facts from the Higgsfield docs, not tunable: header and id formats.
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[\x21-\x7e]{1,255}$")
@@ -109,8 +111,9 @@ class HiggsfieldProvider:
         fetcher: OutputFetcher,
         allowed_output_hosts: frozenset[str],
         max_output_bytes: int,
-        # TODO(NRC-10): confirm with live account whether the model accepts "resolution"
-        # (openapi.json lists 2K|4K for soul/standard); None omits it and uses the model default.
+        # Live /estimate probe, 10 Nov 2026, higgsfield-ai/soul/v2/standard: aspect_ratio must be
+        # one of SUPPORTED_ASPECT_RATIOS, resolution one of 720p|1080p (else 400 "is not one of"),
+        # width/height are silently ignored. None omits resolution (model default).
         resolution: str | None = None,
     ) -> None:
         key_id = api_key_id.get_secret_value()
@@ -163,7 +166,7 @@ class HiggsfieldProvider:
             fetcher=fetcher,
             allowed_output_hosts=frozenset(h.lower() for h in settings.higgsfield_output_hosts),
             max_output_bytes=settings.max_generated_image_bytes,
-            resolution=resolution,
+            resolution=resolution if resolution is not None else settings.higgsfield_resolution,
         )
 
     def __repr__(self) -> str:
@@ -203,12 +206,15 @@ class HiggsfieldProvider:
         return SubmitResult(provider_request_id=request_id, status=status)
 
     def _body(self, request: ImageRequest) -> dict[str, str]:
+        # Checked here so neither the estimate nor the submit is sent for an unsupported ratio.
+        if request.aspect_ratio not in SUPPORTED_ASPECT_RATIOS:
+            raise ProviderRejectedError(
+                f"The model does not accept aspect ratio {request.aspect_ratio!r}"
+            )
         body = {"prompt": request.prompt, "aspect_ratio": request.aspect_ratio}
         if self._resolution is not None:
             body["resolution"] = self._resolution
         # The API takes no width/height; sizing is by aspect_ratio (and resolution).
-        # TODO(NRC-10): confirm with live account that aspect_ratio values from the job are valid
-        # for the pinned model (documented enum: 1:1 4:3 3:4 3:2 2:3 5:4 4:5 16:9 9:16 21:9).
         return body
 
     async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
