@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.access import TenantContext
 from app.core.config import Settings
 from app.core.errors import DependencyUnavailableError, NotFoundError
-from app.models import Asset, Creative, Job, OutboxEvent
+from app.models import Asset, Creative, CreativeVersion, Job, OutboxEvent
+from app.models.enums import FORMAT_SPECS
 from app.schemas.assets import AssetOrigin, AssetRead
 from app.services import media
 from app.services.media import MediaRejectedError
@@ -53,9 +54,32 @@ class StoredImageSink:
             raise ProviderOutputError(str(error)) from error
         if info.mime_type != image.content_type:
             raise ProviderOutputError("The provider output type does not match its content.")
+        post_format = await db.scalar(
+            select(CreativeVersion.post_format).where(
+                CreativeVersion.tenant_id == job.tenant_id,
+                CreativeVersion.creative_id == job.creative_id,
+                CreativeVersion.version == job.creative_version,
+            )
+        )
+        if post_format is None:
+            raise LookupError("The job's creative version is not visible in this transaction")
+        spec = FORMAT_SPECS[post_format]
+        # The stored bytes are what image validation reads: exactly the format's size, as PNG.
+        try:
+            content, stored_info = await asyncio.to_thread(
+                media.fit_to_format,
+                image.content,
+                width_px=spec.width_px,
+                height_px=spec.height_px,
+                max_pixels=self._settings.max_image_pixels,
+            )
+        except MediaRejectedError as error:
+            raise ProviderOutputError(str(error)) from error
+        original = (info.width_px, info.height_px)
+        info = stored_info
         try:
             stored = await self._storage.save_generated_image(
-                image.content, ext=info.ext, content_type=info.mime_type
+                content, ext=info.ext, content_type=info.mime_type
             )
         except StorageError as error:
             raise ImageStorageUnavailableError("Image storage is temporarily unavailable.") from (
@@ -85,7 +109,16 @@ class StoredImageSink:
         db.add(asset)
         # Flush so a duplicate for the job fails here, not at the worker's commit.
         await db.flush()
-        logger.info("asset stored asset=%s job=%s tenant=%s", asset.id, job.id, job.tenant_id)
+        logger.info(
+            "asset stored asset=%s job=%s tenant=%s provider_size=%sx%s stored_size=%sx%s",
+            asset.id,
+            job.id,
+            job.tenant_id,
+            original[0],
+            original[1],
+            info.width_px,
+            info.height_px,
+        )
         return asset.id
 
 

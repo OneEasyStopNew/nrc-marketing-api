@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from io import BytesIO
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 # We enforce our own pixel cap before any decode. Pillow's limit is process-global and would
 # warn or raise inconsistently across threads, so it is switched off once, at import.
@@ -68,3 +68,44 @@ def inspect_image(content: bytes, *, max_pixels: int) -> ImageInfo:
             "MEDIA_CORRUPT", "The file is not a valid, complete image"
         ) from exc
     return info
+
+
+def fit_to_format(
+    content: bytes, *, width_px: int, height_px: int, max_pixels: int
+) -> tuple[bytes, ImageInfo]:
+    """Center-crop to the format's aspect ratio, resize to its exact size, re-encode as PNG.
+
+    The same input always gives the same bytes (so checksums are stable) and no metadata
+    survives. CPU-bound: call through asyncio.to_thread from async code.
+    """
+    info = inspect_header(content)
+    if info.width_px * info.height_px > max_pixels:
+        raise MediaRejectedError("MEDIA_TOO_LARGE", "The image has too many pixels")
+    try:
+        with Image.open(BytesIO(content)) as opened:
+            opened.load()
+            image = ImageOps.exif_transpose(opened)
+            # Pillow only writes ICC and EXIF data it finds in info, so a fresh copy drops them.
+            has_alpha = "A" in image.getbands() or "transparency" in image.info
+            image = image.convert("RGBA" if has_alpha else "RGB")
+            image.info.clear()
+            width, height = image.size
+            # Integer math on purpose: no float rounding differences between machines.
+            if width * height_px > height * width_px:
+                crop_width = height * width_px // height_px
+                left = (width - crop_width) // 2
+                box = (left, 0, left + crop_width, height)
+            else:
+                crop_height = width * height_px // width_px
+                top = (height - crop_height) // 2
+                box = (0, top, width, top + crop_height)
+            image = image.crop(box).resize((width_px, height_px), Image.Resampling.LANCZOS)
+            out = BytesIO()
+            image.save(out, format="PNG", compress_level=6)
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+        raise MediaRejectedError(
+            "MEDIA_CORRUPT", "The file is not a valid, complete image"
+        ) from exc
+    return out.getvalue(), ImageInfo(
+        mime_type="image/png", ext="png", width_px=width_px, height_px=height_px
+    )

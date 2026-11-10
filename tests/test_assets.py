@@ -107,7 +107,17 @@ async def test_generated_image_is_stored_and_downloadable(
     auth: AuthHeaders,
     world: World,
 ) -> None:
-    job_id = await _generate(sessions, sink, SimulatedImageProvider(), client, auth, world)
+    # The provider's image is larger than the format (as the live model's was, 1536x1536).
+    provider = SimulatedImageProvider()
+    buffer = io.BytesIO()
+    Image.new("RGB", (1536, 1536), (40, 80, 120)).save(buffer, format="PNG")
+    oversized = FetchedImage(buffer.getvalue(), "image/png", None)
+
+    async def oversized_output(*_: object) -> FetchedImage:
+        return oversized
+
+    provider.fetch_output = oversized_output  # type: ignore[method-assign,assignment]
+    job_id = await _generate(sessions, sink, provider, client, auth, world)
 
     job = await _job_json(client, auth, world, job_id)
     assert job["state"] == "SUCCEEDED"
@@ -135,6 +145,8 @@ async def test_generated_image_is_stored_and_downloadable(
         row = (await db.execute(select(Asset))).scalar_one()
         reservation = await db.scalar(select(CreditReservation.state))
     assert row.job_id == job_id
+    assert (row.width_px, row.height_px) == (1080, 1080)
+    assert row.checksum_sha256 == asset["checksum_sha256"]
     assert row.s3_version_id
     assert row.created_by == "creator-a"
     assert reservation is ReservationState.COMMITTED

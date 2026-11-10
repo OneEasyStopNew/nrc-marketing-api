@@ -274,9 +274,10 @@ class CountingStorage(ObjectStorage):
         return await super().save_generated_image(content, ext=ext, content_type=content_type)
 
 
-def _png_1080() -> bytes:
+def _png_1536() -> bytes:
+    # What the model returns for 1:1 at 1080p (live test, 10 Nov 2026).
     buffer = io.BytesIO()
-    Image.new("RGB", (1080, 1080), (12, 90, 160)).save(buffer, format="PNG")
+    Image.new("RGB", (1536, 1536), (12, 90, 160)).save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -324,7 +325,7 @@ async def test_submit_5xx_after_acceptance_reconciles_to_one_charge_and_one_imag
         "images": [{"url": OUTPUT_URL}],
         "expires_at": expires,
     }
-    provider = higgsfield(fake, _output_server(_png_1080()), frozenset({OUTPUT_HOST}))
+    provider = higgsfield(fake, _output_server(_png_1536()), frozenset({OUTPUT_HOST}))
     storage = CountingStorage()
     sink = StoredImageSink(storage, get_settings())
     reserved, committed = await _spend(connection, "higgsfield")
@@ -355,6 +356,7 @@ async def test_submit_5xx_after_acceptance_reconciles_to_one_charge_and_one_imag
     assert reservation is ReservationState.COMMITTED
     assert job.provider_spend_state is SpendState.COMMITTED
     assert await _spend(connection, "higgsfield") == (reserved, committed + 50_000)
+    assert "provider_size=1536x1536 stored_size=1080x1080" in caplog.text
     assert "SIGNED" not in caplog.text
     assert OUTPUT_HOST not in caplog.text
 
