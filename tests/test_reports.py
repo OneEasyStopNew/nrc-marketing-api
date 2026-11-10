@@ -13,12 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.access import TenantContext
 from app.schemas.validations import CoverageGap, Finding, ValidationRunRead
 from app.services import reports
+from scripts.render_sample_report import SAMPLE_PATH
+from scripts.render_sample_report import render as render_sample
 from tests.conftest import AuthHeaders, World
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = json.loads((ROOT / "contracts/examples/validation_runs.json").read_text("utf-8"))
 NOW = datetime(2026, 11, 10, 9, 0, tzinfo=UTC)
-SAMPLE = ROOT / "docs" / "samples" / "validation-report-sample.html"
 
 Loader = Callable[[AsyncSession, TenantContext, UUID], Awaitable[ValidationRunRead]]
 
@@ -52,13 +53,10 @@ def _url(run: ValidationRunRead, version: int | None = None) -> str:
     return f"/v1/marketing/validations/{run.validation_run_id}/report?creative_version={v}"
 
 
-def test_sample_report_is_written_from_the_synthetic_fixture() -> None:
-    SAMPLE.parent.mkdir(parents=True, exist_ok=True)
-    SAMPLE.write_text(
-        reports.render_validation_report(_run("validation_run_needs_review"), generated_at=NOW),
-        encoding="utf-8",
+def test_committed_sample_is_current() -> None:
+    assert SAMPLE_PATH.read_text(encoding="utf-8") == render_sample(), (
+        "docs/samples is stale: run `uv run python -m scripts.render_sample_report`"
     )
-    assert "Draft for review" in SAMPLE.read_text(encoding="utf-8")
 
 
 def test_render_is_deterministic() -> None:

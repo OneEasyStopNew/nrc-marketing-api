@@ -65,7 +65,8 @@ Not part of the agreed contract yet; drop `app/api/routes/reports.py` to remove 
   so the UI asks the user to refresh. Missing runs are 404.
 - `load_validation_run` in `app/services/reports.py` is the seam: it returns 501 until NRC-7
   provides persisted reads. Free text is escaped and URLs in it are replaced by `[link removed]`.
-- Sample output: `docs/samples/validation-report-sample.html` (synthetic; rewritten by the tests).
+- Sample output: `docs/samples/validation-report-sample.html` (synthetic). Regenerate with `uv run python -m scripts.render_sample_report`; a test fails if it
+  is stale.
 
 ## Staging prerequisites
 
