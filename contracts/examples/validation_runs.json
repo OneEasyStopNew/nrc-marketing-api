@@ -1,0 +1,205 @@
+{
+  "_note": "Synthetic ValidationRunRead samples (PASS, FAIL, NEEDS_REVIEW). Validated by tests/test_contract.py; also used by the NRC-30 report tests.",
+  "validation_run_pass": {
+    "request": "GET /v1/marketing/validations/00000001-0000-4000-8000-000000000001",
+    "status": 200,
+    "schema": "ValidationRunRead",
+    "body": {
+      "validation_run_id": "00000001-0000-4000-8000-000000000001",
+      "input_kind": "text",
+      "creative_version": 3,
+      "state": "SUCCEEDED",
+      "outcome": "PASS",
+      "is_current": true,
+      "evaluated_at": "2026-11-09T10:30:00Z",
+      "job_id": "00000001-0000-4000-8000-0000000000aa",
+      "input_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "asset_id": null,
+      "study_snapshot_version": 1,
+      "policy_bundle_version": "synthetic-2026.11",
+      "gates": [
+        {
+          "gate": "completeness",
+          "outcome": "PASS"
+        },
+        {
+          "gate": "study_facts",
+          "outcome": "PASS"
+        },
+        {
+          "gate": "policy",
+          "outcome": "PASS"
+        }
+      ],
+      "rule_results": [
+        {
+          "rule_id": "SYN-CLAIM-001",
+          "rule_version": 1,
+          "mandatory": true,
+          "result": "PASS",
+          "reason": null
+        },
+        {
+          "rule_id": "SYN-TONE-002",
+          "rule_version": 1,
+          "mandatory": true,
+          "result": "PASS",
+          "reason": null
+        }
+      ],
+      "findings": [],
+      "coverage_gaps": []
+    }
+  },
+  "validation_run_fail": {
+    "request": "GET /v1/marketing/validations/00000002-0000-4000-8000-000000000001",
+    "status": 200,
+    "schema": "ValidationRunRead",
+    "body": {
+      "validation_run_id": "00000002-0000-4000-8000-000000000001",
+      "input_kind": "text",
+      "creative_version": 3,
+      "state": "SUCCEEDED",
+      "outcome": "FAIL",
+      "is_current": true,
+      "evaluated_at": "2026-11-09T10:30:00Z",
+      "job_id": "00000002-0000-4000-8000-0000000000aa",
+      "input_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "asset_id": null,
+      "study_snapshot_version": 1,
+      "policy_bundle_version": "synthetic-2026.11",
+      "gates": [
+        {
+          "gate": "completeness",
+          "outcome": "PASS"
+        },
+        {
+          "gate": "study_facts",
+          "outcome": "FAIL"
+        },
+        {
+          "gate": "policy",
+          "outcome": "FAIL"
+        }
+      ],
+      "rule_results": [
+        {
+          "rule_id": "SYN-CLAIM-001",
+          "rule_version": 1,
+          "mandatory": true,
+          "result": "FAIL",
+          "reason": null
+        },
+        {
+          "rule_id": "SYN-TONE-002",
+          "rule_version": 1,
+          "mandatory": true,
+          "result": "PASS",
+          "reason": null
+        }
+      ],
+      "findings": [
+        {
+          "rule_id": "SYN-CLAIM-001",
+          "rule_version": 1,
+          "severity": "critical",
+          "explanation": "[SYNTHETIC] The caption promises a cure, which the study facts do not support.",
+          "source": {
+            "source_id": "synthetic-policy-a",
+            "clause": "4.2",
+            "excerpt": "[SYNTHETIC] Do not promise treatment outcomes."
+          },
+          "text_span": {
+            "start": 10,
+            "end": 24
+          },
+          "image_region": null,
+          "offending_excerpt": "guaranteed cure",
+          "suggested_correction": "Learn about a research study for high blood pressure.",
+          "needs_human_decision": false
+        }
+      ],
+      "coverage_gaps": []
+    }
+  },
+  "validation_run_needs_review": {
+    "request": "GET /v1/marketing/validations/00000003-0000-4000-8000-000000000001",
+    "status": 200,
+    "schema": "ValidationRunRead",
+    "body": {
+      "validation_run_id": "00000003-0000-4000-8000-000000000001",
+      "input_kind": "text",
+      "creative_version": 3,
+      "state": "SUCCEEDED",
+      "outcome": "NEEDS_REVIEW",
+      "is_current": true,
+      "evaluated_at": "2026-11-09T10:30:00Z",
+      "job_id": "00000003-0000-4000-8000-0000000000aa",
+      "input_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "asset_id": null,
+      "study_snapshot_version": 1,
+      "policy_bundle_version": "synthetic-2026.11",
+      "gates": [
+        {
+          "gate": "completeness",
+          "outcome": "PASS"
+        },
+        {
+          "gate": "study_facts",
+          "outcome": "PASS"
+        },
+        {
+          "gate": "policy",
+          "outcome": "NEEDS_REVIEW"
+        }
+      ],
+      "rule_results": [
+        {
+          "rule_id": "SYN-CLAIM-001",
+          "rule_version": 1,
+          "mandatory": true,
+          "result": "PASS",
+          "reason": null
+        },
+        {
+          "rule_id": "SYN-TONE-002",
+          "rule_version": 1,
+          "mandatory": true,
+          "result": "FAIL",
+          "reason": null
+        },
+        {
+          "rule_id": "SYN-ELIG-003",
+          "rule_version": 1,
+          "mandatory": true,
+          "result": "UNABLE_TO_ASSESS",
+          "reason": "No eligibility source in the policy bundle."
+        }
+      ],
+      "findings": [
+        {
+          "rule_id": "SYN-TONE-002",
+          "rule_version": 1,
+          "severity": "major",
+          "explanation": "[SYNTHETIC] The wording may pressure readers; a person must decide.",
+          "source": {
+            "source_id": "synthetic-policy-a",
+            "clause": "7.1",
+            "excerpt": null
+          },
+          "text_span": null,
+          "image_region": null,
+          "offending_excerpt": "Act now",
+          "suggested_correction": null,
+          "needs_human_decision": true
+        }
+      ],
+      "coverage_gaps": [
+        {
+          "rule_id": "SYN-ELIG-003",
+          "reason": "[SYNTHETIC] Eligibility wording could not be assessed."
+        }
+      ]
+    }
+  }
+}

@@ -54,6 +54,19 @@ Conventions:
 | Text offsets (D2) | Zero-based Unicode code points, end exclusive. JS strings are UTF-16, so convert before slicing. |
 | Image regions (D4) | Fractions 0–1 of the stored image's original width and height. |
 
+## Validation report (NRC-30, proposed)
+
+Not part of the agreed contract yet; drop `app/api/routes/reports.py` to remove it.
+
+- `GET /v1/marketing/validations/{validation_run_id}/report?creative_version=N` returns a
+  self-contained HTML file (attachment, strict CSP, inline print CSS; use "Save as PDF").
+- It renders the persisted run only and never reruns a model. It is labelled "Draft for review".
+- If the run belongs to another creative version the answer is 412 with `details.current_version`,
+  so the UI asks the user to refresh. Missing runs are 404.
+- `load_validation_run` in `app/services/reports.py` is the seam: it returns 501 until NRC-7
+  provides persisted reads. Free text is escaped and URLs in it are replaced by `[link removed]`.
+- Sample output: `docs/samples/validation-report-sample.html` (synthetic; rewritten by the tests).
+
 ## Staging prerequisites
 
 - A Postgres login role `marketing_app` that does not own the tables and has no `BYPASSRLS`. The API's

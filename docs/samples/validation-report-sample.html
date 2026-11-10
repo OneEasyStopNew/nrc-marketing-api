@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Validation report 00000003-0000-4000-8000-000000000001</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; color: #1a1a1a; margin: 0 auto; max-width: 52rem; padding: 1.5rem; }
+  h1 { font-size: 1.4rem; margin: 0.5rem 0; }
+  h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; border-bottom: 1px solid #999; }
+  .label { display: inline-block; border: 2px solid #1a1a1a; padding: 0.1rem 0.6rem; font-weight: 700; text-transform: uppercase; }
+  .notice { border: 1px solid #999; background: #f4f4f4; padding: 0.5rem 0.8rem; margin: 0.8rem 0; }
+  .warn { border-color: #b36b00; background: #fff4e0; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+  th, td { border: 1px solid #999; padding: 0.3rem 0.5rem; text-align: left; vertical-align: top; }
+  th { background: #eee; width: 30%; }
+  .grid th { width: auto; }
+  .outcome { font-weight: 700; padding: 0 0.3rem; border: 1px solid #1a1a1a; }
+  .FAIL { background: #fbd5d5; }
+  .NEEDS_REVIEW { background: #ffe9b0; }
+  .PASS { background: #d9ecd9; }
+  .finding { border: 1px solid #999; padding: 0.5rem 0.8rem; margin: 0.6rem 0; break-inside: avoid; }
+  .finding p { margin: 0.2rem 0; }
+  td, th, p, li, pre, h1 { overflow-wrap: anywhere; word-break: break-word; }
+  pre { white-space: pre-wrap; margin: 0.2rem 0; font: inherit; background: #f4f4f4; padding: 0.3rem; }
+  footer { margin-top: 2rem; font-size: 0.85rem; color: #444; }
+  @media print {
+    body { max-width: none; padding: 0; font-size: 11pt; }
+    h2 { break-after: avoid; }
+    tr, .finding { break-inside: avoid; }
+    .FAIL, .NEEDS_REVIEW, .PASS, .notice, th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<p><span class="label">Draft for review</span></p>
+<h1>Validation evidence report</h1>
+<div class="notice">This report shows the stored result of one validation run. It is not an approval, and a PASS does not mean the content is ready to publish. A person still decides.</div>
+
+
+<h2>Versions and run</h2>
+<table>
+<tr><th>Validation run ID</th><td>00000003-0000-4000-8000-000000000001</td></tr>
+<tr><th>Input kind</th><td>text</td></tr>
+<tr><th>Creative version</th><td>3</td></tr>
+<tr><th>Asset (ID)</th><td>not applicable (no image in this run)</td></tr>
+<tr><th>Study snapshot version</th><td>1</td></tr>
+<tr><th>Policy bundle version</th><td>synthetic-2026.11</td></tr>
+<tr><th>Evaluated at</th><td>2026-11-09 10:30 UTC</td></tr>
+<tr><th>Run state</th><td>SUCCEEDED</td></tr>
+<tr><th>Input hash</th><td>sha256:3333333333333333333333333333333333333333333333333333333333333333</td></tr>
+<tr><th>Report generated at</th><td>2026-11-10 09:00 UTC</td></tr>
+</table>
+
+<h2>Outcome</h2>
+
+<p>Overall outcome: <span class="outcome NEEDS_REVIEW">NEEDS_REVIEW</span></p>
+
+<table class="grid">
+<tr><th>Gate</th><th>Outcome</th></tr>
+
+<tr><td>completeness</td><td><span class="outcome PASS">PASS</span></td></tr>
+
+<tr><td>study_facts</td><td><span class="outcome PASS">PASS</span></td></tr>
+
+<tr><td>policy</td><td><span class="outcome NEEDS_REVIEW">NEEDS_REVIEW</span></td></tr>
+
+</table>
+
+<h2>Findings</h2>
+
+<div class="finding">
+<p><strong>SYN-TONE-002</strong> (rule version 1), severity major, <strong>needs a human decision</strong></p>
+<p>[SYNTHETIC] The wording may pressure readers; a person must decide.</p>
+<p>Source: synthetic-policy-a, clause 7.1</p>
+
+
+
+<p>Flagged text:</p><pre>Act now</pre>
+
+</div>
+
+
+<h2>Rule results</h2>
+<table class="grid">
+<tr><th>Rule</th><th>Version</th><th>Mandatory</th><th>Result</th><th>Reason</th></tr>
+
+<tr><td>SYN-CLAIM-001</td><td>1</td><td>yes</td><td><span class="outcome PASS">PASS</span></td><td></td></tr>
+
+<tr><td>SYN-TONE-002</td><td>1</td><td>yes</td><td><span class="outcome FAIL">FAIL</span></td><td></td></tr>
+
+<tr><td>SYN-ELIG-003</td><td>1</td><td>yes</td><td><span class="outcome UNABLE_TO_ASSESS">UNABLE_TO_ASSESS</span></td><td>No eligibility source in the policy bundle.</td></tr>
+
+</table>
+
+<h2>Coverage gaps</h2>
+
+<div class="notice warn">Some checks could not be completed. These gaps are not passes.</div>
+<ul>
+
+<li><strong>SYN-ELIG-003</strong>: [SYNTHETIC] Eligibility wording could not be assessed.</li>
+
+</ul>
+
+
+<footer>Draft for review. Generated from the stored validation result; no model was run to produce this report.</footer>
+</body>
+</html>
