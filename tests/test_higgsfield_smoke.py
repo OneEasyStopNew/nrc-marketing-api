@@ -54,7 +54,7 @@ class RecordingStore:
 
 def _png() -> bytes:
     buffer = io.BytesIO()
-    Image.new("RGB", (1080, 1080), (10, 20, 30)).save(buffer, format="PNG")
+    Image.new("RGB", (1536, 1536), (10, 20, 30)).save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -247,6 +247,6 @@ async def test_candidates_use_their_smallest_documented_settings() -> None:
     soul, soul_v2 = make("higgsfield-ai/soul/standard"), make("higgsfield-ai/soul/v2/standard")
 
     assert soul._resolution == "2K"
-    assert soul_v2._resolution is None
+    assert soul_v2._resolution == "1080p"
     for provider in (soul, soul_v2):
         await provider.aclose()

@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from app.core.config import Settings, get_settings
+from app.models.enums import FORMAT_SPECS, PostFormat
 from app.services import media
 from app.services.media import MediaRejectedError
 from app.services.providers.base import (
@@ -133,8 +134,11 @@ def _is_local(endpoint: str | None) -> bool:
 def provider_factory(settings: Settings) -> ProviderFactory:
     def make(model: str) -> HiggsfieldProvider:
         candidate = CANDIDATES.get(model)
+        # A candidate's own resolution wins; otherwise HIGGSFIELD_RESOLUTION applies.
         resolution = candidate.resolution if candidate else None
-        return create_provider(settings, model=model, resolution=resolution)
+        return create_provider(
+            settings, model=model, resolution=resolution or settings.higgsfield_resolution
+        )
 
     return make
 
@@ -213,15 +217,20 @@ async def _generate(
         print(f"Output host {host} is not in HIGGSFIELD_OUTPUT_HOSTS; nothing downloaded.")
         return FAILED
     image = await provider.fetch_output(result)
+    spec = FORMAT_SPECS[PostFormat.FEED_IMAGE]
     try:
-        info = await asyncio.to_thread(
-            media.inspect_image, image.content, max_pixels=settings.max_image_pixels
+        content, info = await asyncio.to_thread(
+            media.fit_to_format,
+            image.content,
+            width_px=spec.width_px,
+            height_px=spec.height_px,
+            max_pixels=settings.max_image_pixels,
         )
     except MediaRejectedError as error:
         print(f"error={error.code}: {error}")
         return FAILED
     stored = await make_storage(settings).save_generated_image(
-        image.content, ext=info.ext, content_type=info.mime_type
+        content, ext=info.ext, content_type=info.mime_type
     )
     print(
         f"stored checksum_sha256={stored.checksum_sha256} size_bytes={stored.size_bytes} "
