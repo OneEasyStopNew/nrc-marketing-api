@@ -689,6 +689,37 @@ async def test_event_past_attempt_cap_is_given_up(
     assert event.last_error_code == "ATTEMPTS_EXHAUSTED"
 
 
+async def test_attempt_cap_is_the_jobs_own_after_the_setting_changes(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    # The cap is fixed when the job is accepted; raising the setting later doesn't extend it.
+    accepted_cap = get_settings().generation_max_attempts
+    await _fail_attempts(connection, world)
+    raised = get_settings().model_copy(update={"generation_max_attempts": accepted_cap + 5})
+
+    await run_once(sessions, {"simulator": SimulatedImageProvider()}, FakeSink(), raised)
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.max_attempts == accepted_cap
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "ATTEMPTS_EXHAUSTED")
+
+
+async def test_no_handler_cap_is_the_jobs_own_after_the_setting_changes(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    accepted_cap = get_settings().generation_max_attempts
+    lowered = get_settings().model_copy(update={"generation_max_attempts": 1})
+    no_kinds = {"job.run": JobRunHandler({})}
+
+    await run_once(sessions, {}, FakeSink(), lowered, event_handlers=no_kinds)
+
+    job, _ = await _load(sessions, world, job_id)
+    event = await _event(connection)
+    assert job.max_attempts == accepted_cap > 1
+    assert event.processed_at is None
+    assert job.state is ExecutionState.QUEUED
+
+
 async def test_polls_of_a_long_generation_never_count_as_failures(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:

@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     # the worker gives up. Polls and retryable provider errors don't count: the job deadline
     # bounds those (the agreed retry policy) until the provider accepts the job. After that, the
     # grace window below bounds an unfinished job and output expiry bounds a completed one.
+    # Stored on each job when it is accepted, so a change applies to new jobs only.
     generation_max_attempts: int = Field(default=3, ge=1, le=10)
     generation_deadline_seconds: int = Field(default=900, ge=60, le=86_400)
     # How long past its deadline an accepted job may stay queued or in progress at the provider

@@ -184,6 +184,8 @@ class LeasedEvent:
     # Leases so far, including this one; failed_attempts counts only the failed ones.
     attempts: int
     failed_attempts: int
+    # The job's max_attempts, fixed from GENERATION_MAX_ATTEMPTS when it was accepted.
+    max_failed_attempts: int
 
 
 class EventHandler(Protocol):
@@ -205,7 +207,7 @@ class EventHandler(Protocol):
     An exception leaves the lease to expire, which counts as a failed attempt.
 
     give_up(): called once, in the event's transaction, when the event has failed
-    GENERATION_MAX_ATTEMPTS times (code ATTEMPTS_EXHAUSTED or NO_HANDLER). Leave the related
+    event.max_failed_attempts times (code ATTEMPTS_EXHAUSTED or NO_HANDLER). Leave the related
     records in a state an operator can see; the event is then closed and never leased again.
     """
 
@@ -228,7 +230,7 @@ class JobHandler(Protocol):
     3. Return None when the job needs no further events, or the seconds after which the same event
        should run again (backoff via available_at instead of sleeping).
     An exception is logged and the event runs again once its lease expires. Each expired lease
-    counts as a failure; after GENERATION_MAX_ATTEMPTS failures the job is given up (_give_up).
+    counts as a failure; after the job's max_attempts failures it is given up (_give_up).
     "job.run" events reach these handlers through JobRunHandler, the EVENT_HANDLERS entry.
     """
 
@@ -693,8 +695,15 @@ async def _run_handler(run: _Run, event: Row[tuple[UUID, UUID, UUID, str]]) -> N
         row = (
             await db.execute(
                 select(
-                    OutboxEvent.payload, OutboxEvent.attempts, OutboxEvent.failed_attempts
-                ).where(OutboxEvent.id == event.event_id)
+                    OutboxEvent.payload,
+                    OutboxEvent.attempts,
+                    OutboxEvent.failed_attempts,
+                    Job.max_attempts,
+                )
+                .join(
+                    Job, (Job.tenant_id == OutboxEvent.tenant_id) & (Job.id == OutboxEvent.job_id)
+                )
+                .where(OutboxEvent.id == event.event_id)
             )
         ).one()
         leased = LeasedEvent(
@@ -705,10 +714,10 @@ async def _run_handler(run: _Run, event: Row[tuple[UUID, UUID, UUID, str]]) -> N
             MappingProxyType(row.payload),
             row.attempts,
             row.failed_attempts,
+            row.max_attempts,
         )
         handler = run.event_handlers.get(leased.event_type)
-        max_failures = run.settings.generation_max_attempts
-        if handler is not None and leased.failed_attempts >= max_failures:
+        if handler is not None and leased.failed_attempts >= leased.max_failed_attempts:
             await handler.give_up(db, leased, ATTEMPTS_EXHAUSTED)
             await _finish_event(db, run, leased.id, None, error_code=ATTEMPTS_EXHAUSTED)
         else:
@@ -744,7 +753,7 @@ async def _no_handler(
         event.tenant_id,
         failures,
     )
-    if failures < run.settings.generation_max_attempts:
+    if failures < event.max_failed_attempts:
         retry: float | None = run.settings.worker_no_handler_retry_seconds
     else:
         retry = None
