@@ -50,6 +50,7 @@ from app.services.jobs import (
     settle_reservation,
     transition,
 )
+from app.services.media import configure_pillow
 from app.services.providers.base import (
     TERMINAL_PROVIDER_STATUSES,
     FetchedImage,
@@ -714,6 +715,7 @@ def _stop_on_signals(stop: asyncio.Event) -> None:
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    configure_pillow(settings)
     try:
         asyncio.run(run_forever(settings))
     except WorkerConfigError as error:

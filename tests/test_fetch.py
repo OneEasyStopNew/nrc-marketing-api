@@ -145,14 +145,15 @@ async def test_slow_resolver_hits_the_overall_timeout() -> None:
         await _fetch(fetcher)
 
 
-async def test_tiny_file_with_huge_dimensions_passes_header_check_without_decoding() -> None:
+async def test_tiny_file_with_huge_dimensions_is_rejected_without_decoding() -> None:
     # 50000 x 50000 PNG of a single colour is a few KB but would decode to 2.5 billion pixels.
+    # Pillow's process-wide limit rejects it from the header alone.
     huge = _huge_png(50_000, 50_000)
     assert len(huge) < 100_000
     fetcher, _ = _fetcher(_ok(huge))
     started = time.perf_counter()
-    result = await _fetch(fetcher)
-    assert result.content == huge
+    with pytest.raises(ProviderOutputError):
+        await _fetch(fetcher)
     assert time.perf_counter() - started < 2
 
 
