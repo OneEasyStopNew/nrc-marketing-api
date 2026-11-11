@@ -21,6 +21,7 @@ from app.services.providers.base import (
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
+    ProviderOutputExpiredError,
     ProviderRateLimitedError,
     ProviderRejectedError,
     ProviderUnavailableError,
@@ -282,7 +283,7 @@ async def test_fetch_output_without_images_or_after_expiry_fails() -> None:
         output_urls=(OUTPUT_URL,),
         outputs_expire_at=datetime.now(UTC) - timedelta(seconds=1),
     )
-    with pytest.raises(ProviderOutputError):
+    with pytest.raises(ProviderOutputExpiredError):
         await provider.fetch_output(expired)
 
 

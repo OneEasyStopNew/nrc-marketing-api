@@ -36,6 +36,7 @@ from app.services.providers.base import (
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
+    ProviderOutputExpiredError,
     ProviderRateLimitedError,
     ProviderRejectedError,
     ProviderUnavailableError,
@@ -263,7 +264,8 @@ class HiggsfieldProvider:
         if not result.output_urls:
             raise ProviderOutputError("Higgsfield result has no output image")
         if result.outputs_expire_at is not None and result.outputs_expire_at <= datetime.now(UTC):
-            raise ProviderOutputError("Higgsfield output has expired")
+            # Billed already; the worker ends the job FAILED OUTPUT_EXPIRED with charges kept.
+            raise ProviderOutputExpiredError("Higgsfield output has expired")
         return await self._fetcher(
             result.output_urls[0], allowed_hosts=self._allowed_hosts, max_bytes=self._max_bytes
         )

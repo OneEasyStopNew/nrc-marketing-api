@@ -547,6 +547,33 @@ async def test_expired_output_fails_with_credits_and_spend_committed(
     assert (await _event(connection)).processed_at is not None
 
 
+async def test_output_expiring_at_fetch_time_ends_the_same_way(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    # The worker's clock still sees the output as live; the adapter's own check at fetch time
+    # finds it expired. One rule: FAILED OUTPUT_EXPIRED, charged.
+    fake = FakeHiggsfield()
+    await _accepted_and_in_progress(sessions, fake, connection, world)
+    reserved, committed = await _spend(connection, "higgsfield")
+    fake.status_body = _completed(datetime.now(UTC) - timedelta(seconds=1))
+    fetched: list[str] = []
+
+    async def fetcher(url: str, *, allowed_hosts: frozenset[str], max_bytes: int) -> FetchedImage:
+        fetched.append(url)
+        raise ProviderOutputError("an expired output is never fetched")
+
+    provider = higgsfield(fake, fetcher, frozenset({OUTPUT_HOST}))
+    await run_at(sessions, provider, datetime.now(UTC) - timedelta(minutes=5), _sink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    spent = await _spend(connection, "higgsfield")
+    assert spent == (reserved - ESTIMATE_MICROS, committed + ESTIMATE_MICROS)
+    assert not fetched
+
+
 async def test_accepted_job_past_deadline_is_parked_once_attempts_run_out(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
