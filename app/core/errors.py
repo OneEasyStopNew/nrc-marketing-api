@@ -55,7 +55,7 @@ class StudySnapshotMissingError(ConflictError):
 
 
 class GenerationNotEligibleError(ConflictError):
-    # details.reason says which check failed (e.g. STUDY_NOT_RECRUITING).
+    # details.reason says which check failed (e.g. STUDY_CLOSED).
     code = "GENERATION_NOT_ELIGIBLE"
     default_message = "This creative version cannot be sent for image generation."
 

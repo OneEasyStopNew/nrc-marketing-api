@@ -46,7 +46,7 @@ from app.models import CreativeVersion, Job, OutboxEvent
 from app.models.enums import FORMAT_SPECS, ExecutionState, JobStage
 from app.models.jobs import FAILURE_MESSAGE_MAX_CHARS, ReservationState
 from app.schemas.jobs import JobKind
-from app.services import eligibility, spend
+from app.services import generation_checks, spend
 from app.services.assets import StoredImageSink, emit_asset_generated
 from app.services.jobs import (
     NON_TERMINAL_STATES,
@@ -968,7 +968,7 @@ def check_live_mode(settings: Settings) -> None:
     if not settings.aws_s3_bucket:
         # Without storage, finished jobs would park forever; production never runs that way.
         problems.append("missing AWS_S3_BUCKET (generated images need storage)")
-    if eligibility.VALIDATION_GATE_IS_STUB:
+    if generation_checks.VALIDATION_GATE_IS_STUB:
         problems.append("the validation-PASS gate is still the stub (NRC-7)")
     if problems:
         raise WorkerConfigError(f"GENERATION_MODE=live refused: {'; '.join(problems)}")
