@@ -42,10 +42,12 @@ class Settings(BaseSettings):
     # Image generation (NRC-6, NRC-10). Live mode never falls back to the simulator.
     generation_mode: Literal["simulator", "live"] = "simulator"
     generation_max_active_jobs_per_tenant: int = Field(default=2, ge=1, le=50)
-    generation_daily_credit_ceiling_per_tenant: int = Field(default=20, ge=0)
-    generation_credits_per_image: int = Field(default=1, ge=1)
+    # Upper bounds on spend limits stop a typo (an extra zero) from lifting the cap entirely.
+    generation_daily_credit_ceiling_per_tenant: int = Field(default=20, ge=0, le=1000)
+    generation_credits_per_image: int = Field(default=1, ge=1, le=100)
     # A job whose provider estimate is above this fails before anything is submitted.
-    generation_max_cost_usd_per_image: Decimal = Field(default=Decimal("0.10"), ge=0)
+    # One dollar is ten times the default; a still image costing more is a misconfiguration.
+    generation_max_cost_usd_per_image: Decimal = Field(default=Decimal("0.10"), ge=0, le=1)
     # Cap on provider spend across all tenants (reserved estimates plus committed costs), kept per
     # provider in provider_spend. A job that would pass it fails BUDGET_EXHAUSTED before submit.
     generation_global_budget_usd: Decimal = Field(default=Decimal(40), ge=0)
@@ -95,9 +97,12 @@ class Settings(BaseSettings):
     s3_connect_timeout_seconds: float = Field(default=5, gt=0, le=60)
     s3_read_timeout_seconds: float = Field(default=30, gt=0, le=300)
     s3_max_retries: int = Field(default=3, ge=0, le=10)
-    max_generated_image_bytes: int = Field(default=10_485_760, ge=1024)
-    max_image_pixels: int = Field(default=25_000_000, ge=1)
-    asset_url_ttl_seconds: int = Field(default=900, ge=60, le=3600)
+    # The whole image is held in memory while it is checked and stored: 50 MiB at most.
+    max_generated_image_bytes: int = Field(default=10_485_760, ge=1024, le=52_428_800)
+    # Decoding allocates about 4 bytes per pixel, so 100 megapixels bounds it near 400 MB.
+    max_image_pixels: int = Field(default=25_000_000, ge=1, le=100_000_000)
+    # The S3 standard caps presigned links at 15 minutes.
+    asset_url_ttl_seconds: int = Field(default=900, ge=60, le=900)
 
     @field_validator("cognito_client_ids", "cors_origins", "higgsfield_output_hosts", mode="before")
     @classmethod

@@ -82,6 +82,7 @@ from app.services.storage import ObjectStorage
 
 logger = logging.getLogger(__name__)
 
+# Failure codes the worker stores on jobs and events. The values are shown to the UI: keep them.
 # The provider saw this key with a different body: resending can never reconcile it.
 IDEMPOTENCY_CONFLICT: Final = "PROVIDER_IDEMPOTENCY_CONFLICT"
 BUDGET_EXHAUSTED: Final = "BUDGET_EXHAUSTED"
@@ -94,6 +95,17 @@ OUTPUT_UNAVAILABLE: Final = "OUTPUT_UNAVAILABLE"
 OUTPUT_EXPIRED: Final = ProviderOutputExpiredError.code
 # Accepted, but still queued or in progress at the provider when the grace window ended.
 PROVIDER_STILL_RUNNING: Final = "PROVIDER_STILL_RUNNING"
+DEADLINE_EXCEEDED: Final = "DEADLINE_EXCEEDED"
+PROVIDER_NOT_CONFIGURED: Final = "PROVIDER_NOT_CONFIGURED"
+COST_ABOVE_LIMIT: Final = "COST_ABOVE_LIMIT"
+# Used when a failed, rejected or canceled provider status carries no reason of its own.
+PROVIDER_STATUS_FAILURE_CODES: Final[Mapping[ProviderJobStatus, str]] = MappingProxyType(
+    {
+        ProviderJobStatus.FAILED: "PROVIDER_FAILED",
+        ProviderJobStatus.REJECTED: "PROVIDER_REJECTED",
+        ProviderJobStatus.CANCELED: "PROVIDER_CANCELED",
+    }
+)
 _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type"
     " FROM lease_outbox_events(:owner, 1, :lease, :event_types)"
@@ -241,12 +253,12 @@ class ImageGenerationHandler:
         # polling: _poll parks it as UNKNOWN once it is still unfinished past the grace window,
         # and a completed one is fetched (stage fetching_output) until its output expires.
         if job.deadline_at <= step.now and not accepted:
-            await _give_up(db, job, "DEADLINE_EXCEEDED", "The job did not finish in time.")
+            await _give_up(db, job, DEADLINE_EXCEEDED, "The job did not finish in time.")
             return None
         provider = step.providers.get(job.provider or "")
         if provider is None:
             # Live mode never falls back to the simulator, and the simulator never runs live jobs.
-            await _give_up(db, job, "PROVIDER_NOT_CONFIGURED", "No provider for this job.")
+            await _give_up(db, job, PROVIDER_NOT_CONFIGURED, "No provider for this job.")
             return None
         if job.state is ExecutionState.QUEUED or (
             job.state is ExecutionState.RUNNING and job.stage != JobStage.SUBMITTING
@@ -287,7 +299,7 @@ class ImageGenerationHandler:
                 await _fail_with(
                     db,
                     job.id,
-                    "COST_ABOVE_LIMIT",
+                    COST_ABOVE_LIMIT,
                     "The provider's price is above the per-image limit.",
                     billed=False,
                     provider_cost_estimate_usd_micros=micros,
@@ -428,7 +440,7 @@ class ImageGenerationHandler:
                 return None
             return backoff_seconds(step.event_attempts, step.settings)
         if status.status is not ProviderJobStatus.COMPLETED:
-            code = status.failure_code or f"PROVIDER_{status.status.value.upper()}"
+            code = status.failure_code or PROVIDER_STATUS_FAILURE_CODES[status.status]
             # The provider bills completed generations only.
             await _fail_with(
                 db, job.id, code, "The provider did not produce an image.", billed=False
