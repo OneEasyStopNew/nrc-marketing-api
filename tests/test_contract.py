@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
+from app.models.enums import JobStage
 from app.schemas.assets import AssetRead
 from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeRead, CreativeVersionPage
@@ -35,6 +36,26 @@ def test_published_openapi_is_current() -> None:
     assert CONTRACT_PATH.read_text(encoding="utf-8") == render(), (
         "contracts/openapi.json is stale: run `uv run python -m scripts.export_openapi`"
     )
+
+
+def test_job_stage_is_a_published_enum() -> None:
+    # The UI switches on stage, so the contract lists every value instead of any string.
+    schemas = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))["components"]["schemas"]
+
+    assert schemas["JobRead"]["properties"]["stage"]["anyOf"] == [
+        {"$ref": "#/components/schemas/JobStage"},
+        {"type": "null"},
+    ]
+    assert schemas["JobStage"]["enum"] == [stage.value for stage in JobStage]
+    assert [stage.value for stage in JobStage] == [
+        "submitting",
+        "retry_wait",
+        "reconcile",
+        "waiting_provider",
+        "output_ready",
+        "fetching_output",
+        "stored",
+    ]
 
 
 def _examples() -> list[tuple[str, str]]:

@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import ExecutionState, enum_column
+from app.models.enums import ExecutionState, JobStage, enum_column
 
 # jobs.failure_message column size; writers truncate to it.
 FAILURE_MESSAGE_MAX_CHARS = 500
@@ -81,7 +81,7 @@ class Job(Base):
     study_snapshot_version: Mapped[int]
     policy_bundle_version: Mapped[str | None] = mapped_column(String(64))
     state: Mapped[ExecutionState] = mapped_column(enum_column(ExecutionState))
-    stage: Mapped[str | None] = mapped_column(String(32))
+    stage: Mapped[JobStage | None] = mapped_column(enum_column(JobStage))
     attempt_count: Mapped[int] = mapped_column(default=0)
     max_attempts: Mapped[int]
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

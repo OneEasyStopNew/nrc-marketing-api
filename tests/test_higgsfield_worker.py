@@ -22,11 +22,16 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant
 from app.models import Asset
-from app.models.enums import ExecutionState
+from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState, SpendState
 from app.services.assets import StoredImageSink
 from app.services.fetch import SafeFetcher
-from app.services.providers.base import FetchedImage, OutputFetcher, ProviderOutputError
+from app.services.providers.base import (
+    FetchedImage,
+    OutputFetcher,
+    ProviderOutputError,
+    ProviderUnavailableError,
+)
 from app.services.providers.higgsfield import HiggsfieldProvider
 from app.services.storage import ObjectStorage, StoredObject
 from app.workers.connector import GeneratedImageSink, run_once
@@ -157,10 +162,10 @@ async def run(
     return await run_once(sessions, {"higgsfield": provider}, sink, get_settings())
 
 
-FAIL_NOW = (ExecutionState.FAILED, "submitting", ReservationState.RELEASED, True)
-RETRY = (ExecutionState.RUNNING, "retry_wait", ReservationState.RESERVED, False)
-RECONCILE = (ExecutionState.UNKNOWN, "reconcile", ReservationState.HELD, False)
-REVIEW = (ExecutionState.UNKNOWN, "reconcile", ReservationState.HELD, True)
+FAIL_NOW = (ExecutionState.FAILED, JobStage.SUBMITTING, ReservationState.RELEASED, True)
+RETRY = (ExecutionState.RUNNING, JobStage.RETRY_WAIT, ReservationState.RESERVED, False)
+RECONCILE = (ExecutionState.UNKNOWN, JobStage.RECONCILE, ReservationState.HELD, False)
+REVIEW = (ExecutionState.UNKNOWN, JobStage.RECONCILE, ReservationState.HELD, True)
 
 
 @pytest.mark.parametrize(
@@ -204,7 +209,7 @@ async def test_submit_outcome_by_status(
     caplog: pytest.LogCaptureFixture,
     answer: Answer,
     code: str | None,
-    outcome: tuple[ExecutionState, str, ReservationState, bool],
+    outcome: tuple[ExecutionState, JobStage, ReservationState, bool],
 ) -> None:
     fake = FakeHiggsfield()
     fake.submit_answers = [answer]
@@ -359,6 +364,196 @@ async def test_submit_5xx_after_acceptance_reconciles_to_one_charge_and_one_imag
     assert "provider_size=1536x1536 stored_size=1080x1080" in caplog.text
     assert "SIGNED" not in caplog.text
     assert OUTPUT_HOST not in caplog.text
+
+
+ESTIMATE_MICROS = 50_000
+
+
+def _completed(expires_at: datetime) -> Callable[[str], dict[str, Any]]:
+    return lambda request_id: {
+        "status": "completed",
+        "request_id": request_id,
+        "images": [{"url": OUTPUT_URL}],
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+    }
+
+
+def _past_deadline() -> datetime:
+    return datetime.now(UTC) + timedelta(seconds=get_settings().generation_deadline_seconds * 2)
+
+
+async def _accepted_then_past_deadline(
+    sessions: Sessions, fake: FakeHiggsfield, connection: AsyncConnection, world: World
+) -> datetime:
+    # Higgsfield accepts the job and is still working on it when the deadline passes.
+    await run(sessions, higgsfield(fake))
+    await _requeue(connection, world)
+    return _past_deadline()
+
+
+async def run_at(
+    sessions: Sessions,
+    provider: HiggsfieldProvider,
+    now: datetime,
+    sink: GeneratedImageSink | None = None,
+) -> int:
+    return await run_once(sessions, {"higgsfield": provider}, sink, get_settings(), now=now)
+
+
+def _sink() -> StoredImageSink:
+    return StoredImageSink(ObjectStorage(get_settings()), get_settings())
+
+
+@needs_seaweedfs
+async def test_accepted_job_past_deadline_still_stores_the_completed_image(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    later = await _accepted_then_past_deadline(sessions, fake, connection, world)
+    reserved, committed = await _spend(connection, "higgsfield")
+    fake.status_body = _completed(later + timedelta(days=7))
+    provider = higgsfield(fake, _output_server(_png_1536()), frozenset({OUTPUT_HOST}))
+
+    await run_at(sessions, provider, later, _sink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
+    assert job.result_asset_id is not None
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    spent = await _spend(connection, "higgsfield")
+    assert spent == (reserved - ESTIMATE_MICROS, committed + ESTIMATE_MICROS)
+    assert len(fake.submit_keys) == 1
+
+
+async def test_accepted_job_past_deadline_keeps_polling_while_in_progress(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    later = await _accepted_then_past_deadline(sessions, fake, connection, world)
+    spent = await _spend(connection, "higgsfield")
+    polls: list[str] = []
+
+    def in_progress(request_id: str) -> dict[str, Any]:
+        polls.append(request_id)
+        return {"status": "in_progress", "request_id": request_id}
+
+    fake.status_body = in_progress
+    provider = higgsfield(fake)
+
+    for _ in range(2):
+        await run_at(sessions, provider, later)
+        job, reservation = await _load(sessions, world, job_id)
+        assert (job.state, job.stage) == (
+            ExecutionState.WAITING_PROVIDER,
+            JobStage.WAITING_PROVIDER,
+        )
+        assert reservation is ReservationState.RESERVED
+        assert job.provider_spend_state is SpendState.RESERVED
+        assert (await _event(connection)).processed_at is None
+        await _requeue(connection, world)
+
+    assert polls == [job.provider_request_id] * 2
+    assert await _spend(connection, "higgsfield") == spent
+    assert len(fake.submit_keys) == 1
+
+
+async def test_accepted_job_past_deadline_fails_when_higgsfield_fails(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    later = await _accepted_then_past_deadline(sessions, fake, connection, world)
+    reserved, committed = await _spend(connection, "higgsfield")
+    fake.status_body = lambda request_id: {"status": "failed", "request_id": request_id}
+
+    await run_at(sessions, higgsfield(fake), later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "provider_failed")
+    assert reservation is ReservationState.RELEASED
+    assert job.provider_spend_state is SpendState.RELEASED
+    assert await _spend(connection, "higgsfield") == (reserved - ESTIMATE_MICROS, committed)
+
+
+async def test_accepted_job_past_deadline_with_expired_output_is_parked(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    later = await _accepted_then_past_deadline(sessions, fake, connection, world)
+    spent = await _spend(connection, "higgsfield")
+    # Higgsfield's expires_at: after it the files are deleted and the output URLs stop working.
+    fake.status_body = _completed(later - timedelta(hours=1))
+    fetched: list[str] = []
+
+    async def fetcher(url: str, *, allowed_hosts: frozenset[str], max_bytes: int) -> FetchedImage:
+        fetched.append(url)
+        raise ProviderOutputError("an expired output is never fetched")
+
+    await run_at(sessions, higgsfield(fake, fetcher, frozenset({OUTPUT_HOST})), later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage, job.failure_code) == (
+        ExecutionState.UNKNOWN,
+        JobStage.RECONCILE,
+        "OUTPUT_EXPIRED",
+    )
+    # Higgsfield billed the completed generation: credits and spend stay held for review.
+    assert reservation is ReservationState.HELD
+    assert job.provider_spend_state is SpendState.RESERVED
+    assert await _spend(connection, "higgsfield") == spent
+    assert not fetched
+    assert (await _event(connection)).processed_at is not None
+
+
+async def test_accepted_job_past_deadline_is_parked_once_attempts_run_out(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    later = await _accepted_then_past_deadline(sessions, fake, connection, world)
+    spent = await _spend(connection, "higgsfield")
+    # As if the event had already failed GENERATION_MAX_ATTEMPTS times (crashes, lost leases).
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    await connection.execute(
+        text("UPDATE outbox_events SET failed_attempts = :n"),
+        {"n": get_settings().generation_max_attempts},
+    )
+
+    await run_at(sessions, higgsfield(fake), later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "ATTEMPTS_EXHAUSTED")
+    assert reservation is ReservationState.HELD
+    assert job.provider_spend_state is SpendState.RESERVED
+    assert await _spend(connection, "higgsfield") == spent
+
+
+@needs_seaweedfs
+async def test_job_fetching_output_past_deadline_keeps_fetching(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    fake.status_body = _completed(datetime.now(UTC) + timedelta(days=7))
+
+    async def cdn_down(url: str, *, allowed_hosts: frozenset[str], max_bytes: int) -> FetchedImage:
+        raise ProviderUnavailableError("CDN unavailable")
+
+    await run(sessions, higgsfield(fake, cdn_down, frozenset({OUTPUT_HOST})), _sink())
+    fetching, _ = await _load(sessions, world, job_id)
+    await _requeue(connection, world)
+    provider = higgsfield(fake, _output_server(_png_1536()), frozenset({OUTPUT_HOST}))
+
+    await run_at(sessions, provider, _past_deadline(), _sink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (fetching.state, fetching.stage) == (
+        ExecutionState.WAITING_PROVIDER,
+        JobStage.FETCHING_OUTPUT,
+    )
+    assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
 
 
 def test_http_client_request_urls_are_never_logged() -> None:

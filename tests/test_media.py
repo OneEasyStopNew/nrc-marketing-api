@@ -1,12 +1,26 @@
 import struct
+import subprocess
+import sys
+import warnings
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from pathlib import Path
 
 import pytest
+from asgi_lifespan import LifespanManager
 from PIL import Image
 
-from app.services.media import MediaRejectedError, fit_to_format, inspect_image
+from app.core.config import get_settings
+from app.main import create_app
+from app.services.media import (
+    MediaRejectedError,
+    configure_pillow,
+    fit_to_format,
+    inspect_header,
+    inspect_image,
+)
+from app.workers import connector
 
 MAX_PIXELS = 1_000_000
 
@@ -87,8 +101,7 @@ def test_global_pillow_limit_is_never_mutated_by_inspection() -> None:
     inspect_image(_image("PNG"), max_pixels=MAX_PIXELS)
     with pytest.raises(MediaRejectedError):
         inspect_image(_image("PNG", (200, 100)), max_pixels=10_000)
-    assert before is None
-    assert Image.MAX_IMAGE_PIXELS is None
+    assert before == Image.MAX_IMAGE_PIXELS
 
 
 def test_concurrent_calls_with_different_limits_are_independent() -> None:
@@ -101,28 +114,81 @@ def test_concurrent_calls_with_different_limits_are_independent() -> None:
             return False
         return True
 
+    before = Image.MAX_IMAGE_PIXELS
     limits = [10_000, 1_000_000] * 20
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(attempt, limits))
     assert results == [limit >= 20_000 for limit in limits]
-    assert Image.MAX_IMAGE_PIXELS is None
+    assert before == Image.MAX_IMAGE_PIXELS
 
 
-def test_oversized_dimensions_are_rejected_before_decoding() -> None:
+def _png_header_only(width: int, height: int) -> bytes:
+    # A few bytes that declare width x height pixels; nothing large is ever allocated.
     def chunk(kind: bytes, data: bytes) -> bytes:
         return (
             struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
         )
 
-    png = (
+    return (
         b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", 50_000, 50_000, 8, 2, 0, 0, 0))
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
         + chunk(b"IDAT", zlib.compress(b"\x00"))
         + chunk(b"IEND", b"")
     )
+
+
+def test_oversized_dimensions_are_rejected_before_decoding() -> None:
     with pytest.raises(MediaRejectedError) as raised:
-        inspect_image(png, max_pixels=MAX_PIXELS)
+        inspect_image(_png_header_only(50_000, 50_000), max_pixels=MAX_PIXELS)
     assert raised.value.code == "MEDIA_TOO_LARGE"
+
+
+# 120 x 100 is in Pillow's warning range (over the limit); 200 x 100 is in its error range
+# (over twice the limit). Both must be MEDIA_TOO_LARGE, not MEDIA_CORRUPT or an escape.
+@pytest.mark.parametrize("size", [(120, 100), (200, 100)])
+def test_header_over_pillow_limit_is_too_large(size: tuple[int, int]) -> None:
+    configure_pillow(get_settings().model_copy(update={"max_image_pixels": 10_000}))
+    with pytest.raises(MediaRejectedError) as raised:
+        inspect_header(_png_header_only(*size))
+    assert raised.value.code == "MEDIA_TOO_LARGE"
+
+
+def test_importing_media_leaves_pillow_limit_alone() -> None:
+    # A fresh interpreter, so the module-level code really runs.
+    code = (
+        "from PIL import Image\n"
+        "before = Image.MAX_IMAGE_PIXELS\n"
+        "import app.services.media\n"
+        "assert before is not None and Image.MAX_IMAGE_PIXELS == before\n"
+    )
+    root = Path(__file__).resolve().parents[1]
+    subprocess.run([sys.executable, "-c", code], check=True, cwd=root)  # noqa: S603
+
+
+def test_configure_pillow_sets_limit_and_makes_bomb_warning_an_error() -> None:
+    warnings.simplefilter("default")
+    configure_pillow(get_settings().model_copy(update={"max_image_pixels": 1234}))
+    assert Image.MAX_IMAGE_PIXELS == 1234
+    with pytest.raises(Image.DecompressionBombWarning):
+        warnings.warn("too many pixels", Image.DecompressionBombWarning, stacklevel=1)
+
+
+async def test_api_lifespan_configures_pillow() -> None:
+    Image.MAX_IMAGE_PIXELS = None
+    async with LifespanManager(create_app()):
+        assert get_settings().max_image_pixels == Image.MAX_IMAGE_PIXELS
+
+
+def test_worker_main_configures_pillow(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[int | None] = []
+
+    async def run_forever(settings: object) -> None:
+        seen.append(Image.MAX_IMAGE_PIXELS)
+
+    Image.MAX_IMAGE_PIXELS = None
+    monkeypatch.setattr(connector, "run_forever", run_forever)
+    connector.main()
+    assert seen == [get_settings().max_image_pixels]
 
 
 def test_mpo_is_accepted_as_jpeg() -> None:
@@ -228,3 +294,12 @@ def test_fit_rejects_a_corrupt_image() -> None:
     with pytest.raises(MediaRejectedError) as raised:
         fit_to_format(_image("PNG")[:-20], width_px=1080, height_px=1080, max_pixels=MAX_PIXELS)
     assert raised.value.code == "MEDIA_CORRUPT"
+
+
+# 120 x 100 is in Pillow's warning range (over the limit); 200 x 100 is in its error range.
+@pytest.mark.parametrize("size", [(120, 100), (200, 100)])
+def test_fit_to_format_respects_the_pillow_limit(size: tuple[int, int]) -> None:
+    configure_pillow(get_settings().model_copy(update={"max_image_pixels": 10_000}))
+    with pytest.raises(MediaRejectedError) as raised:
+        fit_to_format(_image("PNG", size), width_px=10, height_px=10, max_pixels=MAX_PIXELS)
+    assert raised.value.code == "MEDIA_TOO_LARGE"

@@ -1,13 +1,12 @@
 # Decoded-signature image checks. The claimed type and file extension are never trusted.
 
+import warnings
 from dataclasses import dataclass
 from io import BytesIO
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-# We enforce our own pixel cap before any decode. Pillow's limit is process-global and would
-# warn or raise inconsistently across threads, so it is switched off once, at import.
-Image.MAX_IMAGE_PIXELS = None
+from app.core.config import Settings
 
 _FORMATS = {
     "PNG": ("image/png", "png"),
@@ -31,6 +30,14 @@ class MediaRejectedError(ValueError):
         super().__init__(message)
 
 
+def configure_pillow(settings: Settings) -> None:
+    # Process-wide, so every Image.open() in the API or worker has a limit, not only ours.
+    # Call once at startup (API lifespan, worker main), before any image is opened.
+    Image.MAX_IMAGE_PIXELS = settings.max_image_pixels
+    # Pillow only warns between the limit and twice the limit; refuse those images too.
+    warnings.simplefilter("error", Image.DecompressionBombWarning)
+
+
 def inspect_header(content: bytes) -> ImageInfo:
     # Format and size from the header, plus Pillow's structural verify(). Never decodes pixels.
     if not content:
@@ -46,6 +53,8 @@ def inspect_header(content: bytes) -> ImageInfo:
             probe.verify()
     except MediaRejectedError:
         raise
+    except (Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
+        raise MediaRejectedError("MEDIA_TOO_LARGE", "The image has too many pixels") from exc
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
         raise MediaRejectedError(
             "MEDIA_CORRUPT", "The file is not a valid, complete image"
@@ -102,6 +111,8 @@ def fit_to_format(
             image = image.crop(box).resize((width_px, height_px), Image.Resampling.LANCZOS)
             out = BytesIO()
             image.save(out, format="PNG", compress_level=6)
+    except (Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
+        raise MediaRejectedError("MEDIA_TOO_LARGE", "The image has too many pixels") from exc
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
         raise MediaRejectedError(
             "MEDIA_CORRUPT", "The file is not a valid, complete image"
