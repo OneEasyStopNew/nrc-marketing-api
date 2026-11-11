@@ -4,6 +4,7 @@ import os
 import re
 import socket
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -27,6 +28,7 @@ from app.services.providers.base import (
     ImageRequest,
     ProviderConfigError,
     ProviderError,
+    ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
     ProviderRateLimitedError,
@@ -133,6 +135,9 @@ class ScriptedProvider(SimulatedImageProvider):
         self.submit_errors: list[Exception] = []
         self.status_error: ProviderError | None = None
         self.fetch_error: ProviderError | None = None
+        # Status polls still answered "in progress" before the real outcome is reported.
+        self.pending_polls = 0
+        self.outputs_expire_at: datetime | None = None
         self.estimates = 0
         self.before_estimate: Callable[[], Awaitable[None]] | None = None
         self.before_submit: Callable[[], Awaitable[None]] | None = None
@@ -154,7 +159,11 @@ class ScriptedProvider(SimulatedImageProvider):
     async def get_status(self, provider_request_id: str) -> StatusResult:
         if self.status_error is not None:
             raise self.status_error
-        return await super().get_status(provider_request_id)
+        result = await super().get_status(provider_request_id)
+        if self.pending_polls > 0:
+            self.pending_polls -= 1
+            return StatusResult(provider_request_id, ProviderJobStatus.IN_PROGRESS)
+        return replace(result, outputs_expire_at=self.outputs_expire_at)
 
     async def fetch_output(self, result: StatusResult) -> FetchedImage:
         if self.fetch_error is not None:
@@ -315,6 +324,105 @@ async def test_job_past_deadline_fails_without_submitting(
     assert job.failure_code == "DEADLINE_EXCEEDED"
     assert not provider.submits
     assert reservation is ReservationState.RELEASED
+
+
+async def _accepted_then_past_deadline(
+    sessions: Sessions,
+    provider: ScriptedProvider,
+    sink: FakeSink,
+    connection: AsyncConnection,
+    world: World,
+) -> datetime:
+    # The provider accepts the job and is still working on it when the deadline passes.
+    provider.pending_polls = 1
+    await _run(sessions, provider, sink)
+    await _requeue(connection, world)
+    return datetime.now(UTC) + timedelta(days=2)
+
+
+async def test_accepted_job_past_deadline_still_fetches_a_completed_image(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
+    assert job.result_asset_id == sink.stored[0]
+    assert reservation is ReservationState.COMMITTED
+    assert sum(provider.submits.values()) == 1
+
+
+async def test_accepted_job_past_deadline_keeps_polling_while_in_progress(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    provider.pending_polls = 2
+
+    for _ in range(2):
+        await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+        job, reservation = await _load(sessions, world, job_id)
+        assert (job.state, job.stage) == (
+            ExecutionState.WAITING_PROVIDER,
+            JobStage.WAITING_PROVIDER,
+        )
+        assert reservation is ReservationState.RESERVED
+        assert (await _event(connection)).processed_at is None
+        await _requeue(connection, world)
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+
+
+async def test_accepted_job_past_deadline_fails_when_the_provider_fails(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    provider.scenario = SimulatorScenario.PROVIDER_FAILED
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "SIMULATED_FAILURE")
+    assert reservation is ReservationState.RELEASED
+
+
+async def test_accepted_job_past_deadline_with_expired_output_is_parked(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    provider.outputs_expire_at = later - timedelta(hours=1)
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.HELD
+    assert not sink.stored
+    assert (await _event(connection)).processed_at is not None
+
+
+async def test_accepted_job_past_deadline_is_parked_once_attempts_run_out(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    provider.pending_polls = 1
+    await connection.execute(
+        text("UPDATE outbox_events SET attempts = :n"), {"n": MAX_EVENT_ATTEMPTS}
+    )
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "ATTEMPTS_EXHAUSTED")
+    assert reservation is ReservationState.HELD
 
 
 async def test_simulated_cost_above_cap_fails_without_submitting(

@@ -71,6 +71,7 @@ LEASE_MAX_SECONDS: Final = 600
 NO_HANDLER_RETRY_SECONDS: Final = 60.0
 # The provider saw this key with a different body: resending can never reconcile it.
 IDEMPOTENCY_CONFLICT: Final = "PROVIDER_IDEMPOTENCY_CONFLICT"
+OUTPUT_EXPIRED: Final = "OUTPUT_EXPIRED"
 _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type FROM lease_outbox_events(:owner, 1, :lease)"
 )
@@ -152,7 +153,13 @@ class ImageGenerationHandler:
     async def handle(self, db: AsyncSession, job: Job, step: Step) -> float | None:
         if job.state in TERMINAL_STATES:
             return None
-        if job.deadline_at <= step.now:
+        accepted = (
+            job.state is ExecutionState.WAITING_PROVIDER and job.provider_request_id is not None
+        )
+        # An accepted job is billed when it completes, so the deadline never stops its polling:
+        # it runs until the provider reports a final status, the output expires or the event's
+        # attempts run out (then it is parked as UNKNOWN with the credits held).
+        if job.deadline_at <= step.now and not accepted:
             await _give_up(db, job, "DEADLINE_EXCEEDED", "The job did not finish in time.")
             return None
         provider = step.providers.get(job.provider or "")
@@ -305,6 +312,10 @@ class ImageGenerationHandler:
             await _fail_with(
                 db, job.id, code, "The provider did not produce an image.", billed=False
             )
+            return None
+        if status.outputs_expire_at is not None and status.outputs_expire_at <= step.now:
+            # Billed, but the image can no longer be fetched: hold the credits for review.
+            await _park_unknown(db, job.id, OUTPUT_EXPIRED)
             return None
         if step.sink is None:
             await transition(
