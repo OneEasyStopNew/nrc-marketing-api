@@ -42,8 +42,8 @@ from app.core.config import (
 )
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
-from app.models import CreativeVersion, Job, OutboxEvent
-from app.models.enums import FORMAT_SPECS, ExecutionState, JobStage
+from app.models import Job, OutboxEvent
+from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import FAILURE_MESSAGE_MAX_CHARS, ReservationState
 from app.schemas.jobs import JobKind
 from app.services import generation_checks, spend
@@ -52,6 +52,7 @@ from app.services.jobs import (
     NON_TERMINAL_STATES,
     RUN_EVENT,
     TERMINAL_STATES,
+    job_content,
     provider_idempotency_key,
     settle_reservation,
     transition,
@@ -804,16 +805,8 @@ async def _finish_event(
 
 
 async def _image_request(db: AsyncSession, job: Job) -> ImageRequest:
-    content = (
-        await db.execute(
-            select(CreativeVersion.prompt, CreativeVersion.post_format).where(
-                CreativeVersion.tenant_id == job.tenant_id,
-                CreativeVersion.creative_id == job.creative_id,
-                CreativeVersion.version == job.creative_version,
-            )
-        )
-    ).one()
-    spec = FORMAT_SPECS[content.post_format]
+    content = await job_content(db, job)
+    spec = content.spec
     return ImageRequest(
         prompt=content.prompt,
         width_px=spec.width_px,

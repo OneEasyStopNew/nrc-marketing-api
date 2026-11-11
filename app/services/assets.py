@@ -12,10 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.access import TenantContext
 from app.core.config import Settings
 from app.core.errors import DependencyUnavailableError, NotFoundError
-from app.models import Asset, Creative, CreativeVersion, Job, OutboxEvent
-from app.models.enums import FORMAT_SPECS
+from app.models import Asset, Creative, Job, OutboxEvent
 from app.schemas.assets import AssetOrigin, AssetRead
 from app.services import media
+from app.services.jobs import job_content
 from app.services.media import MediaRejectedError
 from app.services.providers.base import FetchedImage, ProviderError, ProviderOutputError
 from app.services.storage import ObjectStorage, StorageError
@@ -54,16 +54,7 @@ class StoredImageSink:
             raise ProviderOutputError(str(error)) from error
         if info.mime_type != image.content_type:
             raise ProviderOutputError("The provider output type does not match its content.")
-        post_format = await db.scalar(
-            select(CreativeVersion.post_format).where(
-                CreativeVersion.tenant_id == job.tenant_id,
-                CreativeVersion.creative_id == job.creative_id,
-                CreativeVersion.version == job.creative_version,
-            )
-        )
-        if post_format is None:
-            raise LookupError("The job's creative version is not visible in this transaction")
-        spec = FORMAT_SPECS[post_format]
+        spec = (await job_content(db, job)).spec
         # The stored bytes are what image validation reads: exactly the format's size, as PNG.
         try:
             content, stored_info = await asyncio.to_thread(
