@@ -115,7 +115,9 @@ storage.
   Higgsfield answers with another host, the worker logs `provider output host not allowed ...
   host=<host>` at ERROR (host only, never the URL) and keeps the job waiting, retrying with
   backoff. To recover, add that host to `HIGGSFIELD_OUTPUT_HOSTS` and restart the worker before
-  the output expires; after expiry the job fails `OUTPUT_EXPIRED` (billed).
+  the output expires; after expiry the job fails `OUTPUT_EXPIRED` (billed). Without an
+  `expires_at` from Higgsfield, expiry is `PROVIDER_OUTPUT_RETENTION_FALLBACK_SECONDS` (7 days)
+  after the worker first saw the output completed.
 
 ## Checks
 

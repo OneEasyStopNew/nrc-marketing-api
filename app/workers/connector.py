@@ -68,6 +68,7 @@ from app.services.providers.base import (
     ProviderOutcomeUnknownError,
     ProviderOutputExpiredError,
     ProviderOutputHostError,
+    StatusResult,
     SubmitResult,
 )
 from app.services.providers.higgsfield import (
@@ -445,7 +446,7 @@ class ImageGenerationHandler:
         )
         # From here on the grace window no longer applies: the provider billed, so the output is
         # fetched until it expires. An expired output is never fetched.
-        if status.outputs_expire_at is not None and status.outputs_expire_at <= step.now:
+        if _output_expires_at(job, status, step) <= step.now:
             # Billed for a completed generation that can no longer be kept.
             await _fail_with(
                 db,
@@ -875,6 +876,29 @@ def _log_stuck_unknown(job: Job, reason: str) -> None:
         job.stage,
         reason,
     )
+
+
+def _output_expires_at(job: Job, status: StatusResult, step: Step) -> datetime:
+    """When a completed output stops being downloadable.
+
+    The provider's expiry if it gave one; otherwise PROVIDER_OUTPUT_RETENTION_FALLBACK_SECONDS
+    after the worker first saw the output completed. That moment is the job's updated_at once it
+    is in stage fetching_output: the transition into that stage is committed before the first
+    download, and nothing updates the job again until it leaves the stage, so it survives worker
+    restarts without a new column. Before that transition, it is now.
+    """
+    if status.outputs_expire_at is not None:
+        return status.outputs_expire_at
+    logger.warning(
+        "provider output has no expires_at, assuming the retention fallback job=%s tenant=%s "
+        "provider_request=%s",
+        job.id,
+        job.tenant_id,
+        status.provider_request_id,
+    )
+    seen_completed = job.updated_at if job.stage == JobStage.FETCHING_OUTPUT else step.now
+    fallback = timedelta(seconds=step.settings.provider_output_retention_fallback_seconds)
+    return seen_completed + fallback
 
 
 def _log_output_host_refused(job: Job, provider_request_id: str, host: str) -> None:

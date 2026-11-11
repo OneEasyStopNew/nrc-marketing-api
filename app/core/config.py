@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     higgsfield_output_hosts: Annotated[tuple[str, ...], NoDecode] = ()
     # Downloading one provider output; the worker also caps it at half its lease.
     provider_output_fetch_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    # How long a completed output is assumed to stay downloadable when the provider's status
+    # gives no expiry, counted from when the worker first saw it completed. Default: 7 days,
+    # Higgsfield's documented minimum retention.
+    provider_output_retention_fallback_seconds: int = Field(default=604_800, ge=3600, le=1_209_600)
 
     # Media storage (NRC-3). The bucket comes only from configuration, never from code.
     aws_region: str = "us-east-1"

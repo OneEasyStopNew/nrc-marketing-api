@@ -713,6 +713,82 @@ async def test_unlisted_output_host_ends_output_expired_once_the_output_expires(
     assert (await _event(connection)).processed_at is not None
 
 
+FALLBACK_SECONDS = 3600
+
+
+def _completed_without_expiry(request_id: str) -> dict[str, Any]:
+    return {"status": "completed", "request_id": request_id, "images": [{"url": OUTPUT_URL}]}
+
+
+async def run_with_fallback(
+    sessions: Sessions, provider: HiggsfieldProvider, now: datetime | None = None
+) -> int:
+    settings = get_settings().model_copy(
+        update={"provider_output_retention_fallback_seconds": FALLBACK_SECONDS}
+    )
+    return await run_once(sessions, {"higgsfield": provider}, _sink(), settings, now=now)
+
+
+@needs_seaweedfs
+async def test_unlisted_host_without_expiry_ends_output_expired_after_the_retention_fallback(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake = FakeHiggsfield()
+    fake.status_body = _completed_without_expiry
+    reserved, committed = await _spend(connection, "higgsfield")
+    seen_completed = datetime.now(UTC)
+
+    with caplog.at_level(logging.WARNING, logger="app.workers.connector"):
+        # Each round is a fresh provider, as after a worker restart.
+        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1080())))
+        await _requeue(connection, world)
+        within = seen_completed + timedelta(seconds=FALLBACK_SECONDS / 2)
+        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1080())), within)
+        waiting, _ = await _load(sessions, world, job_id)
+        await _requeue(connection, world)
+        past = seen_completed + timedelta(seconds=FALLBACK_SECONDS + 60)
+        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1080())), past)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (waiting.state, waiting.stage) == (
+        ExecutionState.WAITING_PROVIDER,
+        JobStage.FETCHING_OUTPUT,
+    )
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    assert await _spend(connection, "higgsfield") == (reserved, committed + ESTIMATE_MICROS)
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "expires_at" in r.getMessage()
+    ]
+    assert warnings
+    assert all(f"job={job.id}" in message for message in warnings)
+    assert all(OUTPUT_HOST not in message for message in warnings)
+
+
+@needs_seaweedfs
+async def test_missing_expiry_with_an_allowed_host_still_stores_the_image(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    fake.status_body = _completed_without_expiry
+    reserved, committed = await _spend(connection, "higgsfield")
+    provider = higgsfield(fake, _output_server(_png_1080()), frozenset({OUTPUT_HOST}))
+
+    await run_with_fallback(sessions, provider)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
+    assert reservation is ReservationState.COMMITTED
+    assert await _spend(connection, "higgsfield") == (reserved, committed + ESTIMATE_MICROS)
+
+
 def test_http_client_request_urls_are_never_logged() -> None:
     # Output URLs are signed; httpx would log them at INFO.
     configure_logging("DEBUG")
