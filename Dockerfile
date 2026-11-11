@@ -15,7 +15,10 @@ FROM python:3.14-slim@sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e
 RUN useradd --system --uid 10001 --no-create-home app
 WORKDIR /app
 COPY --from=build --chown=app:app /app /app
-ENV PATH="/app/.venv/bin:$PATH" PYTHONSAFEPATH=1
+# PYTHONSAFEPATH keeps the working directory off sys.path, and the project isn't installed into
+# the venv, so PYTHONPATH names /app explicitly: `python -m app.workers.connector` (the worker
+# deployment's command) and alembic then import `app`; uvicorn already adds its app dir.
+ENV PATH="/app/.venv/bin:$PATH" PYTHONSAFEPATH=1 PYTHONPATH=/app
 USER app
 EXPOSE 8000
 # Keep-alive above the ALB's 60 s idle timeout; graceful shutdown inside the pod's grace period.
