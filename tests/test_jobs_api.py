@@ -58,8 +58,7 @@ async def _count(connection: AsyncConnection, tenant_id: UUID, table: str) -> in
     await connection.execute(
         text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_id)}
     )
-    # Table names come from the test itself, never from input.
-    result = await connection.execute(text(f"SELECT count(*) FROM {table}"))  # noqa: S608
+    result = await connection.execute(text(f"SELECT count(*) FROM {table}"))  # noqa: S608  table is a literal name passed by the calling test, never input
     return int(result.scalar_one())
 
 
@@ -268,7 +267,7 @@ async def test_parallel_duplicate_jobs_make_one_job(
     async with engine.connect() as conn:
         for table in ("jobs", "credit_reservations", "outbox_events"):
             count = await conn.scalar(
-                text(f"SELECT count(*) FROM {table} WHERE tenant_id = :t"),  # noqa: S608
+                text(f"SELECT count(*) FROM {table} WHERE tenant_id = :t"),  # noqa: S608  table comes from the fixed tuple in the loop above
                 {"t": committed_tenant.tenant_id},
             )
             assert count == 1
