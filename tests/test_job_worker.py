@@ -1,6 +1,10 @@
 # Connector worker against the simulated provider: every image here is SIMULATED.
 
+import os
+import re
+import socket
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -10,12 +14,13 @@ import httpx
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import Row, select, text
+from sqlalchemy.exc import StatementError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.db.session import TenantSession, bind_tenant
 from app.models import Asset, CreditReservation, Job
-from app.models.enums import ExecutionState
+from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.services.jobs import transition
 from app.services.providers.base import (
@@ -23,6 +28,7 @@ from app.services.providers.base import (
     ImageRequest,
     ProviderConfigError,
     ProviderError,
+    ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
     ProviderRateLimitedError,
@@ -31,9 +37,11 @@ from app.services.providers.base import (
 )
 from app.services.providers.simulator import SimulatedImageProvider, SimulatorScenario
 from app.workers.connector import (
+    DEFAULT_OWNER,
     MAX_EVENT_ATTEMPTS,
     WorkerConfigError,
     build_providers,
+    process_owner,
     run_once,
 )
 from tests.conftest import AuthHeaders, World
@@ -145,6 +153,9 @@ class ScriptedProvider(SimulatedImageProvider):
         self.submit_errors: list[Exception] = []
         self.status_error: ProviderError | None = None
         self.fetch_error: ProviderError | None = None
+        # Status polls still answered "in progress" before the real outcome is reported.
+        self.pending_polls = 0
+        self.outputs_expire_at: datetime | None = None
         self.estimates = 0
         self.before_estimate: Callable[[], Awaitable[None]] | None = None
         self.before_submit: Callable[[], Awaitable[None]] | None = None
@@ -166,7 +177,11 @@ class ScriptedProvider(SimulatedImageProvider):
     async def get_status(self, provider_request_id: str) -> StatusResult:
         if self.status_error is not None:
             raise self.status_error
-        return await super().get_status(provider_request_id)
+        result = await super().get_status(provider_request_id)
+        if self.pending_polls > 0:
+            self.pending_polls -= 1
+            return StatusResult(provider_request_id, ProviderJobStatus.IN_PROGRESS)
+        return replace(result, outputs_expire_at=self.outputs_expire_at)
 
     async def fetch_output(self, result: StatusResult) -> FetchedImage:
         if self.fetch_error is not None:
@@ -249,6 +264,21 @@ async def test_terminal_state_does_not_regress(
     assert len(sink.stored) == 1
 
 
+async def test_unknown_stage_is_rejected_on_write(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        with pytest.raises(StatementError, match="submiting"):
+            await transition(
+                db,
+                job_id,
+                allowed_from={ExecutionState.QUEUED},
+                to=ExecutionState.RUNNING,
+                stage="submiting",
+            )
+
+
 async def test_expired_lease_is_processed_once(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
@@ -314,6 +344,105 @@ async def test_job_past_deadline_fails_without_submitting(
     assert reservation is ReservationState.RELEASED
 
 
+async def _accepted_then_past_deadline(
+    sessions: Sessions,
+    provider: ScriptedProvider,
+    sink: FakeSink,
+    connection: AsyncConnection,
+    world: World,
+) -> datetime:
+    # The provider accepts the job and is still working on it when the deadline passes.
+    provider.pending_polls = 1
+    await _run(sessions, provider, sink)
+    await _requeue(connection, world)
+    return datetime.now(UTC) + timedelta(days=2)
+
+
+async def test_accepted_job_past_deadline_still_fetches_a_completed_image(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
+    assert job.result_asset_id == sink.stored[0]
+    assert reservation is ReservationState.COMMITTED
+    assert sum(provider.submits.values()) == 1
+
+
+async def test_accepted_job_past_deadline_keeps_polling_while_in_progress(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    provider.pending_polls = 2
+
+    for _ in range(2):
+        await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+        job, reservation = await _load(sessions, world, job_id)
+        assert (job.state, job.stage) == (
+            ExecutionState.WAITING_PROVIDER,
+            JobStage.WAITING_PROVIDER,
+        )
+        assert reservation is ReservationState.RESERVED
+        assert (await _event(connection)).processed_at is None
+        await _requeue(connection, world)
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+
+
+async def test_accepted_job_past_deadline_fails_when_the_provider_fails(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    provider.scenario = SimulatorScenario.PROVIDER_FAILED
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "SIMULATED_FAILURE")
+    assert reservation is ReservationState.RELEASED
+
+
+async def test_accepted_job_past_deadline_with_expired_output_is_parked(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    provider.outputs_expire_at = later - timedelta(hours=1)
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.HELD
+    assert not sink.stored
+    assert (await _event(connection)).processed_at is not None
+
+
+async def test_accepted_job_past_deadline_is_parked_once_attempts_run_out(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    provider.pending_polls = 1
+    await connection.execute(
+        text("UPDATE outbox_events SET attempts = :n"), {"n": MAX_EVENT_ATTEMPTS}
+    )
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "ATTEMPTS_EXHAUSTED")
+    assert reservation is ReservationState.HELD
+
+
 async def test_simulated_cost_above_cap_fails_without_submitting(
     sessions: Sessions, job_id: UUID, world: World
 ) -> None:
@@ -359,7 +488,7 @@ async def test_crash_after_submit_commit_reconciles_instead_of_resubmitting(
     provider.submit_errors = [RuntimeError("worker died during the call")]
     await _run(sessions, provider, FakeSink())
     crashed, _ = await _load(sessions, world, job_id)
-    assert (crashed.state, crashed.stage) == (ExecutionState.RUNNING, "submitting")
+    assert (crashed.state, crashed.stage) == (ExecutionState.RUNNING, JobStage.SUBMITTING)
 
     await _expire_leases(connection, world)
     await _run(sessions, provider, FakeSink())
@@ -543,6 +672,26 @@ async def test_jobs_parked_without_storage_do_not_block_new_jobs(
     third = await _post_job(client, auth, world, creative_id)
 
     assert third.status_code == 202
+
+
+def test_lease_owner_is_unique_even_with_the_same_host_and_pid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Two containers can both be "worker" with PID 1.
+    monkeypatch.setattr(socket, "gethostname", lambda: "worker")
+    monkeypatch.setattr(os, "getpid", lambda: 1)
+
+    first, second = process_owner(), process_owner()
+
+    assert re.fullmatch(r"worker:1:[0-9a-f]{8}", first)
+    assert first != second
+
+
+def test_default_owner_is_this_process_with_a_random_suffix() -> None:
+    host, pid, suffix = DEFAULT_OWNER.rsplit(":", 2)
+
+    assert (host, pid) == (socket.gethostname(), str(os.getpid()))
+    assert re.fullmatch(r"[0-9a-f]{8}", suffix)
 
 
 def test_http_timeout_must_be_below_the_lease() -> None:

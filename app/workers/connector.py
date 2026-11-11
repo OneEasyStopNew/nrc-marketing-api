@@ -37,7 +37,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.models import CreativeVersion, Job, OutboxEvent
-from app.models.enums import FORMAT_SPECS, ExecutionState
+from app.models.enums import FORMAT_SPECS, ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.schemas.jobs import JobKind
 from app.services import eligibility
@@ -45,7 +45,6 @@ from app.services.assets import StoredImageSink
 from app.services.jobs import (
     HIGGSFIELD_NAME,
     NON_TERMINAL_STATES,
-    STAGE_OUTPUT_READY,
     TERMINAL_STATES,
     settle_reservation,
     transition,
@@ -66,7 +65,6 @@ from app.services.storage import ObjectStorage
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OWNER: Final = f"{socket.gethostname()}:{os.getpid()}"
 MAX_EVENTS_PER_RUN: Final = 10
 # An event leased more often than this is given up (the job FAILED, or UNKNOWN if billed).
 MAX_EVENT_ATTEMPTS: Final = 20
@@ -76,15 +74,20 @@ LEASE_MAX_SECONDS: Final = 600
 NO_HANDLER_RETRY_SECONDS: Final = 60.0
 # The provider saw this key with a different body: resending can never reconcile it.
 IDEMPOTENCY_CONFLICT: Final = "PROVIDER_IDEMPOTENCY_CONFLICT"
-STAGE_SUBMITTING: Final = "submitting"
-STAGE_RETRY_WAIT: Final = "retry_wait"
-STAGE_RECONCILE: Final = "reconcile"
-STAGE_WAITING: Final = "waiting_provider"
-STAGE_STORED: Final = "stored"
+OUTPUT_EXPIRED: Final = "OUTPUT_EXPIRED"
 _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type FROM lease_outbox_events(:owner, 1, :lease)"
 )
 _jitter = secrets.SystemRandom()
+
+
+def process_owner() -> str:
+    # Hostname and PID can repeat across containers (both PID 1), so add a random suffix.
+    return f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
+
+
+# Computed once, so every lease this process takes carries the same owner.
+DEFAULT_OWNER: Final = process_owner()
 
 
 class WorkerConfigError(Exception):
@@ -153,7 +156,13 @@ class ImageGenerationHandler:
     async def handle(self, db: AsyncSession, job: Job, step: Step) -> float | None:
         if job.state in TERMINAL_STATES:
             return None
-        if job.deadline_at <= step.now:
+        accepted = (
+            job.state is ExecutionState.WAITING_PROVIDER and job.provider_request_id is not None
+        )
+        # An accepted job is billed when it completes, so the deadline never stops its polling:
+        # it runs until the provider reports a final status, the output expires or the event's
+        # attempts run out (then it is parked as UNKNOWN with the credits held).
+        if job.deadline_at <= step.now and not accepted:
             await _give_up(db, job, "DEADLINE_EXCEEDED", "The job did not finish in time.")
             return None
         provider = step.providers.get(job.provider or "")
@@ -162,7 +171,7 @@ class ImageGenerationHandler:
             await _give_up(db, job, "PROVIDER_NOT_CONFIGURED", "No provider for this job.")
             return None
         if job.state is ExecutionState.QUEUED or (
-            job.state is ExecutionState.RUNNING and job.stage != STAGE_SUBMITTING
+            job.state is ExecutionState.RUNNING and job.stage != JobStage.SUBMITTING
         ):
             return await self._submit(db, job, provider, step)
         if job.state in (ExecutionState.RUNNING, ExecutionState.UNKNOWN):
@@ -204,7 +213,7 @@ class ImageGenerationHandler:
             job.id,
             allowed_from={ExecutionState.QUEUED, ExecutionState.RUNNING},
             to=ExecutionState.RUNNING,
-            stage=STAGE_SUBMITTING,
+            stage=JobStage.SUBMITTING,
             **values,
         )
         if not moved:
@@ -268,7 +277,7 @@ class ImageGenerationHandler:
             job.id,
             allowed_from={ExecutionState.RUNNING, ExecutionState.UNKNOWN},
             to=ExecutionState.WAITING_PROVIDER,
-            stage=STAGE_WAITING,
+            stage=JobStage.WAITING_PROVIDER,
             provider_request_id=submitted.provider_request_id,
             failure_code=None,
         )
@@ -307,13 +316,17 @@ class ImageGenerationHandler:
                 db, job.id, code, "The provider did not produce an image.", billed=False
             )
             return None
+        if status.outputs_expire_at is not None and status.outputs_expire_at <= step.now:
+            # Billed, but the image can no longer be fetched: hold the credits for review.
+            await _park_unknown(db, job.id, OUTPUT_EXPIRED)
+            return None
         if step.sink is None:
             await transition(
                 db,
                 job.id,
                 allowed_from={ExecutionState.WAITING_PROVIDER},
                 to=ExecutionState.WAITING_PROVIDER,
-                stage=STAGE_OUTPUT_READY,
+                stage=JobStage.OUTPUT_READY,
             )
             return None
         await step.heartbeat(db)
@@ -335,7 +348,7 @@ class ImageGenerationHandler:
             job.id,
             allowed_from={ExecutionState.WAITING_PROVIDER},
             to=ExecutionState.SUCCEEDED,
-            stage=STAGE_STORED,
+            stage=JobStage.STORED,
             result_asset_id=asset_id,
         )
         if moved:
@@ -563,7 +576,7 @@ async def _retry_or_fail(db: AsyncSession, job: Job, error: ProviderError) -> fl
             job.id,
             allowed_from={ExecutionState.QUEUED, ExecutionState.RUNNING},
             to=ExecutionState.RUNNING,
-            stage=STAGE_RETRY_WAIT,
+            stage=JobStage.RETRY_WAIT,
             attempt_count=attempts,
         )
         return max(error.retry_after_seconds or 0.0, backoff_seconds(attempts))
@@ -600,7 +613,7 @@ async def _park_unknown(db: AsyncSession, job_id: UUID, code: str) -> None:
             ExecutionState.UNKNOWN,
         },
         to=ExecutionState.UNKNOWN,
-        stage=STAGE_RECONCILE,
+        stage=JobStage.RECONCILE,
         failure_code=code,
     )
     if moved:
@@ -612,7 +625,7 @@ async def _give_up(db: AsyncSession, job: Job, code: str, message: str) -> None:
     if job.state is ExecutionState.UNKNOWN:
         return
     maybe_accepted = job.state is ExecutionState.WAITING_PROVIDER or (
-        job.state is ExecutionState.RUNNING and job.stage == STAGE_SUBMITTING
+        job.state is ExecutionState.RUNNING and job.stage == JobStage.SUBMITTING
     )
     if maybe_accepted:
         await _park_unknown(db, job.id, code)

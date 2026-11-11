@@ -41,6 +41,18 @@ class ExecutionState(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class JobStage(StrEnum):
+    """Where a job is inside its execution state. Shown in the UI, so values are part of the API."""
+
+    SUBMITTING = "submitting"
+    RETRY_WAIT = "retry_wait"
+    RECONCILE = "reconcile"
+    WAITING_PROVIDER = "waiting_provider"
+    # Provider finished but the worker has no storage configured: the job is parked at this result.
+    OUTPUT_READY = "output_ready"
+    STORED = "stored"
+
+
 @dataclass(frozen=True, slots=True)
 class FormatSpec:
     channel: Channel
