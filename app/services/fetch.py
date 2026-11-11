@@ -9,7 +9,11 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.services.media import MediaRejectedError, inspect_header
-from app.services.providers.base import FetchedImage, ProviderOutputError
+from app.services.providers.base import (
+    FetchedImage,
+    ProviderOutputError,
+    ProviderOutputUnavailableError,
+)
 
 _ALLOWED_TYPES = frozenset({"image/png", "image/jpeg"})
 _SITE_LOCAL_V6 = ipaddress.IPv6Network("fec0::/10")
@@ -69,9 +73,12 @@ class SafeFetcher:
         try:
             return await asyncio.wait_for(self._run(url, host, max_bytes), self._timeout)
         except TimeoutError as exc:
-            raise ProviderOutputError("Fetching the provider output timed out") from exc
+            raise ProviderOutputUnavailableError("Fetching the provider output timed out") from exc
         except httpx.InvalidURL, UnicodeError:
             raise ProviderOutputError("The provider output URL is invalid") from None
+        except httpx.TransportError:
+            # Not chained: httpx messages can include the URL, which carries a signature.
+            raise ProviderOutputUnavailableError("Fetching the provider output failed") from None
         except httpx.HTTPError:
             # Not chained: httpx messages can include the URL, which carries a signature.
             raise ProviderOutputError("Fetching the provider output failed") from None
@@ -100,7 +107,9 @@ class SafeFetcher:
         try:
             addresses = await self._resolver(host)
         except OSError as exc:
-            raise ProviderOutputError("The provider output host could not be resolved") from exc
+            raise ProviderOutputUnavailableError(
+                "The provider output host could not be resolved"
+            ) from exc
         if not addresses or not all(_is_public(address) for address in addresses):
             raise ProviderOutputError("The provider output host resolves to a blocked address")
 
@@ -111,6 +120,8 @@ class SafeFetcher:
                 raise ProviderOutputError("The provider output redirected, which is not allowed")
             if status in (403, 404, 410):
                 raise ProviderOutputError("The provider output has expired or is unavailable")
+            if status == 429 or status >= 500:
+                raise ProviderOutputUnavailableError(f"The provider output returned HTTP {status}")
             if not 200 <= status < 300:
                 raise ProviderOutputError(f"The provider output returned HTTP {status}")
             content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()

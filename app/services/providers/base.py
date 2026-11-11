@@ -139,6 +139,13 @@ class ProviderOutputError(ProviderError):
     code = "PROVIDER_OUTPUT_INVALID"
 
 
+class ProviderOutputUnavailableError(ProviderOutputError):
+    # A transient failure fetching the output (timeout, network, HTTP 5xx or 429). The output
+    # stays downloadable until it expires, so the fetch is retried rather than the job failed.
+    code = "PROVIDER_OUTPUT_UNAVAILABLE"
+    retryable = True
+
+
 class ProviderOutputExpiredError(ProviderOutputError):
     # The provider's output expired before it was fetched. It billed the generation regardless.
     code = "OUTPUT_EXPIRED"

@@ -33,6 +33,7 @@ from app.services.providers.base import (
     ProviderOutcomeUnknownError,
     ProviderOutputError,
     ProviderOutputExpiredError,
+    ProviderOutputUnavailableError,
     ProviderRateLimitedError,
     StatusResult,
     SubmitResult,
@@ -673,6 +674,29 @@ async def test_unusable_output_fails_and_keeps_credits_billed(
     job, reservation = await _load(sessions, world, job_id)
     assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_UNAVAILABLE")
     assert reservation is ReservationState.COMMITTED
+
+
+async def test_transient_fetch_failure_keeps_the_job_and_retries_the_fetch(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    provider.fetch_error = ProviderOutputUnavailableError("Simulated network blip.")
+
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.WAITING_PROVIDER
+    assert reservation is ReservationState.RESERVED
+    assert (await _event(connection)).processed_at is None
+
+    provider.fetch_error = None
+    await _requeue(connection, world)
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert reservation is ReservationState.COMMITTED
+    assert len(sink.stored) == 1
 
 
 async def test_lost_lease_abandons_the_step_without_touching_the_job(
