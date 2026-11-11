@@ -12,8 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.workers.connector import WorkerConfigError, worker_database_url
 from tests.conftest import APP_ROLE, WORKER_ROLE, AuthHeaders, World, _creative, _post_job, as_role
 
-LEASE_4 = "lease_outbox_events(text, integer, integer, text[])"
-LEASE_3 = "lease_outbox_events(text, integer, integer)"
+LEASE = "lease_outbox_events(text, integer, integer, text[])"
 ROLES = (APP_ROLE, WORKER_ROLE)
 
 
@@ -65,14 +64,13 @@ async def _denied(connection: AsyncConnection, sql: str) -> bool:
 
 @pytest.mark.usefixtures("world")
 async def test_only_the_worker_role_leases_events(connection: AsyncConnection) -> None:
-    lease_4 = "SELECT * FROM lease_outbox_events('probe', 1, 5, ARRAY['job.run'])"
-    lease_3 = "SELECT * FROM lease_outbox_events('probe', 1, 5)"
-    denied: dict[str, tuple[bool, bool]] = {}
+    lease = "SELECT * FROM lease_outbox_events('probe', 1, 5, ARRAY['job.run'])"
+    denied: dict[str, bool] = {}
     for role in ROLES:
         await as_role(connection, role)
-        denied[role] = (await _denied(connection, lease_4), await _denied(connection, lease_3))
+        denied[role] = await _denied(connection, lease)
 
-    assert denied == {APP_ROLE: (True, True), WORKER_ROLE: (False, False)}
+    assert denied == {APP_ROLE: True, WORKER_ROLE: False}
 
 
 @pytest.mark.usefixtures("world")
@@ -94,8 +92,7 @@ async def test_only_the_worker_role_reads_and_updates_provider_spend(
     assert denied[WORKER_ROLE] == {"select": False, "update": False, "insert": True, "delete": True}
 
 
-@pytest.mark.parametrize("function", [LEASE_4, LEASE_3])
-async def test_lease_function_checklist(connection: AsyncConnection, function: str) -> None:
+async def test_lease_function_checklist(connection: AsyncConnection) -> None:
     # Dinesh's review list: fixed search_path, EXECUTE for marketing_worker only, ids out only.
     row = (
         await connection.execute(
@@ -107,7 +104,7 @@ async def test_lease_function_checklist(connection: AsyncConnection, function: s
                 " coalesce(array_to_string(p.proacl, ','), '') AS acl"
                 " FROM pg_proc AS p WHERE p.oid = CAST(:f AS regprocedure)"
             ),
-            {"f": function},
+            {"f": LEASE},
         )
     ).one()
 
@@ -116,12 +113,23 @@ async def test_lease_function_checklist(connection: AsyncConnection, function: s
     assert (row.app, row.worker) == (False, True)
     # No PUBLIC entry ("=X/owner") in the ACL.
     assert not any(entry.startswith("=") for entry in row.acl.split(","))
-    if function == LEASE_4:
-        assert row.prosecdef
-        assert "FOR UPDATE SKIP LOCKED" in row.prosrc
-    else:
-        # The wrapper runs as its caller and only delegates.
-        assert not row.prosecdef
+    assert row.prosecdef
+    assert "FOR UPDATE SKIP LOCKED" in row.prosrc
+
+
+async def test_only_the_four_argument_lease_function_exists(connection: AsyncConnection) -> None:
+    # No three-argument overload: it would lease every event type.
+    matches = (
+        await connection.scalars(
+            text(
+                "SELECT p.oid = CAST(:f AS regprocedure) FROM pg_proc AS p"
+                " WHERE p.proname = 'lease_outbox_events'"
+            ),
+            {"f": LEASE},
+        )
+    ).all()
+
+    assert matches == [True]
 
 
 async def test_outbox_lease_policy_is_scoped_to_the_function_owner(
@@ -129,7 +137,7 @@ async def test_outbox_lease_policy_is_scoped_to_the_function_owner(
 ) -> None:
     owner = await connection.scalar(
         text("SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE oid = CAST(:f AS regprocedure)"),
-        {"f": LEASE_4},
+        {"f": LEASE},
     )
     roles = await connection.scalar(
         text(

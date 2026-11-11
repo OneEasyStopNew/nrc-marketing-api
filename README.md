@@ -156,7 +156,7 @@ Conventions:
   member of the owner role), before `alembic upgrade head`, which grants it the worker's tables. The
   connector worker's `WORKER_DATABASE_URL` uses it and the worker refuses to start without it.
 - Deploy order for migration `3fb9adf5dfbe`: create `marketing_worker` and switch every worker to
-  `WORKER_DATABASE_URL` BEFORE it runs. It revokes the lease functions and `provider_spend` from
+  `WORKER_DATABASE_URL` BEFORE it runs. It revokes the lease function and `provider_spend` from
   `marketing_app`, so a worker still on `DATABASE_URL` stops leasing.
 - Cognito: `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_IDS` and a resource-server
   scope matching `REQUIRED_SCOPE`.

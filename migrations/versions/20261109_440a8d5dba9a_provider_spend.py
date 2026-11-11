@@ -6,7 +6,7 @@ only; the app role gets SELECT and UPDATE, never INSERT or DELETE. 3fb9adf5dfbe 
 privileges to the worker role (marketing_worker), the only one that uses the table.
 
 Revision ID: 440a8d5dba9a
-Revises: 8f8284b27c6f
+Revises: a3c5e7b91d24
 Create Date: 2026-11-09 21:30:00.000000
 """
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "440a8d5dba9a"
-down_revision: str | None = "8f8284b27c6f"
+down_revision: str | None = "a3c5e7b91d24"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

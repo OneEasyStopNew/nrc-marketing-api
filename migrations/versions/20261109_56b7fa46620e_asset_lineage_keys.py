@@ -6,7 +6,7 @@ creative_version) references creative_versions(creative_id, version), its existi
 the job's (tenant_id, creative_id) key to creatives keeps the tenant consistent.
 
 Revision ID: 56b7fa46620e
-Revises: a5be8d25c554
+Revises: 440a8d5dba9a
 Create Date: 2026-11-09 23:20:00.000000
 """
 
@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "56b7fa46620e"
-down_revision: str | None = "a5be8d25c554"
+down_revision: str | None = "440a8d5dba9a"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
