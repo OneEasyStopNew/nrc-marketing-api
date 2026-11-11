@@ -31,6 +31,7 @@ from app.services.providers.base import (
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
+    ProviderOutputExpiredError,
     ProviderRateLimitedError,
     StatusResult,
     SubmitResult,
@@ -332,19 +333,31 @@ async def _accepted_then_past_deadline(
     sink: FakeSink,
     connection: AsyncConnection,
     world: World,
+    job_id: UUID,
 ) -> datetime:
-    # The provider accepts the job and is still working on it when the deadline passes.
+    # The provider accepts the job and is still working on it; returns the job's deadline.
     provider.pending_polls = 1
     await _run(sessions, provider, sink)
     await _requeue(connection, world)
-    return datetime.now(UTC) + timedelta(days=2)
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.WAITING_PROVIDER
+    return job.deadline_at
 
 
-async def test_accepted_job_past_deadline_still_fetches_a_completed_image(
+def _grace() -> timedelta:
+    return timedelta(seconds=get_settings().generation_accepted_grace_seconds)
+
+
+async def test_accepted_job_past_grace_still_fetches_a_completed_image(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
+    # Once the provider reports COMPLETED the grace window no longer applies: it billed.
     provider, sink = ScriptedProvider(), FakeSink()
-    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
+    later = deadline + _grace() + timedelta(days=1)
+    provider.outputs_expire_at = later + timedelta(hours=1)
 
     await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
 
@@ -355,11 +368,14 @@ async def test_accepted_job_past_deadline_still_fetches_a_completed_image(
     assert sum(provider.submits.values()) == 1
 
 
-async def test_accepted_job_past_deadline_keeps_polling_while_in_progress(
+async def test_accepted_job_within_grace_keeps_polling_while_in_progress(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
     provider, sink = ScriptedProvider(), FakeSink()
-    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
+    later = deadline + _grace() - timedelta(seconds=1)
     provider.pending_polls = 2
 
     for _ in range(2):
@@ -378,47 +394,111 @@ async def test_accepted_job_past_deadline_keeps_polling_while_in_progress(
     assert job.state is ExecutionState.SUCCEEDED
 
 
+async def test_accepted_job_still_running_past_grace_is_parked_and_frees_its_slot(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
+    provider.pending_polls = 1
+
+    with caplog.at_level("ERROR", logger="app.workers.connector"):
+        await run_once(
+            sessions, {"simulator": provider}, sink, get_settings(), now=deadline + _grace()
+        )
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.UNKNOWN, JobStage.RECONCILE)
+    assert job.failure_code == "PROVIDER_STILL_RUNNING"
+    assert reservation is ReservationState.HELD
+    assert not sink.stored
+    assert (await _event(connection)).processed_at is not None
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert str(job_id) in errors[0]
+    assert str(job.provider_request_id) in errors[0]
+    # UNKNOWN takes no active slot: the tenant can still start its full allowance of jobs.
+    creative_id = await _creative(client, auth, world.a)
+    for _ in range(get_settings().generation_max_active_jobs_per_tenant):
+        assert (await _post_job(client, auth, world, creative_id)).status_code == 202
+
+
 async def test_accepted_job_past_deadline_fails_when_the_provider_fails(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
     provider, sink = ScriptedProvider(), FakeSink()
-    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
     provider.scenario = SimulatorScenario.PROVIDER_FAILED
 
-    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+    await run_once(
+        sessions, {"simulator": provider}, sink, get_settings(), now=deadline + timedelta(days=2)
+    )
 
     job, reservation = await _load(sessions, world, job_id)
     assert (job.state, job.failure_code) == (ExecutionState.FAILED, "SIMULATED_FAILURE")
     assert reservation is ReservationState.RELEASED
 
 
-async def test_accepted_job_past_deadline_with_expired_output_is_parked(
+async def test_expired_output_fails_with_credits_committed_and_is_never_fetched(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
     provider, sink = ScriptedProvider(), FakeSink()
-    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
+    later = deadline + timedelta(days=2)
     provider.outputs_expire_at = later - timedelta(hours=1)
+    # A fetch would end the job with a different failure code.
+    provider.fetch_error = ProviderOutputError("Must not be fetched.")
 
     await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
 
     job, reservation = await _load(sessions, world, job_id)
-    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "OUTPUT_EXPIRED")
-    assert reservation is ReservationState.HELD
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
     assert not sink.stored
     assert (await _event(connection)).processed_at is not None
+
+
+async def test_output_expiring_during_fetch_fails_with_credits_committed(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    # The provider's own expiry check at fetch time ends the job the same way.
+    provider, sink = ScriptedProvider(), FakeSink()
+    provider.fetch_error = ProviderOutputExpiredError("Simulated output expired.")
+
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
+    assert not sink.stored
 
 
 async def test_accepted_job_past_deadline_is_parked_once_attempts_run_out(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
     provider, sink = ScriptedProvider(), FakeSink()
-    later = await _accepted_then_past_deadline(sessions, provider, sink, connection, world)
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
     provider.pending_polls = 1
     await connection.execute(
         text("UPDATE outbox_events SET attempts = :n"), {"n": MAX_EVENT_ATTEMPTS}
     )
 
-    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+    await run_once(
+        sessions, {"simulator": provider}, sink, get_settings(), now=deadline + timedelta(days=2)
+    )
 
     job, reservation = await _load(sessions, world, job_id)
     assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "ATTEMPTS_EXHAUSTED")
