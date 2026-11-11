@@ -737,7 +737,7 @@ async def test_output_fetch_timeout_retries_and_stores_the_image_next_round(
     fake = FakeHiggsfield()
     fake.status_body = _completed(datetime.now(UTC) + timedelta(days=7))
     reserved, committed = await _spend(connection, "higgsfield")
-    server = _output_server(_png_1080(), [_cdn_timeout])
+    server = _output_server(_png_1536(), [_cdn_timeout])
     provider = higgsfield(fake, server, frozenset({OUTPUT_HOST}))
 
     await run(sessions, provider, _sink())
@@ -771,7 +771,7 @@ async def test_output_fetch_failing_until_expiry_ends_output_expired_and_billed(
     reserved, committed = await _spend(connection, "higgsfield")
     rounds = get_settings().generation_max_attempts + 1
     outages: list[CdnAnswer] = [_cdn_unavailable, _cdn_timeout] * rounds
-    provider = higgsfield(fake, _output_server(_png_1080(), outages), frozenset({OUTPUT_HOST}))
+    provider = higgsfield(fake, _output_server(_png_1536(), outages), frozenset({OUTPUT_HOST}))
 
     # More rounds than GENERATION_MAX_ATTEMPTS: transient fetch failures never count.
     for _ in range(rounds):
