@@ -1,5 +1,8 @@
 # Connector worker against the simulated provider: every image here is SIMULATED.
 
+import os
+import re
+import socket
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -31,9 +34,11 @@ from app.services.providers.base import (
 )
 from app.services.providers.simulator import SimulatedImageProvider, SimulatorScenario
 from app.workers.connector import (
+    DEFAULT_OWNER,
     MAX_EVENT_ATTEMPTS,
     WorkerConfigError,
     build_providers,
+    process_owner,
     run_once,
 )
 from tests.conftest import AuthHeaders, World
@@ -525,6 +530,26 @@ async def test_jobs_parked_without_storage_do_not_block_new_jobs(
     third = await _post_job(client, auth, world, creative_id)
 
     assert third.status_code == 202
+
+
+def test_lease_owner_is_unique_even_with_the_same_host_and_pid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Two containers can both be "worker" with PID 1.
+    monkeypatch.setattr(socket, "gethostname", lambda: "worker")
+    monkeypatch.setattr(os, "getpid", lambda: 1)
+
+    first, second = process_owner(), process_owner()
+
+    assert re.fullmatch(r"worker:1:[0-9a-f]{8}", first)
+    assert first != second
+
+
+def test_default_owner_is_this_process_with_a_random_suffix() -> None:
+    host, pid, suffix = DEFAULT_OWNER.rsplit(":", 2)
+
+    assert (host, pid) == (socket.gethostname(), str(os.getpid()))
+    assert re.fullmatch(r"[0-9a-f]{8}", suffix)
 
 
 def test_http_timeout_must_be_below_the_lease() -> None:

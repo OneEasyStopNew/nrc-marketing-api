@@ -63,7 +63,6 @@ from app.services.providers.simulator import SIMULATOR_NAME, SimulatedImageProvi
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OWNER: Final = f"{socket.gethostname()}:{os.getpid()}"
 MAX_EVENTS_PER_RUN: Final = 10
 # An event leased more often than this is given up (the job FAILED, or UNKNOWN if billed).
 MAX_EVENT_ATTEMPTS: Final = 20
@@ -82,6 +81,15 @@ _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type FROM lease_outbox_events(:owner, 1, :lease)"
 )
 _jitter = secrets.SystemRandom()
+
+
+def process_owner() -> str:
+    # Hostname and PID can repeat across containers (both PID 1), so add a random suffix.
+    return f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
+
+
+# Computed once, so every lease this process takes carries the same owner.
+DEFAULT_OWNER: Final = process_owner()
 
 
 class WorkerConfigError(Exception):
