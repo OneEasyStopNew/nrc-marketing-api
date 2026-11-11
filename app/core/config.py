@@ -50,7 +50,8 @@ class Settings(BaseSettings):
     generation_max_cost_usd_per_image: Decimal = Field(default=Decimal("0.10"), ge=0, le=1)
     # Cap on provider spend across all tenants (reserved estimates plus committed costs), kept per
     # provider in provider_spend. A job that would pass it fails BUDGET_EXHAUSTED before submit.
-    generation_global_budget_usd: Decimal = Field(default=Decimal(40), ge=0)
+    # 250 times the default: room to grow, but a typo cannot remove the cap.
+    generation_global_budget_usd: Decimal = Field(default=Decimal(40), ge=0, le=10_000)
     # Failed processing attempts per outbox event (a crash, an expired lease, no handler) before
     # the worker gives up. Polls and retryable provider errors don't count: the job deadline
     # bounds those (the agreed retry policy) until the provider accepts the job. After that, the
