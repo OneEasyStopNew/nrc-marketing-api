@@ -27,7 +27,7 @@ token, so set the `COGNITO_*` values from Bhushan first.
 ## Checks
 
 CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, plus a
-`pip-audit` scan of the locked dependencies.
+`pip-audit` scan of the locked dependencies and a compile of the generated TypeScript types.
 
 ```powershell
 uv run ruff format --check . ; uv run ruff check . ; uv run mypy app tests migrations scripts
@@ -41,7 +41,8 @@ uv run pytest            # uses the marketing_test database; each test is rolled
   A test fails if it is stale. Operation IDs are the handler names (for example `create_creative`).
 - `contracts/examples/d1.json` holds sample responses for mocks. They are validated against the
   schemas.
-- Generate the TypeScript types with `npx openapi-typescript contracts/openapi.json -o schema.d.ts`.
+- Generate the TypeScript types with `npx openapi-typescript@7.4.4 contracts/openapi.json -o schema.d.ts`.
+  CI checks that they compile.
 
 Conventions:
 

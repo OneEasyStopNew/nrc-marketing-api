@@ -230,5 +230,11 @@
     "status": 501,
     "schema": "ErrorBody",
     "body": {"code": "NOT_IMPLEMENTED", "message": "Validation is not implemented yet.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e18", "details": null, "retryable": false}
+  },
+  "error_503_dependency": {
+    "request": "Any authenticated call while Cognito's signing keys cannot be fetched",
+    "status": 503,
+    "schema": "ErrorBody",
+    "body": {"code": "DEPENDENCY_UNAVAILABLE", "message": "The identity provider is unavailable.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e20", "details": null, "retryable": true}
   }
 }
