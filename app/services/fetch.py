@@ -117,7 +117,13 @@ class SafeFetcher:
             if content_type not in _ALLOWED_TYPES:
                 raise ProviderOutputError("The provider output is not a PNG or JPEG image")
             declared = response.headers.get("content-length")
-            if declared is not None and declared.isdigit() and int(declared) > max_bytes:
+            # isdigit() accepts "²", which int() rejects; anything else counts as missing.
+            if (
+                declared is not None
+                and declared.isascii()
+                and declared.isdecimal()
+                and int(declared) > max_bytes
+            ):
                 raise ProviderOutputError("The provider output exceeds the size limit")
             chunks: list[bytes] = []
             received = 0

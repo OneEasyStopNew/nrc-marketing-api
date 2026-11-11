@@ -229,6 +229,30 @@ async def test_content_length_over_cap_is_rejected_up_front() -> None:
         await _fetch(fetcher)
 
 
+def _superscript_length(body: bytes) -> Callable[[httpx.Request], httpx.Response]:
+    # "²" passes str.isdigit() but int() rejects it; it must count as no Content-Length.
+    # Raw bytes, as a server would send them; httpx decodes the value back to "²".
+    headers = [(b"content-type", b"image/png"), (b"content-length", "²".encode())]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = httpx.Response(200, content=body, headers=headers)
+        assert response.headers["content-length"] == "²"
+        return response
+
+    return handler
+
+
+async def test_non_ascii_content_length_is_ignored_and_small_body_succeeds() -> None:
+    fetcher, _ = _fetcher(_superscript_length(PNG))
+    assert (await _fetch(fetcher)).content == PNG
+
+
+async def test_non_ascii_content_length_still_applies_the_streaming_cap() -> None:
+    fetcher, _ = _fetcher(_superscript_length(PNG))
+    with pytest.raises(ProviderOutputError, match="size limit"):
+        await fetcher(URL, allowed_hosts=ALLOWED, max_bytes=len(PNG) - 1)
+
+
 async def test_streamed_body_over_cap_aborts_early() -> None:
     pulled: list[int] = []
 
