@@ -9,6 +9,7 @@ each switching role when its transaction begins.
 import dataclasses
 import os
 import time
+import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,6 +27,7 @@ from asgi_lifespan import LifespanManager
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from jwt.algorithms import RSAAlgorithm
+from PIL import Image
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import Connection, Row, event, select, text
@@ -117,6 +119,15 @@ def app_environment(test_env: IntegrationEnv) -> Iterator[None]:
         get_settings.cache_clear()
         yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def pillow_state() -> Iterator[None]:
+    # The API lifespan and worker main() set Pillow's process-wide limit and warning filter;
+    # restore both so no test depends on another having started the app.
+    with pytest.MonkeyPatch.context() as patch, warnings.catch_warnings():
+        patch.setattr(Image, "MAX_IMAGE_PIXELS", Image.MAX_IMAGE_PIXELS)
+        yield
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -493,6 +504,8 @@ class ScriptedProvider(SimulatedImageProvider):
         self.before_fetch: Callable[[], Awaitable[None]] | None = None
         # Status checks that still report the generation as in progress.
         self.pending_polls = 0
+        # Reported in the COMPLETED status: when the provider deletes the output.
+        self.outputs_expire_at: datetime | None = None
 
     async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
         self.estimates += 1
@@ -515,7 +528,9 @@ class ScriptedProvider(SimulatedImageProvider):
             self.pending_polls -= 1
             return StatusResult(provider_request_id, ProviderJobStatus.IN_PROGRESS)
         result = await super().get_status(provider_request_id)
-        return dataclasses.replace(result, actual_cost_usd=self.actual_cost_usd)
+        return dataclasses.replace(
+            result, actual_cost_usd=self.actual_cost_usd, outputs_expire_at=self.outputs_expire_at
+        )
 
     async def fetch_output(self, result: StatusResult) -> FetchedImage:
         if self.before_fetch is not None:

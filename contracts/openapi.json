@@ -2062,13 +2062,12 @@
           "stage": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/JobStage"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Stage"
+            ]
           },
           "provider_request_id": {
             "anyOf": [
@@ -2155,6 +2154,20 @@
           "completed_at"
         ],
         "title": "JobRead"
+      },
+      "JobStage": {
+        "type": "string",
+        "enum": [
+          "submitting",
+          "retry_wait",
+          "reconcile",
+          "waiting_provider",
+          "output_ready",
+          "fetching_output",
+          "stored"
+        ],
+        "title": "JobStage",
+        "description": "Where a job is inside its execution state. Shown in the UI, so values are part of the API."
       },
       "Language": {
         "type": "string",

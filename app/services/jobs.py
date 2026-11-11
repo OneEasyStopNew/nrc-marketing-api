@@ -14,7 +14,7 @@ from app.core.config import Settings
 from app.core.errors import DependencyUnavailableError, GenerationLimitError, NotFoundError
 from app.db.session import bind_tenant
 from app.models import Creative, CreditReservation, Job, OutboxEvent, Tenant
-from app.models.enums import ExecutionState
+from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobKind, JobRead
 from app.services import eligibility, idempotency
@@ -29,15 +29,13 @@ TERMINAL_STATES: Final = frozenset(
     {ExecutionState.SUCCEEDED, ExecutionState.FAILED, ExecutionState.CANCELLED}
 )
 NON_TERMINAL_STATES: Final = frozenset(ExecutionState) - TERMINAL_STATES
-# Provider finished but the worker has no storage configured: the job is parked at this result.
-STAGE_OUTPUT_READY: Final = "output_ready"
 # Jobs that take an active-generation slot. Parked and UNKNOWN jobs don't: UNKNOWN credits
 # stay HELD, so the daily credit ceiling still bounds them.
 _TAKES_SLOT: Final = or_(
     Job.state.in_((ExecutionState.QUEUED, ExecutionState.RUNNING)),
     and_(
         Job.state == ExecutionState.WAITING_PROVIDER,
-        Job.stage.is_distinct_from(STAGE_OUTPUT_READY),
+        Job.stage.is_distinct_from(JobStage.OUTPUT_READY),
     ),
 )
 # The "daily" in GENERATION_DAILY_CREDIT_CEILING_PER_TENANT: part of that setting's meaning.

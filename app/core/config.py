@@ -51,7 +51,8 @@ class Settings(BaseSettings):
     generation_global_budget_usd: Decimal = Field(default=Decimal(40), ge=0)
     # Failed processing attempts per outbox event (a crash, an expired lease, no handler) before
     # the worker gives up. Polls and retryable provider errors don't count: the job deadline
-    # bounds those (the agreed retry policy).
+    # bounds those (the agreed retry policy) until the provider accepts the job. An accepted job
+    # is polled past its deadline until a final status or until its output expires.
     generation_max_attempts: int = Field(default=3, ge=1, le=10)
     generation_deadline_seconds: int = Field(default=900, ge=60, le=86_400)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)

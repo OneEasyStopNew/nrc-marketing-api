@@ -145,14 +145,15 @@ async def test_slow_resolver_hits_the_overall_timeout() -> None:
         await _fetch(fetcher)
 
 
-async def test_tiny_file_with_huge_dimensions_passes_header_check_without_decoding() -> None:
+async def test_tiny_file_with_huge_dimensions_is_rejected_without_decoding() -> None:
     # 50000 x 50000 PNG of a single colour is a few KB but would decode to 2.5 billion pixels.
+    # Pillow's process-wide limit rejects it from the header alone.
     huge = _huge_png(50_000, 50_000)
     assert len(huge) < 100_000
     fetcher, _ = _fetcher(_ok(huge))
     started = time.perf_counter()
-    result = await _fetch(fetcher)
-    assert result.content == huge
+    with pytest.raises(ProviderOutputError):
+        await _fetch(fetcher)
     assert time.perf_counter() - started < 2
 
 
@@ -226,6 +227,30 @@ async def test_content_length_over_cap_is_rejected_up_front() -> None:
     fetcher, _ = _fetcher(handler)
     with pytest.raises(ProviderOutputError, match="size limit"):
         await _fetch(fetcher)
+
+
+def _superscript_length(body: bytes) -> Callable[[httpx.Request], httpx.Response]:
+    # "²" passes str.isdigit() but int() rejects it; it must count as no Content-Length.
+    # Raw bytes, as a server would send them; httpx decodes the value back to "²".
+    headers = [(b"content-type", b"image/png"), (b"content-length", "²".encode())]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = httpx.Response(200, content=body, headers=headers)
+        assert response.headers["content-length"] == "²"
+        return response
+
+    return handler
+
+
+async def test_non_ascii_content_length_is_ignored_and_small_body_succeeds() -> None:
+    fetcher, _ = _fetcher(_superscript_length(PNG))
+    assert (await _fetch(fetcher)).content == PNG
+
+
+async def test_non_ascii_content_length_still_applies_the_streaming_cap() -> None:
+    fetcher, _ = _fetcher(_superscript_length(PNG))
+    with pytest.raises(ProviderOutputError, match="size limit"):
+        await fetcher(URL, allowed_hosts=ALLOWED, max_bytes=len(PNG) - 1)
 
 
 async def test_streamed_body_over_cap_aborts_early() -> None:

@@ -16,6 +16,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.request_context import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.db.session import create_engine, create_sessionmaker
+from app.services.media import configure_pillow
 from app.services.storage import ObjectStorage
 
 API_PREFIX = "/v1/marketing"
@@ -25,6 +26,7 @@ API_VERSION = "0.1.0"
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    configure_pillow(settings)
     engine = create_engine(settings)
     try:
         async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as http:
