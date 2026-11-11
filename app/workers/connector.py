@@ -37,14 +37,13 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.models import CreativeVersion, Job, OutboxEvent
-from app.models.enums import FORMAT_SPECS, ExecutionState
+from app.models.enums import FORMAT_SPECS, ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.schemas.jobs import JobKind
 from app.services import eligibility
 from app.services.jobs import (
     HIGGSFIELD_NAME,
     NON_TERMINAL_STATES,
-    STAGE_OUTPUT_READY,
     TERMINAL_STATES,
     settle_reservation,
     transition,
@@ -72,11 +71,6 @@ LEASE_MAX_SECONDS: Final = 600
 NO_HANDLER_RETRY_SECONDS: Final = 60.0
 # The provider saw this key with a different body: resending can never reconcile it.
 IDEMPOTENCY_CONFLICT: Final = "PROVIDER_IDEMPOTENCY_CONFLICT"
-STAGE_SUBMITTING: Final = "submitting"
-STAGE_RETRY_WAIT: Final = "retry_wait"
-STAGE_RECONCILE: Final = "reconcile"
-STAGE_WAITING: Final = "waiting_provider"
-STAGE_STORED: Final = "stored"
 _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type FROM lease_outbox_events(:owner, 1, :lease)"
 )
@@ -167,7 +161,7 @@ class ImageGenerationHandler:
             await _give_up(db, job, "PROVIDER_NOT_CONFIGURED", "No provider for this job.")
             return None
         if job.state is ExecutionState.QUEUED or (
-            job.state is ExecutionState.RUNNING and job.stage != STAGE_SUBMITTING
+            job.state is ExecutionState.RUNNING and job.stage != JobStage.SUBMITTING
         ):
             return await self._submit(db, job, provider, step)
         if job.state in (ExecutionState.RUNNING, ExecutionState.UNKNOWN):
@@ -209,7 +203,7 @@ class ImageGenerationHandler:
             job.id,
             allowed_from={ExecutionState.QUEUED, ExecutionState.RUNNING},
             to=ExecutionState.RUNNING,
-            stage=STAGE_SUBMITTING,
+            stage=JobStage.SUBMITTING,
             **values,
         )
         if not moved:
@@ -273,7 +267,7 @@ class ImageGenerationHandler:
             job.id,
             allowed_from={ExecutionState.RUNNING, ExecutionState.UNKNOWN},
             to=ExecutionState.WAITING_PROVIDER,
-            stage=STAGE_WAITING,
+            stage=JobStage.WAITING_PROVIDER,
             provider_request_id=submitted.provider_request_id,
             failure_code=None,
         )
@@ -318,7 +312,7 @@ class ImageGenerationHandler:
                 job.id,
                 allowed_from={ExecutionState.WAITING_PROVIDER},
                 to=ExecutionState.WAITING_PROVIDER,
-                stage=STAGE_OUTPUT_READY,
+                stage=JobStage.OUTPUT_READY,
             )
             return None
         await step.heartbeat(db)
@@ -340,7 +334,7 @@ class ImageGenerationHandler:
             job.id,
             allowed_from={ExecutionState.WAITING_PROVIDER},
             to=ExecutionState.SUCCEEDED,
-            stage=STAGE_STORED,
+            stage=JobStage.STORED,
             result_asset_id=asset_id,
         )
         if moved:
@@ -568,7 +562,7 @@ async def _retry_or_fail(db: AsyncSession, job: Job, error: ProviderError) -> fl
             job.id,
             allowed_from={ExecutionState.QUEUED, ExecutionState.RUNNING},
             to=ExecutionState.RUNNING,
-            stage=STAGE_RETRY_WAIT,
+            stage=JobStage.RETRY_WAIT,
             attempt_count=attempts,
         )
         return max(error.retry_after_seconds or 0.0, backoff_seconds(attempts))
@@ -605,7 +599,7 @@ async def _park_unknown(db: AsyncSession, job_id: UUID, code: str) -> None:
             ExecutionState.UNKNOWN,
         },
         to=ExecutionState.UNKNOWN,
-        stage=STAGE_RECONCILE,
+        stage=JobStage.RECONCILE,
         failure_code=code,
     )
     if moved:
@@ -617,7 +611,7 @@ async def _give_up(db: AsyncSession, job: Job, code: str, message: str) -> None:
     if job.state is ExecutionState.UNKNOWN:
         return
     maybe_accepted = job.state is ExecutionState.WAITING_PROVIDER or (
-        job.state is ExecutionState.RUNNING and job.stage == STAGE_SUBMITTING
+        job.state is ExecutionState.RUNNING and job.stage == JobStage.SUBMITTING
     )
     if maybe_accepted:
         await _park_unknown(db, job.id, code)

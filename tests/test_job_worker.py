@@ -13,12 +13,13 @@ import httpx
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import Row, select, text
+from sqlalchemy.exc import StatementError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.db.session import TenantSession, bind_tenant
 from app.models import CreditReservation, Job
-from app.models.enums import ExecutionState
+from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.services.jobs import transition
 from app.services.providers.base import (
@@ -236,6 +237,21 @@ async def test_terminal_state_does_not_regress(
     assert len(sink.stored) == 1
 
 
+async def test_unknown_stage_is_rejected_on_write(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        with pytest.raises(StatementError, match="submiting"):
+            await transition(
+                db,
+                job_id,
+                allowed_from={ExecutionState.QUEUED},
+                to=ExecutionState.RUNNING,
+                stage="submiting",
+            )
+
+
 async def test_expired_lease_is_processed_once(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
@@ -346,7 +362,7 @@ async def test_crash_after_submit_commit_reconciles_instead_of_resubmitting(
     provider.submit_errors = [RuntimeError("worker died during the call")]
     await _run(sessions, provider, FakeSink())
     crashed, _ = await _load(sessions, world, job_id)
-    assert (crashed.state, crashed.stage) == (ExecutionState.RUNNING, "submitting")
+    assert (crashed.state, crashed.stage) == (ExecutionState.RUNNING, JobStage.SUBMITTING)
 
     await _expire_leases(connection, world)
     await _run(sessions, provider, FakeSink())
