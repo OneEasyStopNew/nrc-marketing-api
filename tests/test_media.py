@@ -200,7 +200,8 @@ def test_mpo_is_accepted_as_jpeg() -> None:
 
 
 def _fit(content: bytes, max_pixels: int = 25_000_000) -> tuple[bytes, Image.Image]:
-    out, info = fit_to_format(content, width_px=1080, height_px=1080, max_pixels=max_pixels)
+    fitted = fit_to_format(content, width_px=1080, height_px=1080, max_pixels=max_pixels)
+    out, info = fitted.content, fitted.stored
     assert (info.mime_type, info.ext, info.width_px, info.height_px) == (
         "image/png",
         "png",
@@ -213,6 +214,14 @@ def _fit(content: bytes, max_pixels: int = 25_000_000) -> tuple[bytes, Image.Ima
 def _pixel(image: Image.Image, xy: tuple[int, int]) -> tuple[int, int, int]:
     r, g, b = image.convert("RGB").getpixel(xy)  # type: ignore[misc]
     return r, g, b
+
+
+def test_fit_reports_the_source_type_and_size() -> None:
+    fitted = fit_to_format(
+        _image("JPEG", (1200, 900)), width_px=1080, height_px=1080, max_pixels=25_000_000
+    )
+    source = fitted.source
+    assert (source.mime_type, source.width_px, source.height_px) == ("image/jpeg", 1200, 900)
 
 
 def test_fit_resizes_a_square_to_the_format_size() -> None:

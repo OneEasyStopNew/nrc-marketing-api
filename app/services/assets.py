@@ -46,18 +46,10 @@ class StoredImageSink:
     async def store(
         self, db: AsyncSession, job: Job, image: FetchedImage, provider_name: str, model: str
     ) -> UUID:
-        try:
-            info = await asyncio.to_thread(
-                media.inspect_image, image.content, max_pixels=self._settings.max_image_pixels
-            )
-        except MediaRejectedError as error:
-            raise ProviderOutputError(str(error)) from error
-        if info.mime_type != image.content_type:
-            raise ProviderOutputError("The provider output type does not match its content.")
         spec = (await job_content(db, job)).spec
         # The stored bytes are what image validation reads: exactly the format's size, as PNG.
         try:
-            content, stored_info = await asyncio.to_thread(
+            fitted = await asyncio.to_thread(
                 media.fit_to_format,
                 image.content,
                 width_px=spec.width_px,
@@ -66,11 +58,12 @@ class StoredImageSink:
             )
         except MediaRejectedError as error:
             raise ProviderOutputError(str(error)) from error
-        original = (info.width_px, info.height_px)
-        info = stored_info
+        if fitted.source.mime_type != image.content_type:
+            raise ProviderOutputError("The provider output type does not match its content.")
+        info = fitted.stored
         try:
             stored = await self._storage.save_generated_image(
-                content, ext=info.ext, content_type=info.mime_type
+                fitted.content, ext=info.ext, content_type=info.mime_type
             )
         except StorageError as error:
             raise ImageStorageUnavailableError("Image storage is temporarily unavailable.") from (
@@ -105,8 +98,8 @@ class StoredImageSink:
             asset.id,
             job.id,
             job.tenant_id,
-            original[0],
-            original[1],
+            fitted.source.width_px,
+            fitted.source.height_px,
             info.width_px,
             info.height_px,
         )

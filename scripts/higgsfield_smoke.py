@@ -219,7 +219,7 @@ async def _generate(
     image = await provider.fetch_output(result)
     spec = FORMAT_SPECS[PostFormat.FEED_IMAGE]
     try:
-        content, info = await asyncio.to_thread(
+        fitted = await asyncio.to_thread(
             media.fit_to_format,
             image.content,
             width_px=spec.width_px,
@@ -229,8 +229,9 @@ async def _generate(
     except MediaRejectedError as error:
         print(f"error={error.code}: {error}")
         return FAILED
+    info = fitted.stored
     stored = await make_storage(settings).save_generated_image(
-        content, ext=info.ext, content_type=info.mime_type
+        fitted.content, ext=info.ext, content_type=info.mime_type
     )
     print(
         f"stored checksum_sha256={stored.checksum_sha256} size_bytes={stored.size_bytes} "
