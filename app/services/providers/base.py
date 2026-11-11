@@ -141,10 +141,22 @@ class ProviderOutcomeUnknownError(ProviderError):
 
 
 class ProviderOutputError(ProviderError):
-    # The output could not be fetched safely (host not allowed, too large, wrong type, expired).
+    # The output could not be fetched safely (too large, wrong type, expired, unreachable).
     code = "PROVIDER_OUTPUT_INVALID"
 
 
 class ProviderOutputExpiredError(ProviderOutputError):
     # The provider's output expired before it was fetched. It billed the generation regardless.
     code = "OUTPUT_EXPIRED"
+
+
+class ProviderOutputHostError(ProviderOutputError):
+    # The output URL's host is not in the allowlist, so it is never fetched. Retryable: ops can
+    # add the host (HIGGSFIELD_OUTPUT_HOSTS, then restart the worker) until the output expires.
+    code = "OUTPUT_HOST_NOT_ALLOWED"
+    retryable = True
+
+    def __init__(self, host: str) -> None:
+        # The host only, safe to log: the URL's path and query carry its signature.
+        self.host = host
+        super().__init__("The provider output host is not allowed")

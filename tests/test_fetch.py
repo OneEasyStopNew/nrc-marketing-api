@@ -10,7 +10,11 @@ import pytest
 from PIL import Image
 
 from app.services.fetch import SafeFetcher, build_fetch_client
-from app.services.providers.base import FetchedImage, ProviderOutputError
+from app.services.providers.base import (
+    FetchedImage,
+    ProviderOutputError,
+    ProviderOutputHostError,
+)
 
 HOST = "cdn.provider.example"
 URL = f"https://{HOST}/out/1.png?X-Signature=secret-signature"
@@ -94,17 +98,31 @@ async def test_http_scheme_is_rejected_without_a_request() -> None:
     assert seen == []
 
 
-async def test_host_not_in_allowlist_is_rejected() -> None:
+async def test_host_not_in_allowlist_is_a_retryable_host_error_without_a_request() -> None:
+    # Retryable: ops can add the host to HIGGSFIELD_OUTPUT_HOSTS while the output is still live.
     fetcher, seen = _fetcher(_ok())
-    with pytest.raises(ProviderOutputError):
-        await _fetch(fetcher, "https://evil.example/out/1.png")
+    with pytest.raises(ProviderOutputHostError) as info:
+        await _fetch(fetcher, "https://Evil.example:443/out/1.png?X-Signature=secret-signature")
     assert seen == []
+    assert (info.value.code, info.value.retryable) == ("OUTPUT_HOST_NOT_ALLOWED", True)
+    # The host only: the path and query carry the signature.
+    assert info.value.host == "evil.example"
+    assert "out/1.png" not in str(info.value)
+    assert "secret-signature" not in str(info.value)
 
 
 async def test_empty_allowlist_rejects_everything() -> None:
     fetcher, seen = _fetcher(_ok())
-    with pytest.raises(ProviderOutputError):
+    with pytest.raises(ProviderOutputHostError):
         await _fetch(fetcher, hosts=frozenset())
+    assert seen == []
+
+
+async def test_url_without_a_host_is_invalid_not_a_host_error() -> None:
+    fetcher, seen = _fetcher(_ok())
+    with pytest.raises(ProviderOutputError) as info:
+        await _fetch(fetcher, "https:///out/1.png")
+    assert not info.value.retryable
     assert seen == []
 
 

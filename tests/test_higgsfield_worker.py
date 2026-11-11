@@ -625,6 +625,94 @@ async def test_job_fetching_output_past_grace_keeps_fetching(
     assert job.provider_spend_state is SpendState.COMMITTED
 
 
+UNLISTED_ONLY = frozenset({"other-cdn.example"})
+
+
+@needs_seaweedfs
+async def test_unlisted_output_host_keeps_the_job_waiting_and_logs_only_the_host(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake = FakeHiggsfield()
+    fake.status_body = _completed(datetime.now(UTC) + timedelta(days=7))
+    provider = higgsfield(fake, _output_server(_png_1080()), UNLISTED_ONLY)
+    reserved, committed = await _spend(connection, "higgsfield")
+
+    # More rounds than GENERATION_MAX_ATTEMPTS: a refused host never counts as a failure.
+    with caplog.at_level(logging.ERROR, logger="app.workers.connector"):
+        for _ in range(get_settings().generation_max_attempts + 1):
+            await run(sessions, provider, _sink())
+            await _requeue(connection, world)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.WAITING_PROVIDER, JobStage.FETCHING_OUTPUT)
+    assert job.result_asset_id is None
+    assert reservation is ReservationState.RESERVED
+    assert job.provider_spend_state is SpendState.RESERVED
+    assert await _spend(connection, "higgsfield") == (reserved + ESTIMATE_MICROS, committed)
+    assert (await _event(connection)).failed_attempts == 0
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors
+    for message in errors:
+        assert f"host={OUTPUT_HOST}" in message
+        assert f"job={job.id}" in message
+        assert f"tenant={job.tenant_id}" in message
+        # Never the path or the query: the signed URL is a credential.
+        assert "/outputs" not in message
+        assert "result.png" not in message
+        assert "signature" not in message.lower()
+
+
+@needs_seaweedfs
+async def test_output_is_stored_once_the_host_is_added_to_the_allowlist(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    fake.status_body = _completed(datetime.now(UTC) + timedelta(days=7))
+    reserved, committed = await _spend(connection, "higgsfield")
+    await run(sessions, higgsfield(fake, _output_server(_png_1080()), UNLISTED_ONLY), _sink())
+    waiting, _ = await _load(sessions, world, job_id)
+    await _requeue(connection, world)
+
+    # Ops add the host to HIGGSFIELD_OUTPUT_HOSTS and restart the worker.
+    fixed = higgsfield(fake, _output_server(_png_1080()), UNLISTED_ONLY | {OUTPUT_HOST})
+    await run(sessions, fixed, _sink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert waiting.state is ExecutionState.WAITING_PROVIDER
+    assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
+    assert job.result_asset_id is not None
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    assert await _spend(connection, "higgsfield") == (reserved, committed + ESTIMATE_MICROS)
+    assert len(fake.submit_keys) == 1
+
+
+@needs_seaweedfs
+async def test_unlisted_output_host_ends_output_expired_once_the_output_expires(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    expires = datetime.now(UTC) + timedelta(hours=1)
+    fake.status_body = _completed(expires)
+    provider = higgsfield(fake, _output_server(_png_1080()), UNLISTED_ONLY)
+    reserved, committed = await _spend(connection, "higgsfield")
+    await run(sessions, provider, _sink())
+    await _requeue(connection, world)
+
+    await run_at(sessions, provider, expires + timedelta(minutes=1), _sink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    assert await _spend(connection, "higgsfield") == (reserved, committed + ESTIMATE_MICROS)
+    assert (await _event(connection)).processed_at is not None
+
+
 def test_http_client_request_urls_are_never_logged() -> None:
     # Output URLs are signed; httpx would log them at INFO.
     configure_logging("DEBUG")

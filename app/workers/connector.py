@@ -67,6 +67,7 @@ from app.services.providers.base import (
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputExpiredError,
+    ProviderOutputHostError,
     SubmitResult,
 )
 from app.services.providers.higgsfield import (
@@ -492,7 +493,11 @@ class ImageGenerationHandler:
                 await stored.rollback()
                 raise
         except ProviderError as error:
+            if isinstance(error, ProviderOutputHostError):
+                _log_output_host_refused(job, provider_request_id, error.host)
             if error.retryable:
+                # Never counted as a failed attempt: the output's expiry (checked on every poll
+                # above) is what ends these retries.
                 return backoff_seconds(step.event_attempts, step.settings)
             # The provider's own expiry check at fetch time ends the job like the check above.
             expired = isinstance(error, ProviderOutputExpiredError)
@@ -869,6 +874,18 @@ def _log_stuck_unknown(job: Job, reason: str) -> None:
         job.provider_request_id,
         job.stage,
         reason,
+    )
+
+
+def _log_output_host_refused(job: Job, provider_request_id: str, host: str) -> None:
+    # Ops: add the host to HIGGSFIELD_OUTPUT_HOSTS and restart the worker; the job keeps
+    # retrying until the output expires. The host only, never the signed URL's path or query.
+    logger.error(
+        "provider output host not allowed job=%s tenant=%s provider_request=%s host=%s",
+        job.id,
+        job.tenant_id,
+        provider_request_id,
+        host,
     )
 
 

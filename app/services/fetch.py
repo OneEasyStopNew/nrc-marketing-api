@@ -9,7 +9,11 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.services.media import MediaRejectedError, inspect_header
-from app.services.providers.base import FetchedImage, ProviderOutputError
+from app.services.providers.base import (
+    FetchedImage,
+    ProviderOutputError,
+    ProviderOutputHostError,
+)
 
 _ALLOWED_TYPES = frozenset({"image/png", "image/jpeg"})
 _SITE_LOCAL_V6 = ipaddress.IPv6Network("fec0::/10")
@@ -92,8 +96,10 @@ class SafeFetcher:
             raise ProviderOutputError("The provider output URL must use https")
         if parts.username or parts.password:
             raise ProviderOutputError("The provider output URL must not carry credentials")
-        if not host or host not in allowed_hosts:
-            raise ProviderOutputError("The provider output host is not allowed")
+        if not host:
+            raise ProviderOutputError("The provider output URL is invalid")
+        if host not in allowed_hosts:
+            raise ProviderOutputHostError(host)
         return host
 
     async def _run(self, url: str, host: str, max_bytes: int) -> FetchedImage:

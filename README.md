@@ -111,6 +111,11 @@ storage.
   nothing is sent. Failed, rejected and canceled requests give the amount back, completed ones commit
   it (the actual cost if Higgsfield ever reports one, else the estimate), and `UNKNOWN` jobs keep it
   until reconciled.
+- **Output host not allowed.** Images are downloaded only from `HIGGSFIELD_OUTPUT_HOSTS`. If
+  Higgsfield answers with another host, the worker logs `provider output host not allowed ...
+  host=<host>` at ERROR (host only, never the URL) and keeps the job waiting, retrying with
+  backoff. To recover, add that host to `HIGGSFIELD_OUTPUT_HOSTS` and restart the worker before
+  the output expires; after expiry the job fails `OUTPUT_EXPIRED` (billed).
 
 ## Checks
 
