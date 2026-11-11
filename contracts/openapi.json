@@ -1563,7 +1563,7 @@
               }
             ],
             "title": "Asset Id",
-            "description": "Generated image, once D3 ships."
+            "description": "Newest generated image for the current version; null until one is stored and again after an edit creates a new version."
           },
           "created_by": {
             "type": "string",
