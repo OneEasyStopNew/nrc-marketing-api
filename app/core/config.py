@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     generation_max_cost_usd_per_image: Decimal = Field(default=Decimal("0.10"), ge=0)
     generation_max_attempts: int = Field(default=3, ge=1, le=10)
     generation_deadline_seconds: int = Field(default=900, ge=60, le=86_400)
+    # How long past its deadline an accepted job may stay queued or in progress at the provider
+    # before it is parked as UNKNOWN for review. Does not apply once the provider has completed.
+    generation_accepted_grace_seconds: int = Field(default=3600, ge=60, le=86_400)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
     worker_lease_seconds: int = Field(default=60, ge=5, le=3600)
     higgsfield_base_url: str = "https://api.higgsfield.ai"

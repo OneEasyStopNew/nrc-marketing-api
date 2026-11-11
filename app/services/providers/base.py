@@ -137,3 +137,8 @@ class ProviderOutcomeUnknownError(ProviderError):
 class ProviderOutputError(ProviderError):
     # The output could not be fetched safely (host not allowed, too large, wrong type, expired).
     code = "PROVIDER_OUTPUT_INVALID"
+
+
+class ProviderOutputExpiredError(ProviderOutputError):
+    # The provider's output expired before it was fetched. It billed the generation regardless.
+    code = "OUTPUT_EXPIRED"
