@@ -8,13 +8,22 @@ from pydantic import BaseModel
 
 from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeRead, CreativeVersionPage
+from app.schemas.policies import GenerationEligibility, PolicyBundleRead
 from app.schemas.tenancy import ContextRead, MeRead
 from scripts.export_openapi import CONTRACT_PATH, render
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "contracts" / "examples" / "d1.json"
 SCHEMAS: dict[str, type[BaseModel]] = {
     model.__name__: model
-    for model in (ContextRead, CreativeRead, CreativeVersionPage, ErrorBody, MeRead)
+    for model in (
+        ContextRead,
+        CreativeRead,
+        CreativeVersionPage,
+        ErrorBody,
+        GenerationEligibility,
+        MeRead,
+        PolicyBundleRead,
+    )
 }
 
 

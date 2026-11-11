@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, HttpUrl, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     http_timeout_seconds: float = Field(default=5, gt=0, le=30)
 
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
+
+    # Simulated validation, generation, asset and export responses so the frontend can integrate
+    # before D2-D5 ship. Local and demo environments only; never in staging or production.
+    demo_stubs: bool = False
+    # Absolute base URL the frontend reaches this API on, used for placeholder image links.
+    demo_public_base_url: HttpUrl = HttpUrl("http://127.0.0.1:8000")
 
     @field_validator("cognito_client_ids", "cors_origins", mode="before")
     @classmethod

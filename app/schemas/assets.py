@@ -43,6 +43,6 @@ class ExportManifest(ApiModel):
     caption: str | None
     image: AssetRead
     study_snapshot_version: int
-    policy_bundle_version: str | None
+    policy_bundle_version: int | None
     latest_validation: ValidationRunSummary | None
     exported_at: datetime

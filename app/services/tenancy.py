@@ -20,6 +20,7 @@ from app.schemas.tenancy import (
     StudySnapshotRead,
     TenantMembershipRead,
 )
+from app.services import policies
 
 
 async def get_me(db: AsyncSession, principal: Principal) -> MeRead:
@@ -117,6 +118,7 @@ async def get_context(db: AsyncSession, ctx: TenantContext) -> ContextRead:
             )
             for post_format, spec in FORMAT_SPECS.items()
         ],
+        active_policy=await policies.get_active_policy_summary(db, ctx),
     )
 
 

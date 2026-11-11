@@ -1,8 +1,9 @@
 # NRC Marketing backend
 
 FastAPI service for the NRC Marketing journey (Jira epic NRC-29). This is the D1 foundation for the
-13 Nov demo: login, tenant context, study snapshots and versioned creative drafts. The rest of the
-agreed contract is published, and its endpoints return `501 NOT_IMPLEMENTED` until they ship.
+13 Nov demo: login, tenant context, study snapshots, versioned creative drafts, the active policy and
+the generation-eligibility check. The rest of the agreed contract is published, and its endpoints
+return `501 NOT_IMPLEMENTED` until they ship.
 
 Stack: Python 3.14, FastAPI, SQLAlchemy 2.1 (async, asyncpg), Alembic, PostgreSQL 17 with
 row-level security, Cognito access tokens.
@@ -54,6 +55,31 @@ Conventions:
 | Text offsets (D2) | Zero-based Unicode code points, end exclusive. JS strings are UTF-16, so convert before slicing. |
 | Image regions (D4) | Fractions 0–1 of the stored image's original width and height. |
 
+Policy and generation:
+
+- `GET /policies/active` returns the active policy (the highest version) and its rules, read-only.
+  `/context` carries a summary in `active_policy`. The seeded policy is synthetic demo rules
+  paraphrased from public FDA recruitment-advertising guidance, not the approved client policy.
+- `GET /creatives/{id}/generation-eligibility[?version=N]` says whether generation may start and why
+  not (`reason`). The generation job calls `app.services.eligibility.check_generation_eligibility`
+  and raises `GenerationNotEligibleError` (409 `GENERATION_NOT_ELIGIBLE`) unless it is eligible.
+  Until brief validation ships, the best possible answer is `NOT_VALIDATED`.
+
+## Demo stubs (frontend integration before D2-D5)
+
+Set `DEMO_STUBS=true` (and `DEMO_PUBLIC_BASE_URL` to the address the frontend uses) and run one
+worker. Validations, generation jobs, assets and export then answer with simulated data in the
+real contract shapes instead of `501`:
+
+- Validation results come from phrase checks against the tenant's active policy (for example
+  "guaranteed" fails REC-04), not from a real validator. Every run says so in `coverage_gaps`.
+- A brief run takes 2 s and a generation job 6 s (QUEUED, RUNNING, WAITING_PROVIDER, SUCCEEDED),
+  so polling UIs can be exercised. Generation needs a passing brief run for that exact version.
+- The image is a placeholder SVG served from `/demo-files/{asset_id}`.
+- Nothing is stored in the database; restarting the API forgets every run, job and asset.
+
+Never enable it in staging or production.
+
 ## Staging prerequisites
 
 - A Postgres login role `marketing_app` that does not own the tables and has no `BYPASSRLS`. The API's
@@ -67,5 +93,5 @@ Conventions:
 ## Not done yet
 
 Validation (D2), Higgsfield generation and assets (D3), image checks (D4), export (D5), and the
-staging deployment (D6). Cleanup of old idempotency keys and the study import from the approved
-demo study are still to do. The seeded study is synthetic.
+staging deployment (D6). Cleanup of old idempotency keys, the study import from the approved demo
+study and the approved policy rules are still to do. The seeded study and policy are synthetic.

@@ -594,6 +594,116 @@
         }
       }
     },
+    "/v1/marketing/creatives/{creative_id}/generation-eligibility": {
+      "get": {
+        "tags": [
+          "creatives"
+        ],
+        "summary": "Whether image generation may start for a version",
+        "description": "Defaults to the current version. Generation is refused with 409 GENERATION_NOT_ELIGIBLE unless this returns eligible: true.",
+        "operationId": "get_generation_eligibility",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "creative_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Creative Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Defaults to the current one.",
+              "title": "Version"
+            },
+            "description": "Defaults to the current one."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationEligibility"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
+    },
     "/v1/marketing/creatives/{creative_id}/export": {
       "get": {
         "tags": [
@@ -671,8 +781,108 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "EXPORT_NOT_READY: no image for this version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "501": {
-            "description": "Not implemented yet.",
+            "description": "Not implemented yet (DEMO_STUBS is off).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/policies/active": {
+      "get": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Active policy version and its rules (read-only)",
+        "operationId": "get_active_policy",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyBundleRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no policy yet.",
             "content": {
               "application/json": {
                 "schema": {
@@ -690,6 +900,7 @@
           "validations"
         ],
         "summary": "Start validating a brief, caption or image (D2/D4)",
+        "description": "Poll GET /validations/{validation_run_id} until state is SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run.",
         "operationId": "create_validation",
         "security": [
           {
@@ -775,8 +986,28 @@
               }
             }
           },
+          "404": {
+            "description": "Not found, or not visible to the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "501": {
-            "description": "Not implemented yet.",
+            "description": "Not implemented yet (DEMO_STUBS is off).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key reused with a different body.",
             "content": {
               "application/json": {
                 "schema": {
@@ -865,8 +1096,18 @@
               }
             }
           },
+          "404": {
+            "description": "Not found, or not visible to the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "501": {
-            "description": "Not implemented yet.",
+            "description": "Not implemented yet (DEMO_STUBS is off).",
             "content": {
               "application/json": {
                 "schema": {
@@ -884,6 +1125,7 @@
           "jobs"
         ],
         "summary": "Start image generation for a validated brief (D3)",
+        "description": "Only a version whose brief passed validation can generate. Poll GET /jobs/{job_id}; when it SUCCEEDED, result_asset_id is the image.",
         "operationId": "create_creative_job",
         "security": [
           {
@@ -969,8 +1211,28 @@
               }
             }
           },
+          "404": {
+            "description": "Not found, or not visible to the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "501": {
-            "description": "Not implemented yet.",
+            "description": "Not implemented yet (DEMO_STUBS is off).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "GENERATION_NOT_ELIGIBLE (details.reason says why), or IDEMPOTENCY_KEY_REUSED.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1059,8 +1321,18 @@
               }
             }
           },
+          "404": {
+            "description": "Not found, or not visible to the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "501": {
-            "description": "Not implemented yet.",
+            "description": "Not implemented yet (DEMO_STUBS is off).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1149,8 +1421,18 @@
               }
             }
           },
+          "404": {
+            "description": "Not found, or not visible to the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "501": {
-            "description": "Not implemented yet.",
+            "description": "Not implemented yet (DEMO_STUBS is off).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1345,6 +1627,17 @@
             },
             "type": "array",
             "title": "Post Formats"
+          },
+          "active_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolicySummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until a policy is loaded."
           }
         },
         "type": "object",
@@ -1355,7 +1648,8 @@
           "capabilities",
           "studies",
           "languages",
-          "post_formats"
+          "post_formats",
+          "active_policy"
         ],
         "title": "ContextRead"
       },
@@ -1686,6 +1980,20 @@
         ],
         "title": "CreativeVersionRead"
       },
+      "EligibilityReason": {
+        "type": "string",
+        "enum": [
+          "ELIGIBLE",
+          "STALE_VERSION",
+          "STUDY_CLOSED",
+          "NO_ACTIVE_POLICY",
+          "NOT_VALIDATED",
+          "VALIDATION_FAILED",
+          "NEEDS_REVIEW"
+        ],
+        "title": "EligibilityReason",
+        "description": "Why generation is or is not allowed for one creative version."
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -1790,7 +2098,7 @@
           "policy_bundle_version": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "integer"
               },
               {
                 "type": "null"
@@ -1932,6 +2240,67 @@
           "outcome"
         ],
         "title": "GateResult"
+      },
+      "GenerationEligibility": {
+        "properties": {
+          "creative_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Creative Id"
+          },
+          "creative_version": {
+            "type": "integer",
+            "title": "Creative Version"
+          },
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/EligibilityReason"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "policy_bundle_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Bundle Version",
+            "description": "Active policy the check used."
+          },
+          "validation_run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Run Id",
+            "description": "The passing brief validation the decision relies on, when eligible."
+          }
+        },
+        "type": "object",
+        "required": [
+          "creative_id",
+          "creative_version",
+          "eligible",
+          "reason",
+          "message",
+          "policy_bundle_version",
+          "validation_run_id"
+        ],
+        "title": "GenerationEligibility",
+        "description": "Whether image generation may start. Only a brief that passed validation is eligible."
       },
       "ImageRegion": {
         "properties": {
@@ -2156,6 +2525,161 @@
         ],
         "title": "Outcome",
         "description": "Overall result. PASS is not approval and does not make content ready to publish."
+      },
+      "PolicyBundleRead": {
+        "properties": {
+          "policy_bundle_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Policy Bundle Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "source_ref": {
+            "type": "string",
+            "title": "Source Ref"
+          },
+          "is_synthetic": {
+            "type": "boolean",
+            "title": "Is Synthetic",
+            "description": "True for demo rules, never an approved client policy."
+          },
+          "approved_by": {
+            "type": "string",
+            "title": "Approved By"
+          },
+          "approved_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Approved At"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Rules"
+          }
+        },
+        "type": "object",
+        "required": [
+          "policy_bundle_id",
+          "version",
+          "name",
+          "source_ref",
+          "is_synthetic",
+          "approved_by",
+          "approved_at",
+          "rules"
+        ],
+        "title": "PolicyBundleRead"
+      },
+      "PolicyRule": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9-]{1,39}$",
+            "title": "Rule Id",
+            "examples": [
+              "REC-01"
+            ]
+          },
+          "rule_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Rule Version"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "requirement": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Requirement"
+          },
+          "gate": {
+            "$ref": "#/components/schemas/Gate"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "mandatory": {
+            "type": "boolean",
+            "title": "Mandatory",
+            "description": "A failed mandatory rule always fails the validation."
+          },
+          "applies_to": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationInputKind"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Applies To"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceReference"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule_id",
+          "rule_version",
+          "title",
+          "requirement",
+          "gate",
+          "severity",
+          "mandatory",
+          "applies_to",
+          "source"
+        ],
+        "title": "PolicyRule",
+        "description": "One rule a creative is validated against. Findings cite rule_id and rule_version."
+      },
+      "PolicySummary": {
+        "properties": {
+          "policy_bundle_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Policy Bundle Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "is_synthetic": {
+            "type": "boolean",
+            "title": "Is Synthetic"
+          },
+          "rule_count": {
+            "type": "integer",
+            "title": "Rule Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "policy_bundle_id",
+          "version",
+          "name",
+          "is_synthetic",
+          "rule_count"
+        ],
+        "title": "PolicySummary"
       },
       "PostFormat": {
         "type": "string",
@@ -2667,7 +3191,7 @@
           "policy_bundle_version": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "integer"
               },
               {
                 "type": "null"

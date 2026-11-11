@@ -138,7 +138,7 @@ class ValidationRunRead(ValidationRunSummary):
     input_hash: str
     asset_id: UUID | None
     study_snapshot_version: int
-    policy_bundle_version: str | None
+    policy_bundle_version: int | None
     gates: list[GateResult]
     rule_results: list[RuleResult]
     findings: list[Finding]

@@ -13,6 +13,7 @@ from app.auth.tokens import Principal, SigningKeyProvider, verify_access_token
 from app.core.config import Settings, get_settings
 from app.core.errors import AuthenticationError, PermissionDeniedError
 from app.services import tenancy
+from app.services.demo_stubs import DemoStubs
 
 
 async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
@@ -26,7 +27,14 @@ async def get_signing_keys(request: Request) -> SigningKeyProvider:
     return keys
 
 
+async def get_demo_stubs(request: Request) -> DemoStubs | None:
+    # None unless DEMO_STUBS=true: the stubbed endpoints then answer 501 as before.
+    stubs: DemoStubs | None = request.app.state.demo_stubs
+    return stubs
+
+
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+DemoStubsDep = Annotated[DemoStubs | None, Depends(get_demo_stubs)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 _bearer = HTTPBearer(auto_error=False, description="Cognito access token.")

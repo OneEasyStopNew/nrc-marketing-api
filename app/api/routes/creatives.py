@@ -6,12 +6,20 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Response, status
 
-from app.api.deps import CreativeReader, CreativeWriter, DbSession, IdempotencyKey, IfMatch
+from app.api.deps import (
+    CreativeReader,
+    CreativeWriter,
+    DbSession,
+    DemoStubsDep,
+    IdempotencyKey,
+    IfMatch,
+)
 from app.core.errors import FeatureNotAvailableError, VersionRequiredError
 from app.schemas.assets import ExportManifest
 from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeCreate, CreativeRead, CreativeUpdate, CreativeVersionPage
-from app.services import creatives
+from app.schemas.policies import GenerationEligibility
+from app.services import creatives, eligibility
 
 router = APIRouter(prefix="/creatives", tags=["creatives"])
 
@@ -113,9 +121,36 @@ async def list_creative_versions(
 
 
 @router.get(
+    "/{creative_id}/generation-eligibility",
+    summary="Whether image generation may start for a version",
+    description="Defaults to the current version. Generation is refused with 409 "
+    "GENERATION_NOT_ELIGIBLE unless this returns eligible: true.",
+    responses={404: {"model": ErrorBody}},
+)
+async def get_generation_eligibility(
+    creative_id: UUID,
+    ctx: CreativeReader,
+    db: DbSession,
+    stubs: DemoStubsDep,
+    version: Annotated[int | None, Query(ge=1, description="Defaults to the current one.")] = None,
+) -> GenerationEligibility:
+    return await eligibility.check_generation_eligibility(
+        db, ctx, creative_id, version, brief_runs=stubs
+    )
+
+
+@router.get(
     "/{creative_id}/export",
     summary="Download the review draft (D5)",
-    responses={501: {"model": ErrorBody, "description": "Not implemented yet."}},
+    responses={
+        404: {"model": ErrorBody},
+        409: {"model": ErrorBody, "description": "EXPORT_NOT_READY: no image for this version."},
+        501: {"model": ErrorBody, "description": "Not implemented yet (DEMO_STUBS is off)."},
+    },
 )
-async def export_creative(creative_id: UUID, ctx: CreativeReader) -> ExportManifest:
-    raise FeatureNotAvailableError("Draft export is not implemented yet.")
+async def export_creative(
+    creative_id: UUID, ctx: CreativeReader, db: DbSession, stubs: DemoStubsDep
+) -> ExportManifest:
+    if stubs is None:
+        raise FeatureNotAvailableError("Draft export is not implemented yet.")
+    return await stubs.export(db, ctx, creative_id)

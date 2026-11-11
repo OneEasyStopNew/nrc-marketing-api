@@ -5,7 +5,7 @@ owner, then the connection switches to the marketing_app role so row-level secur
 """
 
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,9 +31,9 @@ from app.core.config import get_settings
 from app.core.errors import AuthenticationError
 from app.db.session import TenantSession
 from app.main import create_app
-from app.models import Membership, MembershipStudy, Study, StudySnapshot, Tenant
+from app.models import Membership, MembershipStudy, PolicyBundle, Study, StudySnapshot, Tenant
 from app.models.enums import Language, RecruitmentStatus
-from scripts.seed_demo import SYNTHETIC_FACTS
+from scripts.seed_demo import DEMO_POLICY_NAME, SYNTHETIC_FACTS, demo_policy_rules
 
 ROOT = Path(__file__).resolve().parents[1]
 REGION = "ap-south-1"
@@ -124,10 +124,11 @@ class SeededTenant:
     study_id: UUID
     closed_study_id: UUID
     snapshot_id: UUID
+    policy_bundle_id: UUID | None
 
 
 async def seed_tenant(
-    db: AsyncSession, *, name: str, members: dict[str, list[str]]
+    db: AsyncSession, *, name: str, members: dict[str, list[str]], with_policy: bool
 ) -> SeededTenant:
     # Tenant with one recruiting and one closed synthetic study; every member gets both.
     tenant_id, study_id, closed_study_id, snapshot_id = uuid4(), uuid4(), uuid4(), uuid4()
@@ -166,13 +167,28 @@ async def seed_tenant(
         db.add_all(
             MembershipStudy(tenant_id=tenant_id, user_sub=sub, study_id=study) for sub in members
         )
+    policy_bundle_id = uuid4() if with_policy else None
+    if policy_bundle_id is not None:
+        db.add(
+            PolicyBundle(
+                id=policy_bundle_id,
+                tenant_id=tenant_id,
+                version=1,
+                name=DEMO_POLICY_NAME,
+                source_ref="synthetic:test-fixture",
+                rules=demo_policy_rules(),
+                is_synthetic=True,
+                approved_by="synthetic-fixture",
+                approved_at=datetime(2026, 11, 1, tzinfo=UTC),
+            )
+        )
     await db.flush()
-    return SeededTenant(tenant_id, study_id, closed_study_id, snapshot_id)
+    return SeededTenant(tenant_id, study_id, closed_study_id, snapshot_id, policy_bundle_id)
 
 
 @dataclass(frozen=True, slots=True)
 class World:
-    # Two tenants. creator-a and reviewer-a belong to A; creator-b to B.
+    # Two tenants. creator-a and reviewer-a belong to A; creator-b to B. Only A has a policy.
 
     a: SeededTenant
     b: SeededTenant
@@ -205,9 +221,14 @@ def _session(conn: AsyncConnection) -> AsyncSession:
 async def world(connection: AsyncConnection) -> World:
     async with _session(connection) as seed:
         a = await seed_tenant(
-            seed, name="Tenant A", members={"creator-a": ["creator"], "reviewer-a": ["reviewer"]}
+            seed,
+            name="Tenant A",
+            members={"creator-a": ["creator"], "reviewer-a": ["reviewer"]},
+            with_policy=True,
         )
-        b = await seed_tenant(seed, name="Tenant B", members={"creator-b": ["creator"]})
+        b = await seed_tenant(
+            seed, name="Tenant B", members={"creator-b": ["creator"]}, with_policy=False
+        )
         await seed.commit()
     # From here on the connection behaves like the API's role: RLS applies, no owner rights.
     await connection.execute(text("SET LOCAL ROLE marketing_app"))
@@ -215,8 +236,17 @@ async def world(connection: AsyncConnection) -> World:
 
 
 @pytest.fixture
+def app_overrides() -> dict[Callable[..., object], Callable[..., object]]:
+    # Extra dependency overrides for the app under test; test modules redefine this fixture.
+    return {}
+
+
+@pytest.fixture
 async def client(
-    connection: AsyncConnection, world: World, signing_key: RSAPrivateKey
+    connection: AsyncConnection,
+    world: World,
+    signing_key: RSAPrivateKey,
+    app_overrides: dict[Callable[..., object], Callable[..., object]],
 ) -> AsyncIterator[httpx.AsyncClient]:
     async def request_session() -> AsyncIterator[AsyncSession]:
         # One session per request, like production: uncommitted work is rolled back on close.
@@ -226,6 +256,7 @@ async def client(
     app = create_app()
     app.dependency_overrides[get_db] = request_session
     app.dependency_overrides[get_signing_keys] = lambda: StaticKeys(signing_key)
+    app.dependency_overrides.update(app_overrides)
     try:
         async with (
             LifespanManager(app),

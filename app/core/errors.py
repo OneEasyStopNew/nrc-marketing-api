@@ -54,6 +54,17 @@ class StudySnapshotMissingError(ConflictError):
     default_message = "The study has no approved snapshot yet."
 
 
+class GenerationNotEligibleError(ConflictError):
+    # Raised by the generation job when GenerationEligibility.eligible is false.
+    code = "GENERATION_NOT_ELIGIBLE"
+    default_message = "This creative version has not passed brief validation yet."
+
+
+class ExportNotReadyError(ConflictError):
+    code = "EXPORT_NOT_READY"
+    default_message = "Generate an image for the current version before exporting."
+
+
 class VersionRequiredError(AppError):
     code = "PRECONDITION_REQUIRED"
     default_message = 'Send If-Match with the version you edited, e.g. If-Match: "3".'

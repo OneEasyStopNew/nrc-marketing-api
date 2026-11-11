@@ -1,5 +1,6 @@
 # Application factory. Run with: uvicorn app.main:create_app --factory
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -10,15 +11,18 @@ from fastapi.routing import APIRoute
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from app.api.errors import COMMON_ERROR_RESPONSES, register_exception_handlers
-from app.api.routes import creatives, health, me, workflows
+from app.api.routes import creatives, demo_files, health, me, policies, workflows
 from app.auth.tokens import JwksClient
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.request_context import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.db.session import create_engine, create_sessionmaker
+from app.services.demo_stubs import DemoStubs
 
 API_PREFIX = "/v1/marketing"
 API_VERSION = "0.1.0"
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -28,6 +32,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as http:
             app.state.sessionmaker = create_sessionmaker(engine)
+            app.state.demo_stubs = None
+            if settings.demo_stubs:
+                logger.warning("DEMO_STUBS is on: validation, generation and export are simulated")
+                app.state.demo_stubs = DemoStubs(str(settings.demo_public_base_url))
             app.state.signing_keys = JwksClient(
                 http, settings.cognito_jwks_url, ttl_seconds=settings.jwks_cache_ttl_seconds
             )
@@ -54,9 +62,10 @@ def create_app() -> FastAPI:
         generate_unique_id_function=_operation_id,
     )
     register_exception_handlers(app)
-    for router in (me.router, creatives.router, workflows.router):
+    for router in (me.router, creatives.router, policies.router, workflows.router):
         app.include_router(router, prefix=API_PREFIX, responses=COMMON_ERROR_RESPONSES)
     app.include_router(health.router)
+    app.include_router(demo_files.router)
 
     # The last middleware added runs first: CORS stays outermost so error responses carry it.
     app.add_middleware(RequestBodyLimitMiddleware, max_body_size=settings.max_request_body_bytes)
