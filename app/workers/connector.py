@@ -66,6 +66,7 @@ from app.services.providers.base import (
     ProviderError,
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
+    ProviderOutputExpiredError,
     SubmitResult,
 )
 from app.services.providers.higgsfield import (
@@ -87,8 +88,10 @@ ATTEMPTS_EXHAUSTED: Final = "ATTEMPTS_EXHAUSTED"
 NO_HANDLER: Final = "NO_HANDLER"
 # The provider billed a completed generation that could not be stored.
 OUTPUT_UNAVAILABLE: Final = "OUTPUT_UNAVAILABLE"
-# The provider billed a completed generation whose files it has already deleted.
-OUTPUT_EXPIRED: Final = "OUTPUT_EXPIRED"
+# The provider billed a completed generation whose files expired before they were stored.
+OUTPUT_EXPIRED: Final = ProviderOutputExpiredError.code
+# Accepted, but still queued or in progress at the provider when the grace window ended.
+PROVIDER_STILL_RUNNING: Final = "PROVIDER_STILL_RUNNING"
 _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type"
     " FROM lease_outbox_events(:owner, 1, :lease, :event_types)"
@@ -232,9 +235,9 @@ class ImageGenerationHandler:
         accepted = (
             job.state is ExecutionState.WAITING_PROVIDER and job.provider_request_id is not None
         )
-        # An accepted job is billed when it completes, so the deadline never stops its polling
-        # or the fetch of its output (stage fetching_output): it runs until the provider reports
-        # a final status, the output expires or the event's attempts run out (see _give_up).
+        # An accepted job is billed when it completes, so the deadline alone never stops its
+        # polling: _poll parks it as UNKNOWN once it is still unfinished past the grace window,
+        # and a completed one is fetched (stage fetching_output) until its output expires.
         if job.deadline_at <= step.now and not accepted:
             await _give_up(db, job, "DEADLINE_EXCEEDED", "The job did not finish in time.")
             return None
@@ -414,6 +417,13 @@ class ImageGenerationHandler:
             await _park_unknown(db, job.id, error.code)
             return backoff_seconds(step.event_attempts, step.settings)
         if status.status not in TERMINAL_PROVIDER_STATUSES:
+            grace = timedelta(seconds=step.settings.generation_accepted_grace_seconds)
+            if step.now >= job.deadline_at + grace:
+                # Still running long after the deadline: stop polling and hold the credits and
+                # the spend reservation, since the provider may yet complete (and bill) it.
+                await _park_unknown(db, job.id, PROVIDER_STILL_RUNNING)
+                _log_stuck_unknown(job, PROVIDER_STILL_RUNNING)
+                return None
             return backoff_seconds(step.event_attempts, step.settings)
         if status.status is not ProviderJobStatus.COMPLETED:
             code = status.failure_code or f"PROVIDER_{status.status.value.upper()}"
@@ -432,9 +442,18 @@ class ImageGenerationHandler:
             job.provider_cost_estimate_usd_micros,
             actual,
         )
+        # From here on the grace window no longer applies: the provider billed, so the output is
+        # fetched until it expires. An expired output is never fetched.
         if status.outputs_expire_at is not None and status.outputs_expire_at <= step.now:
-            # Billed, but the image can no longer be fetched: hold the credits for review.
-            await _park_unknown(db, job.id, OUTPUT_EXPIRED)
+            # Billed for a completed generation that can no longer be kept.
+            await _fail_with(
+                db,
+                job.id,
+                OUTPUT_EXPIRED,
+                "The provider's output expired.",
+                billed=True,
+                actual_usd_micros=actual,
+            )
             return None
         if step.sink is None:
             await transition(
@@ -475,11 +494,13 @@ class ImageGenerationHandler:
         except ProviderError as error:
             if error.retryable:
                 return backoff_seconds(step.event_attempts, step.settings)
+            # The provider's own expiry check at fetch time ends the job like the check above.
+            expired = isinstance(error, ProviderOutputExpiredError)
             # Billed for a completed generation that can't be kept.
             await _fail_with(
                 db,
                 job.id,
-                OUTPUT_UNAVAILABLE,
+                OUTPUT_EXPIRED if expired else OUTPUT_UNAVAILABLE,
                 error.message,
                 billed=True,
                 actual_usd_micros=actual,
