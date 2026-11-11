@@ -23,6 +23,7 @@ import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal
 from urllib.parse import urlsplit
 
@@ -69,8 +70,16 @@ logger = logging.getLogger(__name__)
 
 # The Secrets Manager secret's JSON entry; the same name as the setting it fills.
 KEY_ENTRY_NAME: Final = "HIGGSFIELD_API_KEY"
-# Accepted by soul/v2/standard (live /estimate probe, 10 Nov 2026); anything else is a 400.
-SUPPORTED_ASPECT_RATIOS: Final = frozenset({"9:16", "16:9", "4:3", "3:4", "1:1", "2:3", "3:2"})
+# Aspect ratios each model accepts, by model id, from a free live /estimate probe; any other
+# ratio is a 400. Probe a new HIGGSFIELD_MODEL with the smoke script's estimate before adding it.
+SUPPORTED_ASPECT_RATIOS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {
+        # 10 Nov 2026.
+        "higgsfield-ai/soul/v2/standard": frozenset(
+            {"9:16", "16:9", "4:3", "3:4", "1:1", "2:3", "3:2"}
+        ),
+    }
+)
 
 # Protocol facts from the Higgsfield docs, not tunable: header and id formats.
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[\x21-\x7e]{1,255}$")
@@ -254,6 +263,13 @@ class HiggsfieldProvider:
     async def submit(self, request: ImageRequest) -> SubmitResult:
         if not _IDEMPOTENCY_KEY_RE.fullmatch(request.idempotency_key):
             raise ProviderRejectedError("Idempotency key must be 1-255 visible ASCII characters")
+        # Refused rather than left to Higgsfield: a model that silently ignores a parameter (as
+        # every probed one does with width/height) would bill for an image of the wrong shape.
+        # The free estimate stays allowed, since it is how a model's ratios are probed.
+        if self.model not in SUPPORTED_ASPECT_RATIOS:
+            raise ProviderConfigError(
+                f"Model {self.model!r} has no probed aspect ratios in SUPPORTED_ASPECT_RATIOS"
+            )
         response = await self._send(
             "POST",
             f"{self._base_url}/{self.model}",
@@ -278,7 +294,9 @@ class HiggsfieldProvider:
 
     def _body(self, request: ImageRequest) -> dict[str, str]:
         # Checked here so neither the estimate nor the submit is sent for an unsupported ratio.
-        if request.aspect_ratio not in SUPPORTED_ASPECT_RATIOS:
+        # An unprobed model only estimates (submit refuses it), so Higgsfield validates that.
+        supported = SUPPORTED_ASPECT_RATIOS.get(self.model)
+        if supported is not None and request.aspect_ratio not in supported:
             raise ProviderRejectedError(
                 f"The model does not accept aspect ratio {request.aspect_ratio!r}"
             )

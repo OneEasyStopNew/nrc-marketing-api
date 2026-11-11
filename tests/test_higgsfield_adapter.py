@@ -41,7 +41,9 @@ KEY_SECRET = "ksecret-SECRETVALUE-456"  # noqa: S105
 PROMPT = "a confidential launch visual for Acme"
 OUTPUT_URL = "https://cdn.example.com/signed/abc?sig=SIGNEDTOKEN"
 REQUEST_ID = "d7e6c0f3-6699-4f6c-bb45-2ad7fd9158ff"
-MODEL = "higgsfield-ai/soul/standard"
+MODEL = "higgsfield-ai/soul/v2/standard"
+# A real model id whose accepted aspect ratios were never probed.
+UNPROBED_MODEL = "higgsfield-ai/soul/standard"
 Handler = Callable[[httpx.Request], httpx.Response]
 
 
@@ -56,11 +58,13 @@ class RecordingFetcher:
         return FetchedImage(content=b"img", content_type="image/png", source_host="cdn.example.com")
 
 
-def make(handler: Handler, fetcher: RecordingFetcher | None = None) -> HiggsfieldProvider:
+def make(
+    handler: Handler, fetcher: RecordingFetcher | None = None, model: str = MODEL
+) -> HiggsfieldProvider:
     return HiggsfieldProvider(
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         base_url="https://api.higgsfield.ai/",
-        model=MODEL,
+        model=model,
         api_key_id=SecretStr(KEY_ID),
         api_key_secret=SecretStr(KEY_SECRET),
         fetcher=fetcher or RecordingFetcher(),
@@ -533,6 +537,26 @@ async def test_unsupported_aspect_ratio_fails_before_any_request() -> None:
     with pytest.raises(ProviderRejectedError):
         await provider.submit(odd)
     assert seen == []
+
+
+async def test_unprobed_model_refuses_to_submit_but_may_estimate() -> None:
+    # Spend: never pay for a request whose parameters this model was not probed to accept.
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return httpx.Response(200, json={"usd": "0.094"})
+
+    provider = make(handler, model=UNPROBED_MODEL)
+    with pytest.raises(ProviderConfigError, match="SUPPORTED_ASPECT_RATIOS"):
+        await provider.submit(request())
+    assert seen == []
+
+    # The estimate is free and is how a model's ratios are probed: Higgsfield validates it.
+    assert await provider.estimate_cost_usd(request()) == Decimal("0.094")
+    assert [str(sent.url) for sent in seen] == [
+        f"https://api.higgsfield.ai/estimate/{UNPROBED_MODEL}"
+    ]
 
 
 @pytest.mark.parametrize(

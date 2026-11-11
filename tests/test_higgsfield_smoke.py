@@ -15,7 +15,7 @@ from app.services.providers.higgsfield import HiggsfieldProvider
 from app.services.storage import StoredObject
 from scripts.higgsfield_smoke import CANDIDATES, parse_args, provider_factory, run
 
-MODEL = "higgsfield-ai/soul/standard"
+MODEL = "higgsfield-ai/soul/v2/standard"
 KEY_ID, KEY_SECRET = "kid-SMOKE", "ksecret-SMOKE-VALUE"
 OUTPUT_HOST = "images.higgsfield.example"
 OUTPUT_URL = f"https://{OUTPUT_HOST}/out.png?signature=SIGNED"

@@ -48,7 +48,7 @@ from tests.conftest import (
     needs_seaweedfs,
 )
 
-MODEL = "higgsfield-ai/soul/standard"
+MODEL = "higgsfield-ai/soul/v2/standard"
 ESTIMATE_USD = "0.05"
 OUTPUT_HOST = "images.higgsfield.example"
 OUTPUT_URL = f"https://{OUTPUT_HOST}/outputs/result.png?signature=SIGNED"
