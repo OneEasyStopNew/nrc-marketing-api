@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Validation report {{ run.validation_run_id }}</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; color: #1a1a1a; margin: 0 auto; max-width: 52rem; padding: 1.5rem; }
+  h1 { font-size: 1.4rem; margin: 0.5rem 0; }
+  h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; border-bottom: 1px solid #999; }
+  .label { display: inline-block; border: 2px solid #1a1a1a; padding: 0.1rem 0.6rem; font-weight: 700; text-transform: uppercase; }
+  .notice { border: 1px solid #999; background: #f4f4f4; padding: 0.5rem 0.8rem; margin: 0.8rem 0; }
+  .warn { border-color: #b36b00; background: #fff4e0; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+  th, td { border: 1px solid #999; padding: 0.3rem 0.5rem; text-align: left; vertical-align: top; }
+  th { background: #eee; width: 30%; }
+  .grid th { width: auto; }
+  .outcome { font-weight: 700; padding: 0 0.3rem; border: 1px solid #1a1a1a; }
+  .FAIL { background: #fbd5d5; }
+  .NEEDS_REVIEW { background: #ffe9b0; }
+  .PASS { background: #d9ecd9; }
+  .finding { border: 1px solid #999; padding: 0.5rem 0.8rem; margin: 0.6rem 0; break-inside: avoid; }
+  .finding p { margin: 0.2rem 0; }
+  td, th, p, li, pre, h1 { overflow-wrap: anywhere; word-break: break-word; }
+  pre { white-space: pre-wrap; margin: 0.2rem 0; font: inherit; background: #f4f4f4; padding: 0.3rem; }
+  footer { margin-top: 2rem; font-size: 0.85rem; color: #444; }
+  @media print {
+    body { max-width: none; padding: 0; font-size: 11pt; }
+    h2 { break-after: avoid; }
+    tr, .finding { break-inside: avoid; }
+    .FAIL, .NEEDS_REVIEW, .PASS, .notice, th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<p><span class="label">Draft for review</span></p>
+<h1>Validation evidence report</h1>
+<div class="notice">This report shows the stored result of one validation run. It is not an approval, and a PASS does not mean the content is ready to publish. A person still decides.</div>
+{% if not run.is_current %}
+<div class="notice warn"><strong>Superseded.</strong> The creative or its inputs have changed since this run. Treat this report as history, not as the state of the current draft.</div>
+{% endif %}
+
+<h2>Versions and run</h2>
+<table>
+<tr><th>Validation run ID</th><td>{{ run.validation_run_id }}</td></tr>
+<tr><th>Input kind</th><td>{{ run.input_kind.value }}</td></tr>
+<tr><th>Creative version</th><td>{{ run.creative_version }}</td></tr>
+<tr><th>Asset (ID)</th><td>{{ run.asset_id if run.asset_id else "not applicable (no image in this run)" }}</td></tr>
+<tr><th>Study snapshot version</th><td>{{ run.study_snapshot_version }}</td></tr>
+<tr><th>Policy bundle version</th><td>{{ run.policy_bundle_version if run.policy_bundle_version else "none recorded" }}</td></tr>
+<tr><th>Evaluated at</th><td>{{ run.evaluated_at.strftime("%Y-%m-%d %H:%M UTC") if run.evaluated_at else "not evaluated yet" }}</td></tr>
+<tr><th>Run state</th><td>{{ run.state.value }}</td></tr>
+<tr><th>Input hash</th><td>{{ run.input_hash }}</td></tr>
+<tr><th>Report generated at</th><td>{{ generated_at }}</td></tr>
+</table>
+
+<h2>Outcome</h2>
+{% if run.outcome %}
+<p>Overall outcome: <span class="outcome {{ run.outcome.value }}">{{ run.outcome.value }}</span></p>
+{% else %}
+<p>Overall outcome: <span class="outcome">NO OUTCOME YET</span> (the run has not finished).</p>
+{% endif %}
+<table class="grid">
+<tr><th>Gate</th><th>Outcome</th></tr>
+{% for gate in run.gates %}
+<tr><td>{{ gate.gate.value }}</td><td><span class="outcome {{ gate.outcome.value }}">{{ gate.outcome.value }}</span></td></tr>
+{% else %}
+<tr><td colspan="2">No gate results recorded.</td></tr>
+{% endfor %}
+</table>
+
+<h2>Findings</h2>
+{% for f in run.findings %}
+<div class="finding">
+<p><strong>{{ f.rule_id }}</strong> (rule version {{ f.rule_version }}), severity {{ f.severity.value }}{% if f.needs_human_decision %}, <strong>needs a human decision</strong>{% endif %}</p>
+<p>{{ f.explanation | plain }}</p>
+<p>Source: {{ f.source.source_id | plain }}, clause {{ f.source.clause | plain }}</p>
+{% if f.source.excerpt %}<pre>{{ f.source.excerpt | plain }}</pre>{% endif %}
+{% if f.text_span %}<p>Location: characters {{ f.text_span.start }} to {{ f.text_span.end }} of the validated text (end exclusive)</p>{% endif %}
+{% if f.image_region %}<p>Location: image region, left {{ "%.1f" | format(f.image_region.x * 100) }}%, top {{ "%.1f" | format(f.image_region.y * 100) }}%, width {{ "%.1f" | format(f.image_region.width * 100) }}%, height {{ "%.1f" | format(f.image_region.height * 100) }}%</p>{% endif %}
+{% if f.offending_excerpt %}<p>Flagged text:</p><pre>{{ f.offending_excerpt | plain }}</pre>{% endif %}
+{% if f.suggested_correction %}<p>Suggested correction:</p><pre>{{ f.suggested_correction | plain }}</pre>{% endif %}
+</div>
+{% else %}
+<p>No findings recorded.</p>
+{% endfor %}
+
+<h2>Rule results</h2>
+<table class="grid">
+<tr><th>Rule</th><th>Version</th><th>Mandatory</th><th>Result</th><th>Reason</th></tr>
+{% for r in run.rule_results %}
+<tr><td>{{ r.rule_id }}</td><td>{{ r.rule_version }}</td><td>{{ "yes" if r.mandatory else "no" }}</td><td><span class="outcome {{ r.result.value }}">{{ r.result.value }}</span></td><td>{{ (r.reason | plain) if r.reason else "" }}</td></tr>
+{% else %}
+<tr><td colspan="5">No rule results recorded.</td></tr>
+{% endfor %}
+</table>
+
+<h2>Coverage gaps</h2>
+{% if run.coverage_gaps %}
+<div class="notice warn">Some checks could not be completed. These gaps are not passes.</div>
+<ul>
+{% for gap in run.coverage_gaps %}
+<li>{% if gap.rule_id %}<strong>{{ gap.rule_id }}</strong>: {% endif %}{{ gap.reason | plain }}</li>
+{% endfor %}
+</ul>
+{% else %}
+<p>none recorded</p>
+{% endif %}
+
+<footer>Draft for review. Generated from the stored validation result; no model was run to produce this report.</footer>
+</body>
+</html>

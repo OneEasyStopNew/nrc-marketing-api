@@ -9,12 +9,20 @@ from pydantic import BaseModel
 from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeRead, CreativeVersionPage
 from app.schemas.tenancy import ContextRead, MeRead
+from app.schemas.validations import ValidationRunRead
 from scripts.export_openapi import CONTRACT_PATH, render
 
-EXAMPLES = Path(__file__).resolve().parents[1] / "contracts" / "examples" / "d1.json"
+EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "contracts" / "examples"
 SCHEMAS: dict[str, type[BaseModel]] = {
     model.__name__: model
-    for model in (ContextRead, CreativeRead, CreativeVersionPage, ErrorBody, MeRead)
+    for model in (
+        ContextRead,
+        CreativeRead,
+        CreativeVersionPage,
+        ErrorBody,
+        MeRead,
+        ValidationRunRead,
+    )
 }
 
 
@@ -24,12 +32,17 @@ def test_published_openapi_is_current() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "name",
-    [name for name in json.loads(EXAMPLES.read_text(encoding="utf-8")) if not name.startswith("_")],
-)
-def test_example_matches_schema(name: str) -> None:
-    example = json.loads(EXAMPLES.read_text(encoding="utf-8"))[name]
+CASES = [
+    (path.name, name)
+    for path in sorted(EXAMPLES_DIR.glob("*.json"))
+    for name in json.loads(path.read_text(encoding="utf-8"))
+    if not name.startswith("_")
+]
+
+
+@pytest.mark.parametrize(("file", "name"), CASES)
+def test_example_matches_schema(file: str, name: str) -> None:
+    example = json.loads((EXAMPLES_DIR / file).read_text(encoding="utf-8"))[name]
 
     model = SCHEMAS[example["schema"]].model_validate(example["body"])
 

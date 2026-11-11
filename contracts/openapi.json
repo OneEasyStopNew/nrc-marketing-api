@@ -1161,6 +1161,128 @@
           }
         }
       }
+    },
+    "/v1/marketing/validations/{validation_run_id}/report": {
+      "get": {
+        "tags": [
+          "validations"
+        ],
+        "summary": "Download the validation evidence report as HTML (proposed, NRC-30)",
+        "operationId": "download_validation_report",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "validation_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Validation Run Id"
+            }
+          },
+          {
+            "name": "creative_version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Creative version the preview currently shows.",
+              "title": "Creative Version"
+            },
+            "description": "Creative version the preview currently shows."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Self-contained HTML report sent as an attachment.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such validation run in this tenant.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The run belongs to another creative version; see details.current_version.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Persisted validation runs are not available yet.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
