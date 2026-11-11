@@ -73,11 +73,27 @@ MAX_EVENT_ATTEMPTS: Final = 20
 LEASE_MIN_SECONDS: Final = 5
 LEASE_MAX_SECONDS: Final = 600
 NO_HANDLER_RETRY_SECONDS: Final = 60.0
+# Failure codes the worker stores on jobs and events. The values are shown to the UI: keep them.
 # The provider saw this key with a different body: resending can never reconcile it.
 IDEMPOTENCY_CONFLICT: Final = "PROVIDER_IDEMPOTENCY_CONFLICT"
 OUTPUT_EXPIRED: Final = ProviderOutputExpiredError.code
 # Accepted, but still queued or in progress at the provider when the grace window ended.
 PROVIDER_STILL_RUNNING: Final = "PROVIDER_STILL_RUNNING"
+DEADLINE_EXCEEDED: Final = "DEADLINE_EXCEEDED"
+PROVIDER_NOT_CONFIGURED: Final = "PROVIDER_NOT_CONFIGURED"
+COST_ABOVE_LIMIT: Final = "COST_ABOVE_LIMIT"
+MODEL_CHANGED: Final = "MODEL_CHANGED"
+OUTPUT_UNAVAILABLE: Final = "OUTPUT_UNAVAILABLE"
+NO_HANDLER: Final = "NO_HANDLER"
+ATTEMPTS_EXHAUSTED: Final = "ATTEMPTS_EXHAUSTED"
+# Used when a failed, rejected or canceled provider status carries no reason of its own.
+PROVIDER_STATUS_FAILURE_CODES: Final[Mapping[ProviderJobStatus, str]] = MappingProxyType(
+    {
+        ProviderJobStatus.FAILED: "PROVIDER_FAILED",
+        ProviderJobStatus.REJECTED: "PROVIDER_REJECTED",
+        ProviderJobStatus.CANCELED: "PROVIDER_CANCELED",
+    }
+)
 _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type FROM lease_outbox_events(:owner, 1, :lease)"
 )
@@ -166,12 +182,12 @@ class ImageGenerationHandler:
         # polling: _poll parks it as UNKNOWN once it is still unfinished past the grace window,
         # and a completed one is fetched until its output expires (see _poll).
         if job.deadline_at <= step.now and not accepted:
-            await _give_up(db, job, "DEADLINE_EXCEEDED", "The job did not finish in time.")
+            await _give_up(db, job, DEADLINE_EXCEEDED, "The job did not finish in time.")
             return None
         provider = step.providers.get(job.provider or "")
         if provider is None:
             # Live mode never falls back to the simulator, and the simulator never runs live jobs.
-            await _give_up(db, job, "PROVIDER_NOT_CONFIGURED", "No provider for this job.")
+            await _give_up(db, job, PROVIDER_NOT_CONFIGURED, "No provider for this job.")
             return None
         if job.state is ExecutionState.QUEUED or (
             job.state is ExecutionState.RUNNING and job.stage != JobStage.SUBMITTING
@@ -202,7 +218,7 @@ class ImageGenerationHandler:
                 await _fail_with(
                     db,
                     job.id,
-                    "COST_ABOVE_LIMIT",
+                    COST_ABOVE_LIMIT,
                     "The provider's price is above the per-image limit.",
                     billed=False,
                     provider_cost_estimate_usd_micros=micros,
@@ -240,7 +256,7 @@ class ImageGenerationHandler:
         # request id instead of starting (and billing) a second generation. Never re-estimated.
         if provider.model != job.model:
             # A different model changes the request body, so the key could never match it.
-            await _park_unknown(db, job.id, "MODEL_CHANGED")
+            await _park_unknown(db, job.id, MODEL_CHANGED)
             return None
         request = await _image_request(db, job)
         await step.heartbeat(db)
@@ -326,7 +342,7 @@ class ImageGenerationHandler:
                 return None
             return backoff_seconds(step.event_attempts)
         if status.status is not ProviderJobStatus.COMPLETED:
-            code = status.failure_code or f"PROVIDER_{status.status.value.upper()}"
+            code = status.failure_code or PROVIDER_STATUS_FAILURE_CODES[status.status]
             # The provider bills completed generations only.
             await _fail_with(
                 db, job.id, code, "The provider did not produce an image.", billed=False
@@ -362,7 +378,7 @@ class ImageGenerationHandler:
                 return backoff_seconds(step.event_attempts)
             # The provider's own expiry check at fetch time ends the job like the check above.
             expired = isinstance(error, ProviderOutputExpiredError)
-            code = OUTPUT_EXPIRED if expired else "OUTPUT_UNAVAILABLE"
+            code = OUTPUT_EXPIRED if expired else OUTPUT_UNAVAILABLE
             # Billed for a completed generation that can't be kept.
             await _fail_with(db, job.id, code, error.message, billed=True)
             return None
@@ -483,11 +499,11 @@ async def _run_handler(run: _Run, event: Row[tuple[UUID, UUID, UUID, str]]) -> N
         if job is None or handler is None:
             logger.error("no handler for job=%s tenant=%s", event.job_id, event.tenant_id)
             await _finish_event(
-                db, run, event.event_id, NO_HANDLER_RETRY_SECONDS, error_code="NO_HANDLER"
+                db, run, event.event_id, NO_HANDLER_RETRY_SECONDS, error_code=NO_HANDLER
             )
         elif (attempts or 0) > MAX_EVENT_ATTEMPTS:
-            await _give_up(db, job, "ATTEMPTS_EXHAUSTED", "The job was retried too many times.")
-            await _finish_event(db, run, event.event_id, None, error_code="ATTEMPTS_EXHAUSTED")
+            await _give_up(db, job, ATTEMPTS_EXHAUSTED, "The job was retried too many times.")
+            await _finish_event(db, run, event.event_id, None, error_code=ATTEMPTS_EXHAUSTED)
         else:
             step = Step(
                 run.providers,

@@ -24,6 +24,7 @@ from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.services.jobs import transition
 from app.services.providers.base import (
+    TERMINAL_PROVIDER_STATUSES,
     FetchedImage,
     ImageRequest,
     ProviderConfigError,
@@ -40,6 +41,7 @@ from app.services.providers.simulator import SimulatedImageProvider, SimulatorSc
 from app.workers.connector import (
     DEFAULT_OWNER,
     MAX_EVENT_ATTEMPTS,
+    PROVIDER_STATUS_FAILURE_CODES,
     WorkerConfigError,
     build_providers,
     process_owner,
@@ -822,3 +824,10 @@ def test_hf_key_splits_on_first_colon() -> None:
     key_id, key_secret = _live(hf_key=SecretStr("id-1:se:cret")).higgsfield_credentials()
 
     assert (key_id.get_secret_value(), key_secret.get_secret_value()) == ("id-1", "se:cret")
+
+
+def test_every_unsuccessful_provider_status_has_a_failure_code() -> None:
+    unsuccessful = TERMINAL_PROVIDER_STATUSES - {ProviderJobStatus.COMPLETED}
+
+    assert PROVIDER_STATUS_FAILURE_CODES.keys() == unsuccessful
+    assert PROVIDER_STATUS_FAILURE_CODES[ProviderJobStatus.CANCELED] == "PROVIDER_CANCELED"
