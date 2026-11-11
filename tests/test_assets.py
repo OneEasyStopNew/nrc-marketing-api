@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import logging
 from collections.abc import Iterator
 from typing import Any
 from uuid import UUID
@@ -98,6 +99,42 @@ async def _succeeded_asset(
     job = await _job_json(client, auth, world, job_id)
     assert job["state"] == "SUCCEEDED"
     return job_id, str(job["result_asset_id"])
+
+
+def _output(provider: SimulatedImageProvider, size: tuple[int, int]) -> None:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, (40, 80, 120)).save(buffer, format="PNG")
+    image = FetchedImage(buffer.getvalue(), "image/png", None)
+
+    async def fixed_output(*_: object) -> FetchedImage:
+        return image
+
+    provider.fetch_output = fixed_output  # type: ignore[method-assign,assignment]
+
+
+@pytest.mark.parametrize(("size", "upscaled"), [((540, 540), True), ((1536, 1536), False)])
+async def test_an_upscaled_output_is_logged_with_ids_only(
+    sessions: Sessions,
+    sink: StoredImageSink,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    caplog: pytest.LogCaptureFixture,
+    size: tuple[int, int],
+    upscaled: bool,
+) -> None:
+    provider = SimulatedImageProvider()
+    _output(provider, size)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.assets"):
+        job_id = await _generate(sessions, sink, provider, client, auth, world)
+
+    warnings = [r.getMessage() for r in caplog.records if "upscaled" in r.getMessage()]
+    assert len(warnings) == int(upscaled)
+    for message in warnings:
+        assert f"job={job_id}" in message
+        assert f"tenant={world.a.tenant_id}" in message
+        assert "provider_size=540x540 stored_size=1080x1080" in message
 
 
 async def test_generated_image_is_stored_and_downloadable(

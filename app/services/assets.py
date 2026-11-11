@@ -103,6 +103,20 @@ class StoredImageSink:
             info.width_px,
             info.height_px,
         )
+        source = fitted.source
+        if source.width_px < info.width_px or source.height_px < info.height_px:
+            # Upscaling loses sharpness; validation and review should know. Ids and sizes only.
+            logger.warning(
+                "provider image smaller than its format, upscaled asset=%s job=%s tenant=%s "
+                "provider_size=%sx%s stored_size=%sx%s",
+                asset.id,
+                job.id,
+                job.tenant_id,
+                source.width_px,
+                source.height_px,
+                info.width_px,
+                info.height_px,
+            )
         return asset.id
 
 
