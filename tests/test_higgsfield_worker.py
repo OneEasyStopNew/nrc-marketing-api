@@ -285,11 +285,17 @@ def _png_1080() -> bytes:
     return buffer.getvalue()
 
 
-def _output_server(png: bytes) -> SafeFetcher:
-    # The provider's CDN, behind MockTransport, resolved to a public address.
+CdnAnswer = Callable[[httpx.Request], httpx.Response]
+
+
+def _output_server(png: bytes, outages: list[CdnAnswer] | None = None) -> SafeFetcher:
+    # The provider's CDN, behind MockTransport, resolved to a public address. Each outage
+    # answers one download before the CDN serves the image.
     def cdn(request: httpx.Request) -> httpx.Response:
         assert request.url.host == OUTPUT_HOST
         assert "Authorization" not in request.headers
+        if outages:
+            return outages.pop(0)(request)
         return httpx.Response(200, content=png, headers={"content-type": "image/png"})
 
     async def public_resolver(host: str) -> list[str]:
@@ -705,6 +711,79 @@ async def test_unlisted_output_host_ends_output_expired_once_the_output_expires(
 
     await run_at(sessions, provider, expires + timedelta(minutes=1), _sink())
 
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    assert await _spend(connection, "higgsfield") == (reserved, committed + ESTIMATE_MICROS)
+    assert (await _event(connection)).processed_at is not None
+
+
+def _cdn_timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("timed out", request=request)
+
+
+def _cdn_unavailable(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(503)
+
+
+@needs_seaweedfs
+async def test_output_fetch_timeout_retries_and_stores_the_image_next_round(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    # One network blip must not lose an image Higgsfield already billed.
+    fake = FakeHiggsfield()
+    fake.status_body = _completed(datetime.now(UTC) + timedelta(days=7))
+    reserved, committed = await _spend(connection, "higgsfield")
+    server = _output_server(_png_1080(), [_cdn_timeout])
+    provider = higgsfield(fake, server, frozenset({OUTPUT_HOST}))
+
+    await run(sessions, provider, _sink())
+    waiting, waiting_reservation = await _load(sessions, world, job_id)
+    failed_attempts = (await _event(connection)).failed_attempts
+    await _requeue(connection, world)
+    await run(sessions, provider, _sink())
+
+    assert (waiting.state, waiting.stage) == (
+        ExecutionState.WAITING_PROVIDER,
+        JobStage.FETCHING_OUTPUT,
+    )
+    assert waiting_reservation is ReservationState.RESERVED
+    assert failed_attempts == 0
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
+    assert job.result_asset_id is not None
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    assert await _spend(connection, "higgsfield") == (reserved, committed + ESTIMATE_MICROS)
+    assert len(fake.submit_keys) == 1
+
+
+@needs_seaweedfs
+async def test_output_fetch_failing_until_expiry_ends_output_expired_and_billed(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    expires = datetime.now(UTC) + timedelta(hours=1)
+    fake.status_body = _completed(expires)
+    reserved, committed = await _spend(connection, "higgsfield")
+    rounds = get_settings().generation_max_attempts + 1
+    outages: list[CdnAnswer] = [_cdn_unavailable, _cdn_timeout] * rounds
+    provider = higgsfield(fake, _output_server(_png_1080(), outages), frozenset({OUTPUT_HOST}))
+
+    # More rounds than GENERATION_MAX_ATTEMPTS: transient fetch failures never count.
+    for _ in range(rounds):
+        await run(sessions, provider, _sink())
+        await _requeue(connection, world)
+    waiting, _ = await _load(sessions, world, job_id)
+    failed_attempts = (await _event(connection)).failed_attempts
+    await run_at(sessions, provider, expires + timedelta(minutes=1), _sink())
+
+    assert (waiting.state, waiting.stage) == (
+        ExecutionState.WAITING_PROVIDER,
+        JobStage.FETCHING_OUTPUT,
+    )
+    assert failed_attempts == 0
     job, reservation = await _load(sessions, world, job_id)
     assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
     assert reservation is ReservationState.COMMITTED
