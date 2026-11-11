@@ -12,7 +12,7 @@ from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from app.api.errors import COMMON_ERROR_RESPONSES, register_exception_handlers
 from app.api.routes import creatives, demo_files, health, me, policies, workflows
-from app.auth.tokens import JwksClient
+from app.auth.tokens import JwksClient, LocalJwks, SigningKeyProvider
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.request_context import REQUEST_ID_HEADER, RequestContextMiddleware
@@ -36,9 +36,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             if settings.demo_stubs:
                 logger.warning("DEMO_STUBS is on: validation, generation and export are simulated")
                 app.state.demo_stubs = DemoStubs(str(settings.demo_public_base_url))
-            app.state.signing_keys = JwksClient(
+            signing_keys: SigningKeyProvider = JwksClient(
                 http, settings.cognito_jwks_url, ttl_seconds=settings.jwks_cache_ttl_seconds
             )
+            if settings.dev_jwks_file is not None:
+                logger.warning("DEV_JWKS_FILE is set: accepting locally signed dev tokens")
+                signing_keys = LocalJwks.from_file(settings.dev_jwks_file)
+            app.state.signing_keys = signing_keys
             yield
     finally:
         await engine.dispose()

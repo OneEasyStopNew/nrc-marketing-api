@@ -80,13 +80,29 @@ real contract shapes instead of `501`:
 
 Never enable it in staging or production.
 
+## Dev tokens (before Cognito exists)
+
+Until Bhushan's Cognito pool is ready, sign tokens locally. The API still checks issuer, client,
+scope, expiry and tenant membership; only the signing key changes.
+
+```powershell
+uv run python -m scripts.dev_token init                      # once; writes .dev-keys/ (git-ignored)
+# add DEV_JWKS_FILE=<printed path> to .env, then restart the API
+uv run python -m scripts.seed_demo --tenant-name "NRC Demo" --member dev-praneeth=creator
+uv run python -m scripts.dev_token issue --sub dev-praneeth  # prints a token valid for 12 hours
+```
+
+Send it as `Authorization: Bearer <token>`. `DEMO_STUBS` and `DEV_JWKS_FILE` work only with
+`APP_ENV=local` or `demo`; any other value refuses to start. The private key never leaves the
+machine that ran `init`.
+
 ## Staging prerequisites
 
 - A Postgres login role `marketing_app` that does not own the tables and has no `BYPASSRLS`. The API's
   `DATABASE_URL` uses it. Migrations run as the owner through `MIGRATION_DATABASE_URL`.
 - Cognito: `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_IDS` and a resource-server
   scope matching `REQUIRED_SCOPE`.
-- `ENABLE_DOCS=false`, `CORS_ORIGINS` set to the frontend origin, and `FORWARDED_ALLOW_IPS` set to the
+- `APP_ENV=staging` (or `production`), `ENABLE_DOCS=false`, `CORS_ORIGINS` set to the frontend origin, and `FORWARDED_ALLOW_IPS` set to the
   load balancer's subnet range.
 - Image: `docker build -t nrc-marketing .`. Run `alembic upgrade head` as a separate release step.
 

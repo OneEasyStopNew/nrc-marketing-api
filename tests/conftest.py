@@ -68,6 +68,9 @@ def app_environment(test_env: IntegrationEnv) -> Iterator[None]:
         patch.setenv("COGNITO_CLIENT_IDS", CLIENT_ID)
         patch.setenv("REQUIRED_SCOPE", SCOPE)
         patch.setenv("CORS_ORIGINS", "")
+        # A developer's .env may switch these on; tests always start from production behaviour.
+        patch.setenv("DEMO_STUBS", "false")
+        patch.setenv("DEV_JWKS_FILE", "")
         get_settings.cache_clear()
         yield
     get_settings.cache_clear()
