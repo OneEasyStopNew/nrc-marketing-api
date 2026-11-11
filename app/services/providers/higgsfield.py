@@ -8,7 +8,10 @@ only text-to-image request schema found is openapi.json "/higgsfield-ai/soul/sta
 (prompt, num_images, resolution 2K|4K, aspect_ratio enum), while the quickstart example uses
 "higgsfield-ai/soul/v2/standard" with only a prompt. The model path is therefore configuration
 (HIGGSFIELD_MODEL), and the body sent is {"prompt", "aspect_ratio"} plus an optional resolution.
-No live call has been made; see the TODO(NRC-10) markers for what a live account must confirm.
+
+Live run on 9 Nov 2026 with model "higgsfield-ai/soul/v2/standard": aspect_ratio 1:1 was
+accepted, and the status response carries no cost field, so the cost recorded for a job is its
+/estimate price. The remaining TODO(NRC-10) markers are what a live account must still confirm.
 """
 
 import json
@@ -273,8 +276,6 @@ class HiggsfieldProvider:
         if self._resolution is not None:
             body["resolution"] = self._resolution
         # The API takes no width/height; sizing is by aspect_ratio (and resolution).
-        # TODO(NRC-10): confirm with live account that aspect_ratio values from the job are valid
-        # for the pinned model (documented enum: 1:1 4:3 3:4 3:2 2:3 5:4 4:5 16:9 9:16 21:9).
         return body
 
     async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:

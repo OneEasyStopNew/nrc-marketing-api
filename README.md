@@ -101,7 +101,7 @@ storage.
   uv run python -m scripts.higgsfield_smoke estimate --models higgsfield-ai/soul/standard,higgsfield-ai/soul/v2/standard
   # Real money, one image: refuses without --confirm-spend, above GENERATION_MAX_COST_USD_PER_IMAGE,
   # or unless AWS_ENDPOINT_URL_S3 points at local SeaweedFS. Prints ids, checksum, size and S3 key.
-  uv run python -m scripts.higgsfield_smoke generate --model higgsfield-ai/soul/standard --confirm-spend
+  uv run python -m scripts.higgsfield_smoke generate --model higgsfield-ai/soul/v2/standard --confirm-spend
   ```
 
 - **Cost guard.** Before the first submit the worker prices the image with `/estimate`. Above
