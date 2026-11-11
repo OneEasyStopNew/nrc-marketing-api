@@ -46,7 +46,7 @@ from app.models import CreativeVersion, Job, OutboxEvent
 from app.models.enums import FORMAT_SPECS, ExecutionState, JobStage
 from app.models.jobs import FAILURE_MESSAGE_MAX_CHARS, ReservationState
 from app.schemas.jobs import JobKind
-from app.services import eligibility, spend
+from app.services import generation_checks, spend
 from app.services.assets import StoredImageSink, emit_asset_generated
 from app.services.jobs import (
     NON_TERMINAL_STATES,
@@ -66,6 +66,9 @@ from app.services.providers.base import (
     ProviderError,
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
+    ProviderOutputExpiredError,
+    ProviderOutputHostError,
+    StatusResult,
     SubmitResult,
 )
 from app.services.providers.higgsfield import (
@@ -87,8 +90,10 @@ ATTEMPTS_EXHAUSTED: Final = "ATTEMPTS_EXHAUSTED"
 NO_HANDLER: Final = "NO_HANDLER"
 # The provider billed a completed generation that could not be stored.
 OUTPUT_UNAVAILABLE: Final = "OUTPUT_UNAVAILABLE"
-# The provider billed a completed generation whose files it has already deleted.
-OUTPUT_EXPIRED: Final = "OUTPUT_EXPIRED"
+# The provider billed a completed generation whose files expired before they were stored.
+OUTPUT_EXPIRED: Final = ProviderOutputExpiredError.code
+# Accepted, but still queued or in progress at the provider when the grace window ended.
+PROVIDER_STILL_RUNNING: Final = "PROVIDER_STILL_RUNNING"
 _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type"
     " FROM lease_outbox_events(:owner, 1, :lease, :event_types)"
@@ -232,9 +237,9 @@ class ImageGenerationHandler:
         accepted = (
             job.state is ExecutionState.WAITING_PROVIDER and job.provider_request_id is not None
         )
-        # An accepted job is billed when it completes, so the deadline never stops its polling
-        # or the fetch of its output (stage fetching_output): it runs until the provider reports
-        # a final status, the output expires or the event's attempts run out (see _give_up).
+        # An accepted job is billed when it completes, so the deadline alone never stops its
+        # polling: _poll parks it as UNKNOWN once it is still unfinished past the grace window,
+        # and a completed one is fetched (stage fetching_output) until its output expires.
         if job.deadline_at <= step.now and not accepted:
             await _give_up(db, job, "DEADLINE_EXCEEDED", "The job did not finish in time.")
             return None
@@ -414,6 +419,13 @@ class ImageGenerationHandler:
             await _park_unknown(db, job.id, error.code)
             return backoff_seconds(step.event_attempts, step.settings)
         if status.status not in TERMINAL_PROVIDER_STATUSES:
+            grace = timedelta(seconds=step.settings.generation_accepted_grace_seconds)
+            if step.now >= job.deadline_at + grace:
+                # Still running long after the deadline: stop polling and hold the credits and
+                # the spend reservation, since the provider may yet complete (and bill) it.
+                await _park_unknown(db, job.id, PROVIDER_STILL_RUNNING)
+                _log_stuck_unknown(job, PROVIDER_STILL_RUNNING)
+                return None
             return backoff_seconds(step.event_attempts, step.settings)
         if status.status is not ProviderJobStatus.COMPLETED:
             code = status.failure_code or f"PROVIDER_{status.status.value.upper()}"
@@ -432,9 +444,18 @@ class ImageGenerationHandler:
             job.provider_cost_estimate_usd_micros,
             actual,
         )
-        if status.outputs_expire_at is not None and status.outputs_expire_at <= step.now:
-            # Billed, but the image can no longer be fetched: hold the credits for review.
-            await _park_unknown(db, job.id, OUTPUT_EXPIRED)
+        # From here on the grace window no longer applies: the provider billed, so the output is
+        # fetched until it expires. An expired output is never fetched.
+        if _output_expires_at(job, status, step) <= step.now:
+            # Billed for a completed generation that can no longer be kept.
+            await _fail_with(
+                db,
+                job.id,
+                OUTPUT_EXPIRED,
+                "The provider's output expired.",
+                billed=True,
+                actual_usd_micros=actual,
+            )
             return None
         if step.sink is None:
             await transition(
@@ -473,13 +494,19 @@ class ImageGenerationHandler:
                 await stored.rollback()
                 raise
         except ProviderError as error:
+            if isinstance(error, ProviderOutputHostError):
+                _log_output_host_refused(job, provider_request_id, error.host)
             if error.retryable:
+                # Never counted as a failed attempt: the output's expiry (checked on every poll
+                # above) is what ends these retries.
                 return backoff_seconds(step.event_attempts, step.settings)
+            # The provider's own expiry check at fetch time ends the job like the check above.
+            expired = isinstance(error, ProviderOutputExpiredError)
             # Billed for a completed generation that can't be kept.
             await _fail_with(
                 db,
                 job.id,
-                OUTPUT_UNAVAILABLE,
+                OUTPUT_EXPIRED if expired else OUTPUT_UNAVAILABLE,
                 error.message,
                 billed=True,
                 actual_usd_micros=actual,
@@ -851,6 +878,41 @@ def _log_stuck_unknown(job: Job, reason: str) -> None:
     )
 
 
+def _output_expires_at(job: Job, status: StatusResult, step: Step) -> datetime:
+    """When a completed output stops being downloadable.
+
+    The provider's expiry if it gave one; otherwise PROVIDER_OUTPUT_RETENTION_FALLBACK_SECONDS
+    after the worker first saw the output completed. That moment is the job's updated_at once it
+    is in stage fetching_output: the transition into that stage is committed before the first
+    download, and nothing updates the job again until it leaves the stage, so it survives worker
+    restarts without a new column. Before that transition, it is now.
+    """
+    if status.outputs_expire_at is not None:
+        return status.outputs_expire_at
+    logger.warning(
+        "provider output has no expires_at, assuming the retention fallback job=%s tenant=%s "
+        "provider_request=%s",
+        job.id,
+        job.tenant_id,
+        status.provider_request_id,
+    )
+    seen_completed = job.updated_at if job.stage == JobStage.FETCHING_OUTPUT else step.now
+    fallback = timedelta(seconds=step.settings.provider_output_retention_fallback_seconds)
+    return seen_completed + fallback
+
+
+def _log_output_host_refused(job: Job, provider_request_id: str, host: str) -> None:
+    # Ops: add the host to HIGGSFIELD_OUTPUT_HOSTS and restart the worker; the job keeps
+    # retrying until the output expires. The host only, never the signed URL's path or query.
+    logger.error(
+        "provider output host not allowed job=%s tenant=%s provider_request=%s host=%s",
+        job.id,
+        job.tenant_id,
+        provider_request_id,
+        host,
+    )
+
+
 def _log_review_stop(job: Job, code: str) -> None:
     # The job stays UNKNOWN with its credits HELD; scripts/list_unknown_jobs.py lists it.
     logger.warning(
@@ -947,7 +1009,7 @@ def check_live_mode(settings: Settings) -> None:
     if not settings.aws_s3_bucket:
         # Without storage, finished jobs would park forever; production never runs that way.
         problems.append("missing AWS_S3_BUCKET (generated images need storage)")
-    if eligibility.VALIDATION_GATE_IS_STUB:
+    if generation_checks.VALIDATION_GATE_IS_STUB:
         problems.append("the validation-PASS gate is still the stub (NRC-7)")
     if problems:
         raise WorkerConfigError(f"GENERATION_MODE=live refused: {'; '.join(problems)}")

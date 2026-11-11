@@ -378,17 +378,23 @@ def _completed(expires_at: datetime) -> Callable[[str], dict[str, Any]]:
     }
 
 
-def _past_deadline() -> datetime:
+def _past_deadline_within_grace() -> datetime:
+    # About one deadline past the deadline: well inside the default grace window.
     return datetime.now(UTC) + timedelta(seconds=get_settings().generation_deadline_seconds * 2)
 
 
-async def _accepted_then_past_deadline(
+def _past_grace() -> datetime:
+    settings = get_settings()
+    window = settings.generation_deadline_seconds + settings.generation_accepted_grace_seconds
+    return datetime.now(UTC) + timedelta(seconds=window + 60)
+
+
+async def _accepted_and_in_progress(
     sessions: Sessions, fake: FakeHiggsfield, connection: AsyncConnection, world: World
-) -> datetime:
+) -> None:
     # Higgsfield accepts the job and is still working on it when the deadline passes.
     await run(sessions, higgsfield(fake))
     await _requeue(connection, world)
-    return _past_deadline()
 
 
 async def run_at(
@@ -404,12 +410,22 @@ def _sink() -> StoredImageSink:
     return StoredImageSink(ObjectStorage(get_settings()), get_settings())
 
 
+def _in_progress(polls: list[str]) -> Callable[[str], dict[str, Any]]:
+    def answer(request_id: str) -> dict[str, Any]:
+        polls.append(request_id)
+        return {"status": "in_progress", "request_id": request_id}
+
+    return answer
+
+
 @needs_seaweedfs
-async def test_accepted_job_past_deadline_still_stores_the_completed_image(
+async def test_accepted_job_past_grace_still_stores_the_completed_image(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
+    # Once Higgsfield reports completed the grace window no longer applies: it billed.
     fake = FakeHiggsfield()
-    later = await _accepted_then_past_deadline(sessions, fake, connection, world)
+    await _accepted_and_in_progress(sessions, fake, connection, world)
+    later = _past_grace()
     reserved, committed = await _spend(connection, "higgsfield")
     fake.status_body = _completed(later + timedelta(days=7))
     provider = higgsfield(fake, _output_server(_png_1536()), frozenset({OUTPUT_HOST}))
@@ -426,19 +442,15 @@ async def test_accepted_job_past_deadline_still_stores_the_completed_image(
     assert len(fake.submit_keys) == 1
 
 
-async def test_accepted_job_past_deadline_keeps_polling_while_in_progress(
+async def test_accepted_job_within_grace_keeps_polling_while_in_progress(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
     fake = FakeHiggsfield()
-    later = await _accepted_then_past_deadline(sessions, fake, connection, world)
+    await _accepted_and_in_progress(sessions, fake, connection, world)
+    later = _past_deadline_within_grace()
     spent = await _spend(connection, "higgsfield")
     polls: list[str] = []
-
-    def in_progress(request_id: str) -> dict[str, Any]:
-        polls.append(request_id)
-        return {"status": "in_progress", "request_id": request_id}
-
-    fake.status_body = in_progress
+    fake.status_body = _in_progress(polls)
     provider = higgsfield(fake)
 
     for _ in range(2):
@@ -458,15 +470,49 @@ async def test_accepted_job_past_deadline_keeps_polling_while_in_progress(
     assert len(fake.submit_keys) == 1
 
 
+async def test_accepted_job_still_in_progress_past_grace_is_parked_with_spend_reserved(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake = FakeHiggsfield()
+    await _accepted_and_in_progress(sessions, fake, connection, world)
+    spent = await _spend(connection, "higgsfield")
+    polls: list[str] = []
+    fake.status_body = _in_progress(polls)
+
+    with caplog.at_level(logging.ERROR, logger="app.workers.connector"):
+        await run_at(sessions, higgsfield(fake), _past_grace())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage, job.failure_code) == (
+        ExecutionState.UNKNOWN,
+        JobStage.RECONCILE,
+        "PROVIDER_STILL_RUNNING",
+    )
+    # Higgsfield may still complete and bill it: credits held, spend still reserved.
+    assert reservation is ReservationState.HELD
+    assert job.provider_spend_state is SpendState.RESERVED
+    assert await _spend(connection, "higgsfield") == spent
+    assert polls == [job.provider_request_id]
+    assert (await _event(connection)).processed_at is not None
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert str(job.id) in errors[0]
+    assert str(job.provider_request_id) in errors[0]
+
+
 async def test_accepted_job_past_deadline_fails_when_higgsfield_fails(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
     fake = FakeHiggsfield()
-    later = await _accepted_then_past_deadline(sessions, fake, connection, world)
+    await _accepted_and_in_progress(sessions, fake, connection, world)
     reserved, committed = await _spend(connection, "higgsfield")
     fake.status_body = lambda request_id: {"status": "failed", "request_id": request_id}
 
-    await run_at(sessions, higgsfield(fake), later)
+    await run_at(sessions, higgsfield(fake), _past_grace())
 
     job, reservation = await _load(sessions, world, job_id)
     assert (job.state, job.failure_code) == (ExecutionState.FAILED, "provider_failed")
@@ -475,12 +521,13 @@ async def test_accepted_job_past_deadline_fails_when_higgsfield_fails(
     assert await _spend(connection, "higgsfield") == (reserved - ESTIMATE_MICROS, committed)
 
 
-async def test_accepted_job_past_deadline_with_expired_output_is_parked(
+async def test_expired_output_fails_with_credits_and_spend_committed(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
     fake = FakeHiggsfield()
-    later = await _accepted_then_past_deadline(sessions, fake, connection, world)
-    spent = await _spend(connection, "higgsfield")
+    await _accepted_and_in_progress(sessions, fake, connection, world)
+    later = _past_deadline_within_grace()
+    reserved, committed = await _spend(connection, "higgsfield")
     # Higgsfield's expires_at: after it the files are deleted and the output URLs stop working.
     fake.status_body = _completed(later - timedelta(hours=1))
     fetched: list[str] = []
@@ -492,24 +539,48 @@ async def test_accepted_job_past_deadline_with_expired_output_is_parked(
     await run_at(sessions, higgsfield(fake, fetcher, frozenset({OUTPUT_HOST})), later)
 
     job, reservation = await _load(sessions, world, job_id)
-    assert (job.state, job.stage, job.failure_code) == (
-        ExecutionState.UNKNOWN,
-        JobStage.RECONCILE,
-        "OUTPUT_EXPIRED",
-    )
-    # Higgsfield billed the completed generation: credits and spend stay held for review.
-    assert reservation is ReservationState.HELD
-    assert job.provider_spend_state is SpendState.RESERVED
-    assert await _spend(connection, "higgsfield") == spent
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    # Higgsfield billed the completed generation: credits and spend are committed.
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    spent = await _spend(connection, "higgsfield")
+    assert spent == (reserved - ESTIMATE_MICROS, committed + ESTIMATE_MICROS)
     assert not fetched
     assert (await _event(connection)).processed_at is not None
+
+
+async def test_output_expiring_at_fetch_time_ends_the_same_way(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    # The worker's clock still sees the output as live; the adapter's own check at fetch time
+    # finds it expired. One rule: FAILED OUTPUT_EXPIRED, charged.
+    fake = FakeHiggsfield()
+    await _accepted_and_in_progress(sessions, fake, connection, world)
+    reserved, committed = await _spend(connection, "higgsfield")
+    fake.status_body = _completed(datetime.now(UTC) - timedelta(seconds=1))
+    fetched: list[str] = []
+
+    async def fetcher(url: str, *, allowed_hosts: frozenset[str], max_bytes: int) -> FetchedImage:
+        fetched.append(url)
+        raise ProviderOutputError("an expired output is never fetched")
+
+    provider = higgsfield(fake, fetcher, frozenset({OUTPUT_HOST}))
+    await run_at(sessions, provider, datetime.now(UTC) - timedelta(minutes=5), _sink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    spent = await _spend(connection, "higgsfield")
+    assert spent == (reserved - ESTIMATE_MICROS, committed + ESTIMATE_MICROS)
+    assert not fetched
 
 
 async def test_accepted_job_past_deadline_is_parked_once_attempts_run_out(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
     fake = FakeHiggsfield()
-    later = await _accepted_then_past_deadline(sessions, fake, connection, world)
+    await _accepted_and_in_progress(sessions, fake, connection, world)
     spent = await _spend(connection, "higgsfield")
     # As if the event had already failed GENERATION_MAX_ATTEMPTS times (crashes, lost leases).
     await connection.execute(
@@ -520,7 +591,7 @@ async def test_accepted_job_past_deadline_is_parked_once_attempts_run_out(
         {"n": get_settings().generation_max_attempts},
     )
 
-    await run_at(sessions, higgsfield(fake), later)
+    await run_at(sessions, higgsfield(fake), _past_deadline_within_grace())
 
     job, reservation = await _load(sessions, world, job_id)
     assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "ATTEMPTS_EXHAUSTED")
@@ -530,7 +601,7 @@ async def test_accepted_job_past_deadline_is_parked_once_attempts_run_out(
 
 
 @needs_seaweedfs
-async def test_job_fetching_output_past_deadline_keeps_fetching(
+async def test_job_fetching_output_past_grace_keeps_fetching(
     sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
 ) -> None:
     fake = FakeHiggsfield()
@@ -544,7 +615,7 @@ async def test_job_fetching_output_past_deadline_keeps_fetching(
     await _requeue(connection, world)
     provider = higgsfield(fake, _output_server(_png_1536()), frozenset({OUTPUT_HOST}))
 
-    await run_at(sessions, provider, _past_deadline(), _sink())
+    await run_at(sessions, provider, _past_grace(), _sink())
 
     job, reservation = await _load(sessions, world, job_id)
     assert (fetching.state, fetching.stage) == (
@@ -554,6 +625,170 @@ async def test_job_fetching_output_past_deadline_keeps_fetching(
     assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
     assert reservation is ReservationState.COMMITTED
     assert job.provider_spend_state is SpendState.COMMITTED
+
+
+UNLISTED_ONLY = frozenset({"other-cdn.example"})
+
+
+@needs_seaweedfs
+async def test_unlisted_output_host_keeps_the_job_waiting_and_logs_only_the_host(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake = FakeHiggsfield()
+    fake.status_body = _completed(datetime.now(UTC) + timedelta(days=7))
+    provider = higgsfield(fake, _output_server(_png_1536()), UNLISTED_ONLY)
+    reserved, committed = await _spend(connection, "higgsfield")
+
+    # More rounds than GENERATION_MAX_ATTEMPTS: a refused host never counts as a failure.
+    with caplog.at_level(logging.ERROR, logger="app.workers.connector"):
+        for _ in range(get_settings().generation_max_attempts + 1):
+            await run(sessions, provider, _sink())
+            await _requeue(connection, world)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.WAITING_PROVIDER, JobStage.FETCHING_OUTPUT)
+    assert job.result_asset_id is None
+    assert reservation is ReservationState.RESERVED
+    assert job.provider_spend_state is SpendState.RESERVED
+    assert await _spend(connection, "higgsfield") == (reserved + ESTIMATE_MICROS, committed)
+    assert (await _event(connection)).failed_attempts == 0
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors
+    for message in errors:
+        assert f"host={OUTPUT_HOST}" in message
+        assert f"job={job.id}" in message
+        assert f"tenant={job.tenant_id}" in message
+        # Never the path or the query: the signed URL is a credential.
+        assert "/outputs" not in message
+        assert "result.png" not in message
+        assert "signature" not in message.lower()
+
+
+@needs_seaweedfs
+async def test_output_is_stored_once_the_host_is_added_to_the_allowlist(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    fake.status_body = _completed(datetime.now(UTC) + timedelta(days=7))
+    reserved, committed = await _spend(connection, "higgsfield")
+    await run(sessions, higgsfield(fake, _output_server(_png_1536()), UNLISTED_ONLY), _sink())
+    waiting, _ = await _load(sessions, world, job_id)
+    await _requeue(connection, world)
+
+    # Ops add the host to HIGGSFIELD_OUTPUT_HOSTS and restart the worker.
+    fixed = higgsfield(fake, _output_server(_png_1536()), UNLISTED_ONLY | {OUTPUT_HOST})
+    await run(sessions, fixed, _sink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert waiting.state is ExecutionState.WAITING_PROVIDER
+    assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
+    assert job.result_asset_id is not None
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    assert await _spend(connection, "higgsfield") == (reserved, committed + ESTIMATE_MICROS)
+    assert len(fake.submit_keys) == 1
+
+
+@needs_seaweedfs
+async def test_unlisted_output_host_ends_output_expired_once_the_output_expires(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    expires = datetime.now(UTC) + timedelta(hours=1)
+    fake.status_body = _completed(expires)
+    provider = higgsfield(fake, _output_server(_png_1536()), UNLISTED_ONLY)
+    reserved, committed = await _spend(connection, "higgsfield")
+    await run(sessions, provider, _sink())
+    await _requeue(connection, world)
+
+    await run_at(sessions, provider, expires + timedelta(minutes=1), _sink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    assert await _spend(connection, "higgsfield") == (reserved, committed + ESTIMATE_MICROS)
+    assert (await _event(connection)).processed_at is not None
+
+
+FALLBACK_SECONDS = 3600
+
+
+def _completed_without_expiry(request_id: str) -> dict[str, Any]:
+    return {"status": "completed", "request_id": request_id, "images": [{"url": OUTPUT_URL}]}
+
+
+async def run_with_fallback(
+    sessions: Sessions, provider: HiggsfieldProvider, now: datetime | None = None
+) -> int:
+    settings = get_settings().model_copy(
+        update={"provider_output_retention_fallback_seconds": FALLBACK_SECONDS}
+    )
+    return await run_once(sessions, {"higgsfield": provider}, _sink(), settings, now=now)
+
+
+@needs_seaweedfs
+async def test_unlisted_host_without_expiry_ends_output_expired_after_the_retention_fallback(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake = FakeHiggsfield()
+    fake.status_body = _completed_without_expiry
+    reserved, committed = await _spend(connection, "higgsfield")
+    seen_completed = datetime.now(UTC)
+
+    with caplog.at_level(logging.WARNING, logger="app.workers.connector"):
+        # Each round is a fresh provider, as after a worker restart.
+        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1536())))
+        await _requeue(connection, world)
+        within = seen_completed + timedelta(seconds=FALLBACK_SECONDS / 2)
+        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1536())), within)
+        waiting, _ = await _load(sessions, world, job_id)
+        await _requeue(connection, world)
+        past = seen_completed + timedelta(seconds=FALLBACK_SECONDS + 60)
+        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1536())), past)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (waiting.state, waiting.stage) == (
+        ExecutionState.WAITING_PROVIDER,
+        JobStage.FETCHING_OUTPUT,
+    )
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
+    assert job.provider_spend_state is SpendState.COMMITTED
+    assert await _spend(connection, "higgsfield") == (reserved, committed + ESTIMATE_MICROS)
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "expires_at" in r.getMessage()
+    ]
+    assert warnings
+    assert all(f"job={job.id}" in message for message in warnings)
+    assert all(OUTPUT_HOST not in message for message in warnings)
+
+
+@needs_seaweedfs
+async def test_missing_expiry_with_an_allowed_host_still_stores_the_image(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    fake = FakeHiggsfield()
+    fake.status_body = _completed_without_expiry
+    reserved, committed = await _spend(connection, "higgsfield")
+    provider = higgsfield(fake, _output_server(_png_1536()), frozenset({OUTPUT_HOST}))
+
+    await run_with_fallback(sessions, provider)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
+    assert reservation is ReservationState.COMMITTED
+    assert await _spend(connection, "higgsfield") == (reserved, committed + ESTIMATE_MICROS)
 
 
 def test_http_client_request_urls_are_never_logged() -> None:

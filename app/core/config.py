@@ -51,10 +51,13 @@ class Settings(BaseSettings):
     generation_global_budget_usd: Decimal = Field(default=Decimal(40), ge=0)
     # Failed processing attempts per outbox event (a crash, an expired lease, no handler) before
     # the worker gives up. Polls and retryable provider errors don't count: the job deadline
-    # bounds those (the agreed retry policy) until the provider accepts the job. An accepted job
-    # is polled past its deadline until a final status or until its output expires.
+    # bounds those (the agreed retry policy) until the provider accepts the job. After that, the
+    # grace window below bounds an unfinished job and output expiry bounds a completed one.
     generation_max_attempts: int = Field(default=3, ge=1, le=10)
     generation_deadline_seconds: int = Field(default=900, ge=60, le=86_400)
+    # How long past its deadline an accepted job may stay queued or in progress at the provider
+    # before it is parked as UNKNOWN for review. Does not apply once the provider has completed.
+    generation_accepted_grace_seconds: int = Field(default=3600, ge=60, le=86_400)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
     # Retry and poll backoff per event: doubles from the base up to the max, with jitter.
     worker_backoff_base_seconds: float = Field(default=2.0, gt=0, le=60)
@@ -77,6 +80,10 @@ class Settings(BaseSettings):
     higgsfield_output_hosts: Annotated[tuple[str, ...], NoDecode] = ()
     # Downloading one provider output; the worker also caps it at half its lease.
     provider_output_fetch_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    # How long a completed output is assumed to stay downloadable when the provider's status
+    # gives no expiry, counted from when the worker first saw it completed. Default: 7 days,
+    # Higgsfield's documented minimum retention.
+    provider_output_retention_fallback_seconds: int = Field(default=604_800, ge=3600, le=1_209_600)
 
     # Media storage (NRC-3). The bucket comes only from configuration, never from code.
     aws_region: str = "us-east-1"

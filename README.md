@@ -101,7 +101,7 @@ storage.
   uv run python -m scripts.higgsfield_smoke estimate --models higgsfield-ai/soul/standard,higgsfield-ai/soul/v2/standard
   # Real money, one image: refuses without --confirm-spend, above GENERATION_MAX_COST_USD_PER_IMAGE,
   # or unless AWS_ENDPOINT_URL_S3 points at local SeaweedFS. Prints ids, checksum, size and S3 key.
-  uv run python -m scripts.higgsfield_smoke generate --model higgsfield-ai/soul/standard --confirm-spend
+  uv run python -m scripts.higgsfield_smoke generate --model higgsfield-ai/soul/v2/standard --confirm-spend
   ```
 
 - **Cost guard.** Before the first submit the worker prices the image with `/estimate`. Above
@@ -111,6 +111,13 @@ storage.
   nothing is sent. Failed, rejected and canceled requests give the amount back, completed ones commit
   it (the actual cost if Higgsfield ever reports one, else the estimate), and `UNKNOWN` jobs keep it
   until reconciled.
+- **Output host not allowed.** Images are downloaded only from `HIGGSFIELD_OUTPUT_HOSTS`. If
+  Higgsfield answers with another host, the worker logs `provider output host not allowed ...
+  host=<host>` at ERROR (host only, never the URL) and keeps the job waiting, retrying with
+  backoff. To recover, add that host to `HIGGSFIELD_OUTPUT_HOSTS` and restart the worker before
+  the output expires; after expiry the job fails `OUTPUT_EXPIRED` (billed). Without an
+  `expires_at` from Higgsfield, expiry is `PROVIDER_OUTPUT_RETENTION_FALLBACK_SECONDS` (7 days)
+  after the worker first saw the output completed.
 
 ## Checks
 
@@ -151,7 +158,7 @@ Conventions:
   member of the owner role), before `alembic upgrade head`, which grants it the worker's tables. The
   connector worker's `WORKER_DATABASE_URL` uses it and the worker refuses to start without it.
 - Deploy order for migration `3fb9adf5dfbe`: create `marketing_worker` and switch every worker to
-  `WORKER_DATABASE_URL` BEFORE it runs. It revokes the lease functions and `provider_spend` from
+  `WORKER_DATABASE_URL` BEFORE it runs. It revokes the lease function and `provider_spend` from
   `marketing_app`, so a worker still on `DATABASE_URL` stops leasing.
 - Cognito: `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_IDS` and a resource-server
   scope matching `REQUIRED_SCOPE`.

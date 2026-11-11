@@ -8,22 +8,39 @@ only text-to-image request schema found is openapi.json "/higgsfield-ai/soul/sta
 (prompt, num_images, resolution 2K|4K, aspect_ratio enum), while the quickstart example uses
 "higgsfield-ai/soul/v2/standard" with only a prompt. The model path is therefore configuration
 (HIGGSFIELD_MODEL), and the body sent is {"prompt", "aspect_ratio"} plus an optional resolution.
-No live call has been made; see the TODO(NRC-10) markers for what a live account must confirm.
+
+Live run on 9 Nov 2026 with model "higgsfield-ai/soul/v2/standard": aspect_ratio 1:1 was
+accepted, and the status response carries no cost field, so the cost recorded for a job is its
+/estimate price. A free /estimate probe on 10 Nov 2026 gave the accepted aspect ratios and
+resolutions (SUPPORTED_ASPECT_RATIOS, HIGGSFIELD_RESOLUTION). The remaining TODO(NRC-10)
+markers are what a live account must still confirm.
 """
 
 import json
 import logging
 import math
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, ClassVar, Final
+from decimal import Decimal
+from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal
 from urllib.parse import urlsplit
 
 import boto3
 import httpx
 from botocore.exceptions import BotoCoreError, ClientError
-from pydantic import SecretStr
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    Field,
+    SecretStr,
+    StringConstraints,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+)
 
 from app.core.config import Settings
 from app.services.fetch import SafeFetcher, build_fetch_client
@@ -36,6 +53,7 @@ from app.services.providers.base import (
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
+    ProviderOutputExpiredError,
     ProviderRateLimitedError,
     ProviderRejectedError,
     ProviderUnavailableError,
@@ -63,7 +81,8 @@ _MAX_RETRY_AFTER_SECONDS = 3600.0
 # Documented 422 detail when a key is reused with different parameters (concepts/idempotency).
 _IDEMPOTENCY_CONFLICT_TEXT = "idempotency-key was already used with different request parameters"
 
-_STATUS_MAP = {
+_HiggsfieldStatus = Literal["queued", "in_progress", "completed", "failed", "nsfw", "canceled"]
+_STATUS_MAP: Final[Mapping[_HiggsfieldStatus, ProviderJobStatus]] = {
     "queued": ProviderJobStatus.QUEUED,
     "in_progress": ProviderJobStatus.IN_PROGRESS,
     "completed": ProviderJobStatus.COMPLETED,
@@ -85,6 +104,59 @@ _BALANCE_STATUSES = frozenset({402, 403})
 
 # Failures where the request provably never left this process.
 _NOT_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
+def _decimal_string(value: object) -> object:
+    # /estimate answers {"usd": "<decimal>"}; a JSON number would be a change of contract.
+    if not isinstance(value, str):
+        raise ValueError("usd must be a decimal string")
+    return value
+
+
+def _utc_if_naive(value: datetime | None) -> datetime | None:
+    return value if value is None or value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _none_if_unreadable(
+    value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
+) -> object:
+    # An optional field of a status response that cannot be read is dropped instead of failing
+    # the whole response: a completed generation is billed and must still be fetched.
+    try:
+        return handler(value)
+    except ValidationError:
+        logger.warning("higgsfield status unreadable field=%s", info.field_name)
+        return None
+
+
+_RequestId = Annotated[str, StringConstraints(pattern=_REQUEST_ID_RE.pattern)]
+_Usd = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
+
+
+class _SubmitResponse(BaseModel):
+    request_id: _RequestId
+    status: _HiggsfieldStatus
+
+
+class _EstimateResponse(BaseModel):
+    usd: Annotated[_Usd, BeforeValidator(_decimal_string)]
+
+
+class _Image(BaseModel):
+    url: str
+
+
+class _StatusResponse(BaseModel):
+    status: _HiggsfieldStatus
+    images: Annotated[list[_Image] | None, WrapValidator(_none_if_unreadable)] = None
+    # TODO(NRC-10): confirm with live account that timestamps always carry an offset; a naive
+    # one is read as UTC.
+    expires_at: Annotated[
+        datetime | None, AfterValidator(_utc_if_naive), WrapValidator(_none_if_unreadable)
+    ] = None
+    # The live status response (9 Nov 2026) has no cost field, so the estimate is what gets
+    # recorded. Should Higgsfield add one, it is read under the /estimate name.
+    usd: Annotated[_Usd | None, WrapValidator(_none_if_unreadable)] = None
 
 
 class HiggsfieldInsufficientBalanceError(ProviderConfigError):
@@ -190,20 +262,19 @@ class HiggsfieldProvider:
             sent_unknown=True,
         )
         self._raise_for_status(response, submit=True)
-        data = self._json_object(response, submit=True)
-        request_id = data.get("request_id")
-        status = _STATUS_MAP.get(str(data.get("status")))
-        if (
-            not isinstance(request_id, str)
-            or status is None
-            or not _REQUEST_ID_RE.fullmatch(request_id)
-        ):
+        try:
+            data = _SubmitResponse.model_validate_json(response.content)
+        except ValidationError:
             logger.warning(
                 "higgsfield submit malformed response status_code=%s", response.status_code
             )
-            raise ProviderOutcomeUnknownError("Higgsfield returned an unreadable submit response")
-        logger.info("higgsfield submitted request_id=%s status=%s", request_id, status.value)
-        return SubmitResult(provider_request_id=request_id, status=status)
+            # Not chained: pydantic errors echo the input.
+            raise ProviderOutcomeUnknownError(
+                "Higgsfield returned an unreadable submit response"
+            ) from None
+        status = _STATUS_MAP[data.status]
+        logger.info("higgsfield submitted request_id=%s status=%s", data.request_id, status.value)
+        return SubmitResult(provider_request_id=data.request_id, status=status)
 
     def _body(self, request: ImageRequest) -> dict[str, str]:
         # Checked here so neither the estimate nor the submit is sent for an unsupported ratio.
@@ -226,14 +297,12 @@ class HiggsfieldProvider:
             sent_unknown=False,
         )
         self._raise_for_status(response, submit=False)
-        usd = self._json_object(response, submit=False).get("usd")
         try:
-            amount = Decimal(usd) if isinstance(usd, str) else None
-        except InvalidOperation:
-            amount = None
-        if amount is None or not amount.is_finite() or amount < 0:
-            raise ProviderUnavailableError("Higgsfield returned an unreadable cost estimate")
-        return amount
+            return _EstimateResponse.model_validate_json(response.content).usd
+        except ValidationError:
+            raise ProviderUnavailableError(
+                "Higgsfield returned an unreadable cost estimate"
+            ) from None
 
     async def get_status(self, provider_request_id: str) -> StatusResult:
         if not _REQUEST_ID_RE.fullmatch(provider_request_id):
@@ -242,34 +311,37 @@ class HiggsfieldProvider:
         url = f"{self._base_url}/requests/{provider_request_id}/status"
         response = await self._send("GET", url, sent_unknown=False)
         self._raise_for_status(response, submit=False, status_lookup=True)
-        data = self._json_object(response, submit=False)
-        status = _STATUS_MAP.get(str(data.get("status")))
-        if status is None:
+        try:
+            data = _StatusResponse.model_validate_json(response.content)
+        except ValidationError:
             logger.warning(
                 "higgsfield status malformed request_id=%s status_code=%s",
                 provider_request_id,
                 response.status_code,
             )
-            raise ProviderUnavailableError("Higgsfield returned an unreadable status response")
-        urls = _image_urls(data.get("images"))
+            raise ProviderUnavailableError(
+                "Higgsfield returned an unreadable status response"
+            ) from None
+        status = _STATUS_MAP[data.status]
+        urls = tuple(image.url for image in data.images or ())
         if status is ProviderJobStatus.COMPLETED and not urls:
             raise ProviderOutputError("Higgsfield completed the request without an output image")
-        expires_at = _parse_expiry(data.get("expires_at"))
         logger.info("higgsfield status request_id=%s status=%s", provider_request_id, status.value)
         return StatusResult(
             provider_request_id=provider_request_id,
             status=status,
             output_urls=urls if status is ProviderJobStatus.COMPLETED else (),
-            outputs_expire_at=expires_at,
+            outputs_expire_at=data.expires_at,
             failure_code=_FAILURE_CODES.get(status),
-            actual_cost_usd=_actual_cost(data, provider_request_id),
+            actual_cost_usd=data.usd,
         )
 
     async def fetch_output(self, result: StatusResult) -> FetchedImage:
         if not result.output_urls:
             raise ProviderOutputError("Higgsfield result has no output image")
         if result.outputs_expire_at is not None and result.outputs_expire_at <= datetime.now(UTC):
-            raise ProviderOutputError("Higgsfield output has expired")
+            # Billed already; the worker ends the job FAILED OUTPUT_EXPIRED with charges kept.
+            raise ProviderOutputExpiredError("Higgsfield output has expired")
         return await self._fetcher(
             result.output_urls[0], allowed_hosts=self._allowed_hosts, max_bytes=self._max_bytes
         )
@@ -334,18 +406,6 @@ class HiggsfieldProvider:
             raise ProviderUnavailableError(f"Higgsfield server error (HTTP {code})")
         raise ProviderRejectedError(f"Higgsfield rejected the request (HTTP {code})")
 
-    @staticmethod
-    def _json_object(response: httpx.Response, *, submit: bool) -> dict[str, Any]:
-        try:
-            data = response.json()
-        except ValueError:
-            data = None
-        if isinstance(data, dict):
-            return data
-        if submit:
-            raise ProviderOutcomeUnknownError("Higgsfield returned an unreadable submit response")
-        raise ProviderUnavailableError("Higgsfield returned an unreadable status response")
-
 
 def _retry_after(response: httpx.Response) -> float | None:
     value = response.headers.get("Retry-After")
@@ -370,50 +430,6 @@ def _retry_after(response: httpx.Response) -> float | None:
     ):
         return min(float(body_value), _MAX_RETRY_AFTER_SECONDS)
     return None
-
-
-def _image_urls(images: object) -> tuple[str, ...]:
-    if not isinstance(images, list):
-        return ()
-    return tuple(
-        item["url"]
-        for item in images
-        if isinstance(item, dict) and isinstance(item.get("url"), str)
-    )
-
-
-def _actual_cost(data: dict[str, Any], provider_request_id: str) -> Decimal | None:
-    """The request's cost, only from an explicit cost field in the status response.
-
-    TODO(NRC-10): confirm with the first live status response. The docs (openapi.json
-    RequestStatus, concepts/billing-and-retention) show no cost field; only /estimate answers
-    {"usd": "<decimal>"}. So the same "usd" key is read here, strictly: a decimal string or a
-    JSON number, finite and not negative. Anything else is ignored and the estimate is used.
-    """
-    if "usd" not in data:
-        return None
-    value = data["usd"]
-    amount: Decimal | None = None
-    if isinstance(value, str) or (isinstance(value, int | float) and not isinstance(value, bool)):
-        try:
-            amount = Decimal(str(value))
-        except InvalidOperation:
-            amount = None
-    if amount is None or not amount.is_finite() or amount < 0:
-        logger.warning("higgsfield status unreadable cost request_id=%s", provider_request_id)
-        return None
-    return amount
-
-
-def _parse_expiry(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    # TODO(NRC-10): confirm with live account that timestamps always carry an offset.
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def build_api_client(settings: Settings) -> httpx.AsyncClient:

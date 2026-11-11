@@ -1,4 +1,6 @@
-# Whether a creative version may be sent for image generation.
+# Whether a creative version may be sent for image generation (NRC-6/NRC-10 checks).
+#
+# Not named eligibility.py: NRC-7 (Dinesh) owns app.services.eligibility and its validation gate.
 
 from dataclasses import dataclass
 from typing import Final, NoReturn
@@ -54,7 +56,7 @@ async def assert_generation_eligible(
         )
     ).one()
     if latest.recruitment_status is not RecruitmentStatus.RECRUITING:
-        _not_eligible("STUDY_NOT_RECRUITING")
+        _not_eligible("STUDY_CLOSED")
     if creative.language != latest.language:
         _not_eligible("LANGUAGE_NOT_ALLOWED")
     spec = FORMAT_SPECS.get(creative.post_format)
@@ -73,8 +75,9 @@ async def assert_generation_allowed(
 
     His version raises ValidationNotPassedError (409 VALIDATION_NOT_PASSED, not retryable,
     details with the run id and status) unless the latest validation run for this exact version
-    passed. Swap this stub for an import of his function and set VALIDATION_GATE_IS_STUB to
-    False in the same change.
+    passed. When NRC-7 lands, replace this stub with
+    `from app.services.eligibility import assert_generation_allowed` and set
+    VALIDATION_GATE_IS_STUB to False in the same commit.
     """
     return None
 

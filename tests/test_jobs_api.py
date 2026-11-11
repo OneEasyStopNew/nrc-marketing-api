@@ -17,7 +17,7 @@ from app.api.deps import get_signing_keys
 from app.core.config import get_settings
 from app.core.errors import ValidationNotPassedError
 from app.main import create_app
-from app.services import eligibility
+from app.services import generation_checks
 from tests.conftest import (
     JOBS,
     AuthHeaders,
@@ -134,7 +134,7 @@ async def test_closed_study_is_not_eligible(
 
     assert response.status_code == 409
     assert _error(response)["code"] == "GENERATION_NOT_ELIGIBLE"
-    assert _error(response)["details"] == {"reason": "STUDY_NOT_RECRUITING"}
+    assert _error(response)["details"] == {"reason": "STUDY_CLOSED"}
 
 
 async def test_reviewer_cannot_start_generation(
@@ -247,7 +247,7 @@ async def test_validation_gate_refusal_is_a_409_and_queues_nothing(
         calls.append((tenant_id, creative, creative_version))
         raise ValidationNotPassedError(details={"validation_run_id": "run-1", "status": "FAILED"})
 
-    monkeypatch.setattr(eligibility, "assert_generation_allowed", not_passed)
+    monkeypatch.setattr(generation_checks, "assert_generation_allowed", not_passed)
 
     response = await _post_job(client, auth, world, creative_id)
 

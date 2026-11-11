@@ -21,6 +21,7 @@ from app.services.providers.base import (
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
+    ProviderOutputExpiredError,
     ProviderRateLimitedError,
     ProviderRejectedError,
     ProviderUnavailableError,
@@ -272,6 +273,27 @@ async def test_naive_expiry_is_made_aware() -> None:
     assert result.outputs_expire_at == datetime(2030, 1, 1, tzinfo=UTC)
 
 
+async def test_unreadable_expiry_is_dropped_and_the_output_still_read() -> None:
+    body = {
+        "status": "completed",
+        "request_id": "r",
+        "images": [{"url": OUTPUT_URL}],
+        "expires_at": "next tuesday",
+    }
+
+    result = await make(fixed(200, json=body)).get_status("r")
+
+    assert (result.output_urls, result.outputs_expire_at) == ((OUTPUT_URL,), None)
+
+
+@pytest.mark.parametrize("images", ["one.png", [{"url": 5}], [{"href": OUTPUT_URL}]])
+async def test_unreadable_images_count_as_no_output(images: object) -> None:
+    body = {"status": "completed", "request_id": "r", "images": images}
+
+    with pytest.raises(ProviderOutputError, match="without an output image"):
+        await make(fixed(200, json=body)).get_status("r")
+
+
 async def test_fetch_output_without_images_or_after_expiry_fails() -> None:
     provider = make(accepted)
     with pytest.raises(ProviderOutputError):
@@ -282,7 +304,7 @@ async def test_fetch_output_without_images_or_after_expiry_fails() -> None:
         output_urls=(OUTPUT_URL,),
         outputs_expire_at=datetime.now(UTC) - timedelta(seconds=1),
     )
-    with pytest.raises(ProviderOutputError):
+    with pytest.raises(ProviderOutputExpiredError):
         await provider.fetch_output(expired)
 
 
