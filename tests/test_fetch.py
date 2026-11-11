@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import struct
 import time
 import zlib
@@ -14,6 +15,7 @@ from app.services.providers.base import (
     FetchedImage,
     ProviderOutputError,
     ProviderOutputHostError,
+    ProviderOutputUnavailableError,
 )
 
 HOST = "cdn.provider.example"
@@ -336,3 +338,96 @@ async def test_transport_error_is_wrapped_without_leaking_the_url() -> None:
     assert "secret-signature" not in text
     assert "X-Signature" not in text
     assert raised.value.__cause__ is None
+
+
+def _raise(error: type[httpx.TransportError]) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error(f"failed for {request.url}", request=request)
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        _raise(httpx.ConnectError),
+        _raise(httpx.ReadTimeout),
+        _raise(httpx.RemoteProtocolError),
+        lambda request: httpx.Response(500),
+        lambda request: httpx.Response(503),
+        lambda request: httpx.Response(429),
+    ],
+    ids=["connect", "read-timeout", "protocol", "500", "503", "429"],
+)
+async def test_transient_failures_are_retryable(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    # The output stays downloadable until it expires, so a network blip must not lose it.
+    fetcher, _ = _fetcher(handler)
+    with pytest.raises(ProviderOutputUnavailableError) as raised:
+        await _fetch(fetcher)
+    assert raised.value.retryable
+    assert "secret-signature" not in f"{raised.value} {raised.value.message}"
+    assert raised.value.__cause__ is None
+
+
+async def test_overall_timeout_is_retryable() -> None:
+    async def slow(host: str) -> list[str]:
+        await asyncio.sleep(5)
+        return ["93.184.216.34"]
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_ok()))
+    fetcher = SafeFetcher(client, resolver=slow, timeout_seconds=0.05)
+    with pytest.raises(ProviderOutputUnavailableError) as raised:
+        await _fetch(fetcher)
+    assert raised.value.retryable
+
+
+async def test_resolution_failure_is_retryable() -> None:
+    async def failing(host: str) -> list[str]:
+        raise socket.gaierror("temporary failure in name resolution")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_ok()))
+    fetcher = SafeFetcher(client, timeout_seconds=30, resolver=failing)
+    with pytest.raises(ProviderOutputUnavailableError) as raised:
+        await _fetch(fetcher)
+    assert raised.value.retryable
+
+
+@pytest.mark.parametrize(
+    ("handler", "url", "addresses"),
+    [
+        (lambda request: httpx.Response(404), URL, ("93.184.216.34",)),
+        (lambda request: httpx.Response(410), URL, ("93.184.216.34",)),
+        (lambda request: httpx.Response(403), URL, ("93.184.216.34",)),
+        (lambda request: httpx.Response(302, headers={"location": URL}), URL, ("93.184.216.34",)),
+        (lambda request: httpx.Response(400), URL, ("93.184.216.34",)),
+        (_ok(b"x" * (CAP + 1)), URL, ("93.184.216.34",)),
+        (_ok(content_type="text/html"), URL, ("93.184.216.34",)),
+        (_ok(JPEG, "image/png"), URL, ("93.184.216.34",)),
+        (_ok(), URL.replace("https", "http"), ("93.184.216.34",)),
+        (_ok(), f"https://user:pw@{HOST}/out/1.png", ("93.184.216.34",)),
+        (_ok(), URL, ("10.0.0.1",)),
+    ],
+    ids=[
+        "404",
+        "410",
+        "403",
+        "redirect",
+        "400",
+        "size",
+        "type",
+        "signature",
+        "http",
+        "credentials",
+        "blocked-ip",
+    ],
+)
+async def test_permanent_failures_are_not_retryable(
+    handler: Callable[[httpx.Request], httpx.Response], url: str, addresses: tuple[str, ...]
+) -> None:
+    fetcher, _ = _fetcher(handler, addresses)
+    with pytest.raises(ProviderOutputError) as raised:
+        await _fetch(fetcher, url)
+    assert not raised.value.retryable
+    assert not isinstance(raised.value, ProviderOutputUnavailableError)

@@ -21,10 +21,13 @@ from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState, SpendState
 from app.services.jobs import jobs_awaiting_review, transition
 from app.services.providers.base import (
+    TERMINAL_PROVIDER_STATUSES,
     ProviderConfigError,
+    ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
     ProviderOutputExpiredError,
+    ProviderOutputUnavailableError,
     ProviderRateLimitedError,
     ProviderUnavailableError,
 )
@@ -33,6 +36,7 @@ from app.services.providers.simulator import SimulatedImageProvider, SimulatorSc
 from app.workers.connector import (
     DEFAULT_OWNER,
     EVENT_HANDLERS,
+    PROVIDER_STATUS_FAILURE_CODES,
     JobRunHandler,
     LeasedEvent,
     Step,
@@ -589,6 +593,29 @@ async def test_unusable_output_fails_and_keeps_credits_billed(
     assert reservation is ReservationState.COMMITTED
 
 
+async def test_transient_fetch_failure_keeps_the_job_and_retries_the_fetch(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    provider.fetch_error = ProviderOutputUnavailableError("Simulated network blip.")
+
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.WAITING_PROVIDER
+    assert reservation is ReservationState.RESERVED
+    assert (await _event(connection)).processed_at is None
+
+    provider.fetch_error = None
+    await _requeue(connection, world)
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert reservation is ReservationState.COMMITTED
+    assert len(sink.stored) == 1
+
+
 async def test_lost_lease_abandons_the_step_without_touching_the_job(
     sessions: Sessions,
     job_id: UUID,
@@ -660,6 +687,37 @@ async def test_event_past_attempt_cap_is_given_up(
     assert reservation is ReservationState.RELEASED
     assert event.processed_at is not None
     assert event.last_error_code == "ATTEMPTS_EXHAUSTED"
+
+
+async def test_attempt_cap_is_the_jobs_own_after_the_setting_changes(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    # The cap is fixed when the job is accepted; raising the setting later doesn't extend it.
+    accepted_cap = get_settings().generation_max_attempts
+    await _fail_attempts(connection, world)
+    raised = get_settings().model_copy(update={"generation_max_attempts": accepted_cap + 5})
+
+    await run_once(sessions, {"simulator": SimulatedImageProvider()}, FakeSink(), raised)
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.max_attempts == accepted_cap
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "ATTEMPTS_EXHAUSTED")
+
+
+async def test_no_handler_cap_is_the_jobs_own_after_the_setting_changes(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    accepted_cap = get_settings().generation_max_attempts
+    lowered = get_settings().model_copy(update={"generation_max_attempts": 1})
+    no_kinds = {"job.run": JobRunHandler({})}
+
+    await run_once(sessions, {}, FakeSink(), lowered, event_handlers=no_kinds)
+
+    job, _ = await _load(sessions, world, job_id)
+    event = await _event(connection)
+    assert job.max_attempts == accepted_cap > 1
+    assert event.processed_at is None
+    assert job.state is ExecutionState.QUEUED
 
 
 async def test_polls_of_a_long_generation_never_count_as_failures(
@@ -1131,3 +1189,10 @@ def test_backoff_doubles_from_the_base_up_to_the_configured_max(
     delays = [backoff_seconds(attempt, settings) for _ in range(50)]
 
     assert all(ceiling / 2 <= delay <= ceiling for delay in delays)
+
+
+def test_every_unsuccessful_provider_status_has_a_failure_code() -> None:
+    unsuccessful = TERMINAL_PROVIDER_STATUSES - {ProviderJobStatus.COMPLETED}
+
+    assert PROVIDER_STATUS_FAILURE_CODES.keys() == unsuccessful
+    assert PROVIDER_STATUS_FAILURE_CODES[ProviderJobStatus.CANCELED] == "PROVIDER_CANCELED"
