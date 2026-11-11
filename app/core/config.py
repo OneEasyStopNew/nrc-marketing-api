@@ -73,8 +73,8 @@ class Settings(BaseSettings):
     worker_no_handler_retry_seconds: float = Field(default=60, gt=0, le=3600)
     higgsfield_base_url: str = "https://api.higgsfield.ai"
     higgsfield_model: str | None = None
-    # None leaves it out of the request body (the model default applies).
-    higgsfield_resolution: Literal["720p", "1080p"] | None = "1080p"
+    # Sent with every Higgsfield request; a smoke-script candidate may name its own instead.
+    higgsfield_resolution: Literal["720p", "1080p"] = "1080p"
     # "<key-id>:<key-secret>", the Higgsfield SDK's format. Parsed by
     # app.services.providers.higgsfield.higgsfield_credentials.
     higgsfield_api_key: SecretStr | None = None

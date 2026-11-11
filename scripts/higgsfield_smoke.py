@@ -35,7 +35,7 @@ from app.services.storage import ObjectStorage, StoredObject
 
 @dataclass(frozen=True, slots=True)
 class Candidate:
-    # None leaves resolution out of the body, so the model default applies.
+    # None: HIGGSFIELD_RESOLUTION applies (HiggsfieldProvider.from_settings).
     resolution: str | None
     source: str
 
@@ -83,7 +83,7 @@ def _help_epilog() -> str:
         "https://docs.higgsfield.ai/docs/, checked 9 Nov 2026):",
     ]
     for model, candidate in CANDIDATES.items():
-        resolution = candidate.resolution or "model default"
+        resolution = candidate.resolution or "HIGGSFIELD_RESOLUTION"
         lines.append(f"  {model}  resolution={resolution}")
         lines.append(f"      {candidate.source}")
     lines.append("other model ids are sent with prompt and aspect_ratio only.")
@@ -134,11 +134,9 @@ def _is_local(endpoint: str | None) -> bool:
 def provider_factory(settings: Settings) -> ProviderFactory:
     def make(model: str) -> HiggsfieldProvider:
         candidate = CANDIDATES.get(model)
-        # A candidate's own resolution wins; otherwise HIGGSFIELD_RESOLUTION applies.
+        # A candidate's own resolution wins; from_settings falls back to HIGGSFIELD_RESOLUTION.
         resolution = candidate.resolution if candidate else None
-        return create_provider(
-            settings, model=model, resolution=resolution or settings.higgsfield_resolution
-        )
+        return create_provider(settings, model=model, resolution=resolution)
 
     return make
 
