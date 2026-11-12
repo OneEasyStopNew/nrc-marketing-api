@@ -20,7 +20,9 @@ from app.db.session import bind_tenant
 from app.models import Asset, CreditReservation, Job
 from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState
+from app.services import assets
 from app.services.assets import StoredImageSink
+from app.services.jobs import JobContent, JobContentMissingError
 from app.services.providers.base import FetchedImage, ProviderOutputError
 from app.services.providers.simulator import SimulatedImageProvider, render_simulated_png
 from app.services.storage import ObjectStorage, StorageError
@@ -341,6 +343,29 @@ async def test_second_asset_for_the_same_job_is_blocked(
         image = FetchedImage(render_simulated_png(), "image/png", None)
 
         with pytest.raises(IntegrityError, match="uq_assets_job_id"):
+            await sink.store(db, job, image, "simulator", "m")
+
+
+async def test_missing_job_content_is_an_output_error_the_worker_ends_on(
+    sessions: Sessions,
+    sink: StoredImageSink,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def missing(*_: object) -> JobContent:
+        raise JobContentMissingError("The job's creative version could not be found.")
+
+    monkeypatch.setattr(assets, "job_content", missing)
+    creative_id = await _creative(client, auth, world.a)
+    await _post_job(client, auth, world, creative_id)
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        job = (await db.execute(select(Job))).scalar_one()
+        image = FetchedImage(render_simulated_png(), "image/png", None)
+
+        with pytest.raises(ProviderOutputError, match="creative version"):
             await sink.store(db, job, image, "simulator", "m")
 
 

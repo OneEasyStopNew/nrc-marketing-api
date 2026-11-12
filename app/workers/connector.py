@@ -52,6 +52,7 @@ from app.services.jobs import (
     NON_TERMINAL_STATES,
     RUN_EVENT,
     TERMINAL_STATES,
+    JobContentMissingError,
     job_content,
     provider_idempotency_key,
     settle_reservation,
@@ -88,6 +89,8 @@ logger = logging.getLogger(__name__)
 IDEMPOTENCY_CONFLICT: Final = "PROVIDER_IDEMPOTENCY_CONFLICT"
 BUDGET_EXHAUSTED: Final = "BUDGET_EXHAUSTED"
 MODEL_CHANGED: Final = "MODEL_CHANGED"
+# The job's creative version could not be read, so its request can't be built.
+JOB_CONTENT_MISSING: Final = "JOB_CONTENT_MISSING"
 ATTEMPTS_EXHAUSTED: Final = "ATTEMPTS_EXHAUSTED"
 NO_HANDLER: Final = "NO_HANDLER"
 # The provider billed a completed generation that could not be stored.
@@ -288,7 +291,12 @@ class ImageGenerationHandler:
                 billed=False,
             )
             return None
-        request = await _image_request(db, job)
+        try:
+            request = await _image_request(db, job)
+        except JobContentMissingError as error:
+            # Before any provider call, so nothing was billed.
+            await _fail_with(db, job.id, JOB_CONTENT_MISSING, str(error), billed=False)
+            return None
         values: dict[str, object] = {}
         # Priced once, before the first submit; retries and reconcile reuse the estimate.
         if job.provider_cost_estimate_usd_micros is None:
@@ -362,7 +370,13 @@ class ImageGenerationHandler:
             await _park_unknown(db, job.id, MODEL_CHANGED)
             _log_review_stop(job, MODEL_CHANGED)
             return None
-        request = await _image_request(db, job)
+        try:
+            request = await _image_request(db, job)
+        except JobContentMissingError:
+            # Without the identical request no same-key resend is possible; credits stay held.
+            await _park_unknown(db, job.id, JOB_CONTENT_MISSING)
+            _log_review_stop(job, JOB_CONTENT_MISSING)
+            return None
         await step.heartbeat(db)
         try:
             submitted = await provider.submit(request)

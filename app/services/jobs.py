@@ -132,6 +132,12 @@ class JobContent:
     spec: FormatSpec
 
 
+class JobContentMissingError(Exception):
+    # The job's creative version is gone or not visible: no retry can fix it, so the worker
+    # ends the job at once instead of treating it as a crash and retrying to the attempt cap.
+    pass
+
+
 async def job_content(db: AsyncSession, job: Job) -> JobContent:
     # Runs under the job's tenant (RLS); the version is fixed on the job when it is accepted.
     row = (
@@ -144,7 +150,7 @@ async def job_content(db: AsyncSession, job: Job) -> JobContent:
         )
     ).one_or_none()
     if row is None:
-        raise LookupError("The job's creative version is not visible in this transaction")
+        raise JobContentMissingError("The job's creative version could not be found.")
     return JobContent(prompt=row.prompt, spec=FORMAT_SPECS[row.post_format])
 
 

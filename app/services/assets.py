@@ -15,7 +15,7 @@ from app.core.errors import DependencyUnavailableError, NotFoundError
 from app.models import Asset, Creative, Job, OutboxEvent
 from app.schemas.assets import AssetOrigin, AssetRead
 from app.services import media
-from app.services.jobs import job_content
+from app.services.jobs import JobContentMissingError, job_content
 from app.services.media import MediaRejectedError
 from app.services.providers.base import FetchedImage, ProviderError, ProviderOutputError
 from app.services.storage import ObjectStorage, StorageError
@@ -46,7 +46,11 @@ class StoredImageSink:
     async def store(
         self, db: AsyncSession, job: Job, image: FetchedImage, provider_name: str, model: str
     ) -> UUID:
-        spec = (await job_content(db, job)).spec
+        try:
+            spec = (await job_content(db, job)).spec
+        except JobContentMissingError as error:
+            # Ends the job like any unusable output: billed, nothing stored, no retry.
+            raise ProviderOutputError(str(error)) from error
         # The stored bytes are what image validation reads: exactly the format's size, as PNG.
         try:
             fitted = await asyncio.to_thread(
