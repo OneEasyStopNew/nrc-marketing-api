@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Collection
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final
 from uuid import UUID, uuid4
@@ -13,8 +14,8 @@ from app.auth.access import TenantContext
 from app.core.config import Settings
 from app.core.errors import DependencyUnavailableError, GenerationLimitError, NotFoundError
 from app.db.session import bind_tenant
-from app.models import Creative, CreditReservation, Job, OutboxEvent, Tenant
-from app.models.enums import ExecutionState, JobStage
+from app.models import Creative, CreativeVersion, CreditReservation, Job, OutboxEvent, Tenant
+from app.models.enums import FORMAT_SPECS, ExecutionState, FormatSpec, JobStage
 from app.models.jobs import ReservationState
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobKind, JobRead
 from app.services import generation_checks, idempotency
@@ -122,6 +123,35 @@ async def accept_creative_job(
     await db.commit()
     logger.info("job accepted job=%s tenant=%s", job_id, ctx.tenant_id)
     return JobAccepted(job_id=job_id, state=ExecutionState.QUEUED), False
+
+
+@dataclass(frozen=True, slots=True)
+class JobContent:
+    # What a generation job was accepted for: its creative version's prompt and format.
+    prompt: str
+    spec: FormatSpec
+
+
+class JobContentMissingError(Exception):
+    # The job's creative version is gone or not visible: no retry can fix it, so the worker
+    # ends the job at once instead of treating it as a crash and retrying to the attempt cap.
+    pass
+
+
+async def job_content(db: AsyncSession, job: Job) -> JobContent:
+    # Runs under the job's tenant (RLS); the version is fixed on the job when it is accepted.
+    row = (
+        await db.execute(
+            select(CreativeVersion.prompt, CreativeVersion.post_format).where(
+                CreativeVersion.tenant_id == job.tenant_id,
+                CreativeVersion.creative_id == job.creative_id,
+                CreativeVersion.version == job.creative_version,
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        raise JobContentMissingError("The job's creative version could not be found.")
+    return JobContent(prompt=row.prompt, spec=FORMAT_SPECS[row.post_format])
 
 
 def provider_idempotency_key(job_id: UUID) -> str:

@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import logging
 from collections.abc import Iterator
 from typing import Any
 from uuid import UUID
@@ -19,7 +20,9 @@ from app.db.session import bind_tenant
 from app.models import Asset, CreditReservation, Job
 from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState
+from app.services import assets
 from app.services.assets import StoredImageSink
+from app.services.jobs import JobContent, JobContentMissingError
 from app.services.providers.base import FetchedImage, ProviderOutputError
 from app.services.providers.simulator import SimulatedImageProvider, render_simulated_png
 from app.services.storage import ObjectStorage, StorageError
@@ -100,6 +103,42 @@ async def _succeeded_asset(
     return job_id, str(job["result_asset_id"])
 
 
+def _output(provider: SimulatedImageProvider, size: tuple[int, int]) -> None:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, (40, 80, 120)).save(buffer, format="PNG")
+    image = FetchedImage(buffer.getvalue(), "image/png", None)
+
+    async def fixed_output(*_: object) -> FetchedImage:
+        return image
+
+    provider.fetch_output = fixed_output  # type: ignore[method-assign,assignment]
+
+
+@pytest.mark.parametrize(("size", "upscaled"), [((540, 540), True), ((1536, 1536), False)])
+async def test_an_upscaled_output_is_logged_with_ids_only(
+    sessions: Sessions,
+    sink: StoredImageSink,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    caplog: pytest.LogCaptureFixture,
+    size: tuple[int, int],
+    upscaled: bool,
+) -> None:
+    provider = SimulatedImageProvider()
+    _output(provider, size)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.assets"):
+        job_id = await _generate(sessions, sink, provider, client, auth, world)
+
+    warnings = [r.getMessage() for r in caplog.records if "upscaled" in r.getMessage()]
+    assert len(warnings) == int(upscaled)
+    for message in warnings:
+        assert f"job={job_id}" in message
+        assert f"tenant={world.a.tenant_id}" in message
+        assert "provider_size=540x540 stored_size=1080x1080" in message
+
+
 async def test_generated_image_is_stored_and_downloadable(
     sessions: Sessions,
     sink: StoredImageSink,
@@ -107,7 +146,17 @@ async def test_generated_image_is_stored_and_downloadable(
     auth: AuthHeaders,
     world: World,
 ) -> None:
-    job_id = await _generate(sessions, sink, SimulatedImageProvider(), client, auth, world)
+    # The provider's image is larger than the format (as the live model's was, 1536x1536).
+    provider = SimulatedImageProvider()
+    buffer = io.BytesIO()
+    Image.new("RGB", (1536, 1536), (40, 80, 120)).save(buffer, format="PNG")
+    oversized = FetchedImage(buffer.getvalue(), "image/png", None)
+
+    async def oversized_output(*_: object) -> FetchedImage:
+        return oversized
+
+    provider.fetch_output = oversized_output  # type: ignore[method-assign,assignment]
+    job_id = await _generate(sessions, sink, provider, client, auth, world)
 
     job = await _job_json(client, auth, world, job_id)
     assert job["state"] == "SUCCEEDED"
@@ -135,6 +184,8 @@ async def test_generated_image_is_stored_and_downloadable(
         row = (await db.execute(select(Asset))).scalar_one()
         reservation = await db.scalar(select(CreditReservation.state))
     assert row.job_id == job_id
+    assert (row.width_px, row.height_px) == (1080, 1080)
+    assert row.checksum_sha256 == asset["checksum_sha256"]
     assert row.s3_version_id
     assert row.created_by == "creator-a"
     assert reservation is ReservationState.COMMITTED
@@ -292,6 +343,29 @@ async def test_second_asset_for_the_same_job_is_blocked(
         image = FetchedImage(render_simulated_png(), "image/png", None)
 
         with pytest.raises(IntegrityError, match="uq_assets_job_id"):
+            await sink.store(db, job, image, "simulator", "m")
+
+
+async def test_missing_job_content_is_an_output_error_the_worker_ends_on(
+    sessions: Sessions,
+    sink: StoredImageSink,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def missing(*_: object) -> JobContent:
+        raise JobContentMissingError("The job's creative version could not be found.")
+
+    monkeypatch.setattr(assets, "job_content", missing)
+    creative_id = await _creative(client, auth, world.a)
+    await _post_job(client, auth, world, creative_id)
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        job = (await db.execute(select(Job))).scalar_one()
+        image = FetchedImage(render_simulated_png(), "image/png", None)
+
+        with pytest.raises(ProviderOutputError, match="creative version"):
             await sink.store(db, job, image, "simulator", "m")
 
 

@@ -13,7 +13,13 @@ from PIL import Image
 
 from app.core.config import get_settings
 from app.main import create_app
-from app.services.media import MediaRejectedError, configure_pillow, inspect_header, inspect_image
+from app.services.media import (
+    MediaRejectedError,
+    configure_pillow,
+    fit_to_format,
+    inspect_header,
+    inspect_image,
+)
 from app.workers import connector
 
 MAX_PIXELS = 1_000_000
@@ -191,3 +197,118 @@ def test_mpo_is_accepted_as_jpeg() -> None:
     first.save(buffer, format="MPO", save_all=True, append_images=[first])
     info = inspect_image(buffer.getvalue(), max_pixels=MAX_PIXELS)
     assert (info.mime_type, info.ext) == ("image/jpeg", "jpg")
+
+
+def _fit(content: bytes, max_pixels: int = 25_000_000) -> tuple[bytes, Image.Image]:
+    fitted = fit_to_format(content, width_px=1080, height_px=1080, max_pixels=max_pixels)
+    out, info = fitted.content, fitted.stored
+    assert (info.mime_type, info.ext, info.width_px, info.height_px) == (
+        "image/png",
+        "png",
+        1080,
+        1080,
+    )
+    return out, Image.open(BytesIO(out))
+
+
+def _pixel(image: Image.Image, xy: tuple[int, int]) -> tuple[int, int, int]:
+    r, g, b = image.convert("RGB").getpixel(xy)  # type: ignore[misc]
+    return r, g, b
+
+
+def test_fit_reports_the_source_type_and_size() -> None:
+    fitted = fit_to_format(
+        _image("JPEG", (1200, 900)), width_px=1080, height_px=1080, max_pixels=25_000_000
+    )
+    source = fitted.source
+    assert (source.mime_type, source.width_px, source.height_px) == ("image/jpeg", 1200, 900)
+
+
+def test_fit_resizes_a_square_to_the_format_size() -> None:
+    _, image = _fit(_image("PNG", (1536, 1536)))
+    assert (image.format, image.size) == ("PNG", (1080, 1080))
+
+
+def test_fit_center_crops_a_wide_image() -> None:
+    # Red left third, green middle third, blue right third: only the middle survives.
+    wide = Image.new("RGB", (300, 100), (255, 0, 0))
+    wide.paste((0, 255, 0), (100, 0, 200, 100))
+    wide.paste((0, 0, 255), (200, 0, 300, 100))
+    buffer = BytesIO()
+    wide.save(buffer, format="PNG")
+
+    _, image = _fit(buffer.getvalue())
+
+    for point in [(540, 540), (5, 5), (1074, 1074)]:
+        assert _pixel(image, point) == (0, 255, 0)
+
+
+def test_fit_center_crops_a_tall_image() -> None:
+    tall = Image.new("RGB", (100, 300), (255, 0, 0))
+    tall.paste((0, 255, 0), (0, 100, 100, 200))
+    buffer = BytesIO()
+    tall.save(buffer, format="PNG")
+
+    _, image = _fit(buffer.getvalue())
+
+    for point in [(5, 5), (1074, 1074)]:
+        assert _pixel(image, point) == (0, 255, 0)
+
+
+def test_fit_turns_a_jpeg_into_a_png() -> None:
+    out, image = _fit(_image("JPEG", (1200, 900)))
+    assert image.format == "PNG"
+    assert out[1:4] == b"PNG"
+
+
+def test_fit_is_deterministic() -> None:
+    source = _image("JPEG", (1536, 1200))
+    assert _fit(source)[0] == _fit(source)[0]
+
+
+def test_fit_strips_metadata() -> None:
+    exif = Image.Exif()
+    exif[0x010E] = "secret description"
+    buffer = BytesIO()
+    Image.new("RGB", (50, 50), (1, 2, 3)).save(buffer, format="JPEG", exif=exif)
+
+    out, image = _fit(buffer.getvalue())
+
+    assert b"secret description" not in out
+    assert not image.getexif()
+
+
+def test_fit_applies_exif_orientation() -> None:
+    # Stored 100x50 with orientation 6 (rotate 90): shown as 50x100, red part on top.
+    source = Image.new("RGB", (100, 50), (255, 0, 0))
+    source.paste((0, 0, 255), (50, 0, 100, 50))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    buffer = BytesIO()
+    source.save(buffer, format="PNG", exif=exif)
+
+    _, image = _fit(buffer.getvalue())
+
+    assert _pixel(image, (540, 5)) == (255, 0, 0)
+    assert _pixel(image, (540, 1074)) == (0, 0, 255)
+
+
+def test_fit_keeps_the_pixel_cap() -> None:
+    with pytest.raises(MediaRejectedError, match="too many pixels") as raised:
+        fit_to_format(_image("PNG", (100, 100)), width_px=1080, height_px=1080, max_pixels=9_999)
+    assert raised.value.code == "MEDIA_TOO_LARGE"
+
+
+def test_fit_rejects_a_corrupt_image() -> None:
+    with pytest.raises(MediaRejectedError, match="not a valid, complete image") as raised:
+        fit_to_format(_image("PNG")[:-20], width_px=1080, height_px=1080, max_pixels=MAX_PIXELS)
+    assert raised.value.code == "MEDIA_CORRUPT"
+
+
+# 120 x 100 is in Pillow's warning range (over the limit); 200 x 100 is in its error range.
+@pytest.mark.parametrize("size", [(120, 100), (200, 100)])
+def test_fit_to_format_respects_the_pillow_limit(size: tuple[int, int]) -> None:
+    configure_pillow(get_settings().model_copy(update={"max_image_pixels": 10_000}))
+    with pytest.raises(MediaRejectedError, match="too many pixels") as raised:
+        fit_to_format(_image("PNG", size), width_px=10, height_px=10, max_pixels=MAX_PIXELS)
+    assert raised.value.code == "MEDIA_TOO_LARGE"

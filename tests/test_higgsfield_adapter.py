@@ -41,7 +41,9 @@ KEY_SECRET = "ksecret-SECRETVALUE-456"  # noqa: S105
 PROMPT = "a confidential launch visual for Acme"
 OUTPUT_URL = "https://cdn.example.com/signed/abc?sig=SIGNEDTOKEN"
 REQUEST_ID = "d7e6c0f3-6699-4f6c-bb45-2ad7fd9158ff"
-MODEL = "higgsfield-ai/soul/standard"
+MODEL = "higgsfield-ai/soul/v2/standard"
+# A real model id whose accepted aspect ratios were never probed.
+UNPROBED_MODEL = "higgsfield-ai/soul/standard"
 Handler = Callable[[httpx.Request], httpx.Response]
 
 
@@ -56,11 +58,13 @@ class RecordingFetcher:
         return FetchedImage(content=b"img", content_type="image/png", source_host="cdn.example.com")
 
 
-def make(handler: Handler, fetcher: RecordingFetcher | None = None) -> HiggsfieldProvider:
+def make(
+    handler: Handler, fetcher: RecordingFetcher | None = None, model: str = MODEL
+) -> HiggsfieldProvider:
     return HiggsfieldProvider(
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         base_url="https://api.higgsfield.ai/",
-        model=MODEL,
+        model=model,
         api_key_id=SecretStr(KEY_ID),
         api_key_secret=SecretStr(KEY_SECRET),
         fetcher=fetcher or RecordingFetcher(),
@@ -517,6 +521,44 @@ async def test_estimate_cost_posts_same_body_without_idempotency_key() -> None:
     assert json.loads(sent.content) == {"prompt": PROMPT, "aspect_ratio": "4:3"}
 
 
+async def test_unsupported_aspect_ratio_fails_before_any_request() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return httpx.Response(200, json={"usd": "0.094"})
+
+    odd = ImageRequest(
+        prompt=PROMPT, width_px=1, height_px=1, aspect_ratio="21:9", idempotency_key="k"
+    )
+    provider = make(handler)
+    with pytest.raises(ProviderRejectedError, match="aspect ratio"):
+        await provider.estimate_cost_usd(odd)
+    with pytest.raises(ProviderRejectedError, match="aspect ratio"):
+        await provider.submit(odd)
+    assert seen == []
+
+
+async def test_unprobed_model_refuses_to_submit_but_may_estimate() -> None:
+    # Spend: never pay for a request whose parameters this model was not probed to accept.
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return httpx.Response(200, json={"usd": "0.094"})
+
+    provider = make(handler, model=UNPROBED_MODEL)
+    with pytest.raises(ProviderConfigError, match="SUPPORTED_ASPECT_RATIOS"):
+        await provider.submit(request())
+    assert seen == []
+
+    # The estimate is free and is how a model's ratios are probed: Higgsfield validates it.
+    assert await provider.estimate_cost_usd(request()) == Decimal("0.094")
+    assert [str(sent.url) for sent in seen] == [
+        f"https://api.higgsfield.ai/estimate/{UNPROBED_MODEL}"
+    ]
+
+
 @pytest.mark.parametrize(
     "handler",
     [
@@ -597,6 +639,7 @@ async def test_create_provider_owns_https_clients_below_the_lease_and_closes_the
     assert isinstance(fetcher, SafeFetcher)
     assert provider.model == MODEL
     assert provider._resolution == "2K"
+    assert create_provider(config)._resolution == "1080p"
     assert provider._allowed_hosts == frozenset({"cdn.example.com"})
     assert api.timeout.read == 5
     assert api.trust_env is False

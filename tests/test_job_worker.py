@@ -19,7 +19,13 @@ from app.db.session import bind_tenant
 from app.models import Asset, Job
 from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState, SpendState
-from app.services.jobs import jobs_awaiting_review, transition
+from app.services.jobs import (
+    JobContent,
+    JobContentMissingError,
+    job_content,
+    jobs_awaiting_review,
+    transition,
+)
 from app.services.providers.base import (
     TERMINAL_PROVIDER_STATUSES,
     ProviderConfigError,
@@ -31,8 +37,9 @@ from app.services.providers.base import (
     ProviderRateLimitedError,
     ProviderUnavailableError,
 )
-from app.services.providers.higgsfield import higgsfield_credentials
+from app.services.providers.higgsfield import SUPPORTED_ASPECT_RATIOS, higgsfield_credentials
 from app.services.providers.simulator import SimulatedImageProvider, SimulatorScenario
+from app.workers import connector
 from app.workers.connector import (
     DEFAULT_OWNER,
     EVENT_HANDLERS,
@@ -79,6 +86,10 @@ async def _expire_leases(connection: AsyncConnection, world: World) -> None:
     await connection.execute(
         text("UPDATE outbox_events SET leased_until = clock_timestamp() - interval '1 second'")
     )
+
+
+# A model with probed aspect ratios, so live-mode checks get past the model.
+PROBED_MODEL = next(iter(SUPPORTED_ASPECT_RATIOS))
 
 
 class IdempotencyConflictError(ProviderOutcomeUnknownError):
@@ -566,6 +577,74 @@ async def test_reconcile_never_resends_after_a_model_change(
     assert sum(provider.submits.values()) == 1
 
 
+def _content_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def missing(*_: object) -> JobContent:
+        raise JobContentMissingError("The job's creative version could not be found.")
+
+    monkeypatch.setattr(connector, "job_content", missing)
+
+
+async def test_job_content_raises_a_domain_error_when_the_version_is_missing(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        job = await db.get(Job, job_id)
+        assert job is not None
+        # Detached, so the made-up version is never flushed.
+        db.expunge(job)
+        job.creative_version = 999
+
+        with pytest.raises(JobContentMissingError, match="creative version"):
+            await job_content(db, job)
+
+
+async def test_missing_job_content_fails_the_job_at_once_without_sending(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ScriptedProvider()
+    _content_missing(monkeypatch)
+
+    await _run(sessions, provider, FakeSink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "JOB_CONTENT_MISSING")
+    assert reservation is ReservationState.RELEASED
+    assert provider.estimates == 0
+    assert not provider.submits
+    # Finished, not left to expire and retry as a crash.
+    event = await _event(connection)
+    assert event.processed_at is not None
+    assert event.failed_attempts == 0
+
+
+async def test_reconcile_stops_for_review_when_job_content_is_missing(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ScriptedProvider()
+    provider.submit_errors = [ProviderOutcomeUnknownError("Simulated lost response.")]
+    await _run(sessions, provider, FakeSink())
+    _content_missing(monkeypatch)
+    await _requeue(connection, world)
+
+    await _run(sessions, provider, FakeSink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    # The provider may have the request, so credits stay held for an operator.
+    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "JOB_CONTENT_MISSING")
+    assert reservation is ReservationState.HELD
+    assert sum(provider.submits.values()) == 1
+    assert (await _event(connection)).processed_at is not None
+
+
 async def test_status_error_after_acceptance_holds_credits(
     sessions: Sessions, job_id: UUID, world: World
 ) -> None:
@@ -977,11 +1056,25 @@ def test_live_mode_without_keys_refuses_to_start() -> None:
 def test_live_mode_with_stub_validation_gate_refuses_to_start() -> None:
     settings = _live(
         higgsfield_api_key=SecretStr("test-id:test-secret"),
-        higgsfield_model="test/model",
+        higgsfield_model=PROBED_MODEL,
         higgsfield_output_hosts=("images.example.test",),
     )
 
     with pytest.raises(WorkerConfigError, match=r"refused: the validation-PASS gate is still"):
+        build_providers(settings)
+
+
+def test_live_mode_with_an_unprobed_model_refuses_to_start() -> None:
+    # Otherwise every job is estimated and reserved before submit refuses the model.
+    settings = _live(
+        higgsfield_api_key=SecretStr("test-id:test-secret"),
+        higgsfield_model="test/unprobed-model",
+        higgsfield_output_hosts=("images.example.test",),
+    )
+
+    with pytest.raises(
+        WorkerConfigError, match=r"refused: HIGGSFIELD_MODEL is not in SUPPORTED_ASPECT_RATIOS"
+    ):
         build_providers(settings)
 
 

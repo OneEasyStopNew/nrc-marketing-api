@@ -48,7 +48,7 @@ from tests.conftest import (
     needs_seaweedfs,
 )
 
-MODEL = "higgsfield-ai/soul/standard"
+MODEL = "higgsfield-ai/soul/v2/standard"
 ESTIMATE_USD = "0.05"
 OUTPUT_HOST = "images.higgsfield.example"
 OUTPUT_URL = f"https://{OUTPUT_HOST}/outputs/result.png?signature=SIGNED"
@@ -279,9 +279,10 @@ class CountingStorage(ObjectStorage):
         return await super().save_generated_image(content, ext=ext, content_type=content_type)
 
 
-def _png_1080() -> bytes:
+def _png_1536() -> bytes:
+    # What the model returns for 1:1 at 1080p (live test, 10 Nov 2026).
     buffer = io.BytesIO()
-    Image.new("RGB", (1080, 1080), (12, 90, 160)).save(buffer, format="PNG")
+    Image.new("RGB", (1536, 1536), (12, 90, 160)).save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -335,7 +336,7 @@ async def test_submit_5xx_after_acceptance_reconciles_to_one_charge_and_one_imag
         "images": [{"url": OUTPUT_URL}],
         "expires_at": expires,
     }
-    provider = higgsfield(fake, _output_server(_png_1080()), frozenset({OUTPUT_HOST}))
+    provider = higgsfield(fake, _output_server(_png_1536()), frozenset({OUTPUT_HOST}))
     storage = CountingStorage()
     sink = StoredImageSink(storage, get_settings())
     reserved, committed = await _spend(connection, "higgsfield")
@@ -366,6 +367,7 @@ async def test_submit_5xx_after_acceptance_reconciles_to_one_charge_and_one_imag
     assert reservation is ReservationState.COMMITTED
     assert job.provider_spend_state is SpendState.COMMITTED
     assert await _spend(connection, "higgsfield") == (reserved, committed + 50_000)
+    assert "provider_size=1536x1536 stored_size=1080x1080" in caplog.text
     assert "SIGNED" not in caplog.text
     assert OUTPUT_HOST not in caplog.text
 
@@ -432,7 +434,7 @@ async def test_accepted_job_past_grace_still_stores_the_completed_image(
     later = _past_grace()
     reserved, committed = await _spend(connection, "higgsfield")
     fake.status_body = _completed(later + timedelta(days=7))
-    provider = higgsfield(fake, _output_server(_png_1080()), frozenset({OUTPUT_HOST}))
+    provider = higgsfield(fake, _output_server(_png_1536()), frozenset({OUTPUT_HOST}))
 
     await run_at(sessions, provider, later, _sink())
 
@@ -617,7 +619,7 @@ async def test_job_fetching_output_past_grace_keeps_fetching(
     await run(sessions, higgsfield(fake, cdn_down, frozenset({OUTPUT_HOST})), _sink())
     fetching, _ = await _load(sessions, world, job_id)
     await _requeue(connection, world)
-    provider = higgsfield(fake, _output_server(_png_1080()), frozenset({OUTPUT_HOST}))
+    provider = higgsfield(fake, _output_server(_png_1536()), frozenset({OUTPUT_HOST}))
 
     await run_at(sessions, provider, _past_grace(), _sink())
 
@@ -644,7 +646,7 @@ async def test_unlisted_output_host_keeps_the_job_waiting_and_logs_only_the_host
 ) -> None:
     fake = FakeHiggsfield()
     fake.status_body = _completed(datetime.now(UTC) + timedelta(days=7))
-    provider = higgsfield(fake, _output_server(_png_1080()), UNLISTED_ONLY)
+    provider = higgsfield(fake, _output_server(_png_1536()), UNLISTED_ONLY)
     reserved, committed = await _spend(connection, "higgsfield")
 
     # More rounds than GENERATION_MAX_ATTEMPTS: a refused host never counts as a failure.
@@ -679,12 +681,12 @@ async def test_output_is_stored_once_the_host_is_added_to_the_allowlist(
     fake = FakeHiggsfield()
     fake.status_body = _completed(datetime.now(UTC) + timedelta(days=7))
     reserved, committed = await _spend(connection, "higgsfield")
-    await run(sessions, higgsfield(fake, _output_server(_png_1080()), UNLISTED_ONLY), _sink())
+    await run(sessions, higgsfield(fake, _output_server(_png_1536()), UNLISTED_ONLY), _sink())
     waiting, _ = await _load(sessions, world, job_id)
     await _requeue(connection, world)
 
     # Ops add the host to HIGGSFIELD_OUTPUT_HOSTS and restart the worker.
-    fixed = higgsfield(fake, _output_server(_png_1080()), UNLISTED_ONLY | {OUTPUT_HOST})
+    fixed = higgsfield(fake, _output_server(_png_1536()), UNLISTED_ONLY | {OUTPUT_HOST})
     await run(sessions, fixed, _sink())
 
     job, reservation = await _load(sessions, world, job_id)
@@ -704,7 +706,7 @@ async def test_unlisted_output_host_ends_output_expired_once_the_output_expires(
     fake = FakeHiggsfield()
     expires = datetime.now(UTC) + timedelta(hours=1)
     fake.status_body = _completed(expires)
-    provider = higgsfield(fake, _output_server(_png_1080()), UNLISTED_ONLY)
+    provider = higgsfield(fake, _output_server(_png_1536()), UNLISTED_ONLY)
     reserved, committed = await _spend(connection, "higgsfield")
     await run(sessions, provider, _sink())
     await _requeue(connection, world)
@@ -735,7 +737,7 @@ async def test_output_fetch_timeout_retries_and_stores_the_image_next_round(
     fake = FakeHiggsfield()
     fake.status_body = _completed(datetime.now(UTC) + timedelta(days=7))
     reserved, committed = await _spend(connection, "higgsfield")
-    server = _output_server(_png_1080(), [_cdn_timeout])
+    server = _output_server(_png_1536(), [_cdn_timeout])
     provider = higgsfield(fake, server, frozenset({OUTPUT_HOST}))
 
     await run(sessions, provider, _sink())
@@ -769,7 +771,7 @@ async def test_output_fetch_failing_until_expiry_ends_output_expired_and_billed(
     reserved, committed = await _spend(connection, "higgsfield")
     rounds = get_settings().generation_max_attempts + 1
     outages: list[CdnAnswer] = [_cdn_unavailable, _cdn_timeout] * rounds
-    provider = higgsfield(fake, _output_server(_png_1080(), outages), frozenset({OUTPUT_HOST}))
+    provider = higgsfield(fake, _output_server(_png_1536(), outages), frozenset({OUTPUT_HOST}))
 
     # More rounds than GENERATION_MAX_ATTEMPTS: transient fetch failures never count.
     for _ in range(rounds):
@@ -823,14 +825,14 @@ async def test_unlisted_host_without_expiry_ends_output_expired_after_the_retent
 
     with caplog.at_level(logging.WARNING, logger="app.workers.connector"):
         # Each round is a fresh provider, as after a worker restart.
-        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1080())))
+        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1536())))
         await _requeue(connection, world)
         within = seen_completed + timedelta(seconds=FALLBACK_SECONDS / 2)
-        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1080())), within)
+        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1536())), within)
         waiting, _ = await _load(sessions, world, job_id)
         await _requeue(connection, world)
         past = seen_completed + timedelta(seconds=FALLBACK_SECONDS + 60)
-        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1080())), past)
+        await run_with_fallback(sessions, higgsfield(fake, _output_server(_png_1536())), past)
 
     job, reservation = await _load(sessions, world, job_id)
     assert (waiting.state, waiting.stage) == (
@@ -858,7 +860,7 @@ async def test_missing_expiry_with_an_allowed_host_still_stores_the_image(
     fake = FakeHiggsfield()
     fake.status_body = _completed_without_expiry
     reserved, committed = await _spend(connection, "higgsfield")
-    provider = higgsfield(fake, _output_server(_png_1080()), frozenset({OUTPUT_HOST}))
+    provider = higgsfield(fake, _output_server(_png_1536()), frozenset({OUTPUT_HOST}))
 
     await run_with_fallback(sessions, provider)
 

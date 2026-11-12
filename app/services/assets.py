@@ -15,6 +15,7 @@ from app.core.errors import DependencyUnavailableError, NotFoundError
 from app.models import Asset, Creative, Job, OutboxEvent
 from app.schemas.assets import AssetOrigin, AssetRead
 from app.services import media
+from app.services.jobs import JobContentMissingError, job_content
 from app.services.media import MediaRejectedError
 from app.services.providers.base import FetchedImage, ProviderError, ProviderOutputError
 from app.services.storage import ObjectStorage, StorageError
@@ -46,16 +47,27 @@ class StoredImageSink:
         self, db: AsyncSession, job: Job, image: FetchedImage, provider_name: str, model: str
     ) -> UUID:
         try:
-            info = await asyncio.to_thread(
-                media.inspect_image, image.content, max_pixels=self._settings.max_image_pixels
+            spec = (await job_content(db, job)).spec
+        except JobContentMissingError as error:
+            # Ends the job like any unusable output: billed, nothing stored, no retry.
+            raise ProviderOutputError(str(error)) from error
+        # The stored bytes are what image validation reads: exactly the format's size, as PNG.
+        try:
+            fitted = await asyncio.to_thread(
+                media.fit_to_format,
+                image.content,
+                width_px=spec.width_px,
+                height_px=spec.height_px,
+                max_pixels=self._settings.max_image_pixels,
             )
         except MediaRejectedError as error:
             raise ProviderOutputError(str(error)) from error
-        if info.mime_type != image.content_type:
+        if fitted.source.mime_type != image.content_type:
             raise ProviderOutputError("The provider output type does not match its content.")
+        info = fitted.stored
         try:
             stored = await self._storage.save_generated_image(
-                image.content, ext=info.ext, content_type=info.mime_type
+                fitted.content, ext=info.ext, content_type=info.mime_type
             )
         except StorageError as error:
             raise ImageStorageUnavailableError("Image storage is temporarily unavailable.") from (
@@ -85,7 +97,30 @@ class StoredImageSink:
         db.add(asset)
         # Flush so a duplicate for the job fails here, not at the worker's commit.
         await db.flush()
-        logger.info("asset stored asset=%s job=%s tenant=%s", asset.id, job.id, job.tenant_id)
+        logger.info(
+            "asset stored asset=%s job=%s tenant=%s provider_size=%sx%s stored_size=%sx%s",
+            asset.id,
+            job.id,
+            job.tenant_id,
+            fitted.source.width_px,
+            fitted.source.height_px,
+            info.width_px,
+            info.height_px,
+        )
+        source = fitted.source
+        if source.width_px < info.width_px or source.height_px < info.height_px:
+            # Upscaling loses sharpness; validation and review should know. Ids and sizes only.
+            logger.warning(
+                "provider image smaller than its format, upscaled asset=%s job=%s tenant=%s "
+                "provider_size=%sx%s stored_size=%sx%s",
+                asset.id,
+                job.id,
+                job.tenant_id,
+                source.width_px,
+                source.height_px,
+                info.width_px,
+                info.height_px,
+            )
         return asset.id
 
 

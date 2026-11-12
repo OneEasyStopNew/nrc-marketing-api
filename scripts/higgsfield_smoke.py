@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from app.core.config import Settings, get_settings
+from app.models.enums import FORMAT_SPECS, PostFormat
 from app.services import media
 from app.services.media import MediaRejectedError
 from app.services.providers.base import (
@@ -34,7 +35,7 @@ from app.services.storage import ObjectStorage, StoredObject
 
 @dataclass(frozen=True, slots=True)
 class Candidate:
-    # None leaves resolution out of the body, so the model default applies.
+    # None: HIGGSFIELD_RESOLUTION applies (HiggsfieldProvider.from_settings).
     resolution: str | None
     source: str
 
@@ -82,7 +83,7 @@ def _help_epilog() -> str:
         "https://docs.higgsfield.ai/docs/, checked 9 Nov 2026):",
     ]
     for model, candidate in CANDIDATES.items():
-        resolution = candidate.resolution or "model default"
+        resolution = candidate.resolution or "HIGGSFIELD_RESOLUTION"
         lines.append(f"  {model}  resolution={resolution}")
         lines.append(f"      {candidate.source}")
     lines.append("other model ids are sent with prompt and aspect_ratio only.")
@@ -133,6 +134,7 @@ def _is_local(endpoint: str | None) -> bool:
 def provider_factory(settings: Settings) -> ProviderFactory:
     def make(model: str) -> HiggsfieldProvider:
         candidate = CANDIDATES.get(model)
+        # A candidate's own resolution wins; from_settings falls back to HIGGSFIELD_RESOLUTION.
         resolution = candidate.resolution if candidate else None
         return create_provider(settings, model=model, resolution=resolution)
 
@@ -213,15 +215,21 @@ async def _generate(
         print(f"Output host {host} is not in HIGGSFIELD_OUTPUT_HOSTS; nothing downloaded.")
         return FAILED
     image = await provider.fetch_output(result)
+    spec = FORMAT_SPECS[PostFormat.FEED_IMAGE]
     try:
-        info = await asyncio.to_thread(
-            media.inspect_image, image.content, max_pixels=settings.max_image_pixels
+        fitted = await asyncio.to_thread(
+            media.fit_to_format,
+            image.content,
+            width_px=spec.width_px,
+            height_px=spec.height_px,
+            max_pixels=settings.max_image_pixels,
         )
     except MediaRejectedError as error:
         print(f"error={error.code}: {error}")
         return FAILED
+    info = fitted.stored
     stored = await make_storage(settings).save_generated_image(
-        image.content, ext=info.ext, content_type=info.mime_type
+        fitted.content, ext=info.ext, content_type=info.mime_type
     )
     print(
         f"stored checksum_sha256={stored.checksum_sha256} size_bytes={stored.size_bytes} "

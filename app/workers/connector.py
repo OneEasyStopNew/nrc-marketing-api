@@ -42,8 +42,8 @@ from app.core.config import (
 )
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
-from app.models import CreativeVersion, Job, OutboxEvent
-from app.models.enums import FORMAT_SPECS, ExecutionState, JobStage
+from app.models import Job, OutboxEvent
+from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import FAILURE_MESSAGE_MAX_CHARS, ReservationState
 from app.schemas.jobs import JobKind
 from app.services import generation_checks, spend
@@ -52,6 +52,8 @@ from app.services.jobs import (
     NON_TERMINAL_STATES,
     RUN_EVENT,
     TERMINAL_STATES,
+    JobContentMissingError,
+    job_content,
     provider_idempotency_key,
     settle_reservation,
     transition,
@@ -87,6 +89,8 @@ logger = logging.getLogger(__name__)
 IDEMPOTENCY_CONFLICT: Final = "PROVIDER_IDEMPOTENCY_CONFLICT"
 BUDGET_EXHAUSTED: Final = "BUDGET_EXHAUSTED"
 MODEL_CHANGED: Final = "MODEL_CHANGED"
+# The job's creative version could not be read, so its request can't be built.
+JOB_CONTENT_MISSING: Final = "JOB_CONTENT_MISSING"
 ATTEMPTS_EXHAUSTED: Final = "ATTEMPTS_EXHAUSTED"
 NO_HANDLER: Final = "NO_HANDLER"
 # The provider billed a completed generation that could not be stored.
@@ -287,7 +291,12 @@ class ImageGenerationHandler:
                 billed=False,
             )
             return None
-        request = await _image_request(db, job)
+        try:
+            request = await _image_request(db, job)
+        except JobContentMissingError as error:
+            # Before any provider call, so nothing was billed.
+            await _fail_with(db, job.id, JOB_CONTENT_MISSING, str(error), billed=False)
+            return None
         values: dict[str, object] = {}
         # Priced once, before the first submit; retries and reconcile reuse the estimate.
         if job.provider_cost_estimate_usd_micros is None:
@@ -361,7 +370,13 @@ class ImageGenerationHandler:
             await _park_unknown(db, job.id, MODEL_CHANGED)
             _log_review_stop(job, MODEL_CHANGED)
             return None
-        request = await _image_request(db, job)
+        try:
+            request = await _image_request(db, job)
+        except JobContentMissingError:
+            # Without the identical request no same-key resend is possible; credits stay held.
+            await _park_unknown(db, job.id, JOB_CONTENT_MISSING)
+            _log_review_stop(job, JOB_CONTENT_MISSING)
+            return None
         await step.heartbeat(db)
         try:
             submitted = await provider.submit(request)
@@ -804,16 +819,8 @@ async def _finish_event(
 
 
 async def _image_request(db: AsyncSession, job: Job) -> ImageRequest:
-    content = (
-        await db.execute(
-            select(CreativeVersion.prompt, CreativeVersion.post_format).where(
-                CreativeVersion.tenant_id == job.tenant_id,
-                CreativeVersion.creative_id == job.creative_id,
-                CreativeVersion.version == job.creative_version,
-            )
-        )
-    ).one()
-    spec = FORMAT_SPECS[content.post_format]
+    content = await job_content(db, job)
+    spec = content.spec
     return ImageRequest(
         prompt=content.prompt,
         width_px=spec.width_px,

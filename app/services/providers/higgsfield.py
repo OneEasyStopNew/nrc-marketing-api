@@ -11,7 +11,9 @@ only text-to-image request schema found is openapi.json "/higgsfield-ai/soul/sta
 
 Live run on 9 Nov 2026 with model "higgsfield-ai/soul/v2/standard": aspect_ratio 1:1 was
 accepted, and the status response carries no cost field, so the cost recorded for a job is its
-/estimate price. The remaining TODO(NRC-10) markers are what a live account must still confirm.
+/estimate price. A free /estimate probe on 10 Nov 2026 gave the accepted aspect ratios and
+resolutions (SUPPORTED_ASPECT_RATIOS, HIGGSFIELD_RESOLUTION). The remaining TODO(NRC-10)
+markers are what a live account must still confirm.
 """
 
 import json
@@ -21,6 +23,7 @@ import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal
 from urllib.parse import urlsplit
 
@@ -67,6 +70,16 @@ logger = logging.getLogger(__name__)
 
 # The Secrets Manager secret's JSON entry; the same name as the setting it fills.
 KEY_ENTRY_NAME: Final = "HIGGSFIELD_API_KEY"
+# Aspect ratios each model accepts, by model id, from a free live /estimate probe; any other
+# ratio is a 400. Probe a new HIGGSFIELD_MODEL with the smoke script's estimate before adding it.
+SUPPORTED_ASPECT_RATIOS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {
+        # 10 Nov 2026.
+        "higgsfield-ai/soul/v2/standard": frozenset(
+            {"9:16", "16:9", "4:3", "3:4", "1:1", "2:3", "3:2"}
+        ),
+    }
+)
 
 # Protocol facts from the Higgsfield docs, not tunable: header and id formats.
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[\x21-\x7e]{1,255}$")
@@ -179,8 +192,9 @@ class HiggsfieldProvider:
         fetcher: OutputFetcher,
         allowed_output_hosts: frozenset[str],
         max_output_bytes: int,
-        # TODO(NRC-10): confirm with live account whether the model accepts "resolution"
-        # (openapi.json lists 2K|4K for soul/standard); None omits it and uses the model default.
+        # Live /estimate probe, 10 Nov 2026, higgsfield-ai/soul/v2/standard: aspect_ratio must be
+        # one of SUPPORTED_ASPECT_RATIOS, resolution one of 720p|1080p (else 400 "is not one of"),
+        # width/height are silently ignored. None omits resolution (model default).
         resolution: str | None = None,
     ) -> None:
         key_id = api_key_id.get_secret_value()
@@ -233,7 +247,7 @@ class HiggsfieldProvider:
             fetcher=fetcher,
             allowed_output_hosts=frozenset(h.lower() for h in settings.higgsfield_output_hosts),
             max_output_bytes=settings.max_generated_image_bytes,
-            resolution=resolution,
+            resolution=resolution if resolution is not None else settings.higgsfield_resolution,
         )
 
     def __repr__(self) -> str:
@@ -249,6 +263,13 @@ class HiggsfieldProvider:
     async def submit(self, request: ImageRequest) -> SubmitResult:
         if not _IDEMPOTENCY_KEY_RE.fullmatch(request.idempotency_key):
             raise ProviderRejectedError("Idempotency key must be 1-255 visible ASCII characters")
+        # Refused rather than left to Higgsfield: a model that silently ignores a parameter (as
+        # every probed one does with width/height) would bill for an image of the wrong shape.
+        # The free estimate stays allowed, since it is how a model's ratios are probed.
+        if self.model not in SUPPORTED_ASPECT_RATIOS:
+            raise ProviderConfigError(
+                f"Model {self.model!r} has no probed aspect ratios in SUPPORTED_ASPECT_RATIOS"
+            )
         response = await self._send(
             "POST",
             f"{self._base_url}/{self.model}",
@@ -272,6 +293,13 @@ class HiggsfieldProvider:
         return SubmitResult(provider_request_id=data.request_id, status=status)
 
     def _body(self, request: ImageRequest) -> dict[str, str]:
+        # Checked here so neither the estimate nor the submit is sent for an unsupported ratio.
+        # An unprobed model only estimates (submit refuses it), so Higgsfield validates that.
+        supported = SUPPORTED_ASPECT_RATIOS.get(self.model)
+        if supported is not None and request.aspect_ratio not in supported:
+            raise ProviderRejectedError(
+                f"The model does not accept aspect ratio {request.aspect_ratio!r}"
+            )
         body = {"prompt": request.prompt, "aspect_ratio": request.aspect_ratio}
         if self._resolution is not None:
             body["resolution"] = self._resolution
@@ -499,6 +527,9 @@ def missing_live_settings(settings: Settings) -> list[str]:
     ]
     if missing:
         problems.append(f"missing {', '.join(missing)}")
+    elif settings.higgsfield_model not in SUPPORTED_ASPECT_RATIOS:
+        # Submit refuses such a model, so start-up refuses it before any job is estimated.
+        problems.append("HIGGSFIELD_MODEL is not in SUPPORTED_ASPECT_RATIOS (probe it first)")
     return problems
 
 
