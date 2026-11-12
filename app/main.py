@@ -10,7 +10,7 @@ from fastapi.routing import APIRoute
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from app.api.errors import COMMON_ERROR_RESPONSES, register_exception_handlers
-from app.api.routes import creatives, health, me, workflows
+from app.api.routes import assets, creatives, health, jobs, me, workflows
 from app.auth.tokens import JwksClient
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
         generate_unique_id_function=_operation_id,
     )
     register_exception_handlers(app)
-    for router in (me.router, creatives.router, workflows.router):
+    for router in (me.router, creatives.router, workflows.router, jobs.router, assets.router):
         app.include_router(router, prefix=API_PREFIX, responses=COMMON_ERROR_RESPONSES)
     app.include_router(health.router)
 

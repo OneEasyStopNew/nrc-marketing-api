@@ -1,4 +1,4 @@
-# Local development database only. Staging and production use Aurora PostgreSQL.
+# Local development only. Staging and production use Aurora PostgreSQL and private S3.
 services:
   postgres:
     image: pgvector/pgvector:pg17
@@ -18,5 +18,22 @@ services:
       timeout: 3s
       retries: 30
 
+  # S3-compatible object storage (replaces MinIO). The credentials in docker/seaweedfs-s3.json
+  # only open this local server; they are not AWS keys.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.53
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -ip.bind=0.0.0.0
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - seaweedfs:/data
+      - ./docker/seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
 volumes:
   pgdata:
+  seaweedfs:

@@ -54,6 +54,19 @@ class StudySnapshotMissingError(ConflictError):
     default_message = "The study has no approved snapshot yet."
 
 
+class GenerationNotEligibleError(ConflictError):
+    # details.reason says which check failed (e.g. STUDY_NOT_RECRUITING).
+    code = "GENERATION_NOT_ELIGIBLE"
+    default_message = "This creative version cannot be sent for image generation."
+
+
+class GenerationLimitError(AppError):
+    # details.reason is ACTIVE_JOB_LIMIT or CREDIT_CEILING.
+    code = "GENERATION_LIMIT_REACHED"
+    default_message = "The tenant's generation limit is reached. Try again later."
+    retryable = True
+
+
 class VersionRequiredError(AppError):
     code = "PRECONDITION_REQUIRED"
     default_message = 'Send If-Match with the version you edited, e.g. If-Match: "3".'

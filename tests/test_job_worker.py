@@ -1,0 +1,815 @@
+# Connector worker against the simulated provider: every image here is SIMULATED.
+
+import os
+import re
+import socket
+from collections.abc import Awaitable, Callable
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import Any
+from uuid import UUID, uuid4
+
+import httpx
+import pytest
+from pydantic import SecretStr
+from sqlalchemy import Row, select, text
+from sqlalchemy.exc import StatementError
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
+
+from app.core.config import Settings, get_settings
+from app.db.session import TenantSession, bind_tenant
+from app.models import CreditReservation, Job
+from app.models.enums import ExecutionState, JobStage
+from app.models.jobs import ReservationState
+from app.services.jobs import transition
+from app.services.providers.base import (
+    TERMINAL_PROVIDER_STATUSES,
+    FetchedImage,
+    ImageRequest,
+    ProviderConfigError,
+    ProviderError,
+    ProviderJobStatus,
+    ProviderOutcomeUnknownError,
+    ProviderOutputError,
+    ProviderOutputExpiredError,
+    ProviderRateLimitedError,
+    StatusResult,
+    SubmitResult,
+)
+from app.services.providers.simulator import SimulatedImageProvider, SimulatorScenario
+from app.workers.connector import (
+    DEFAULT_OWNER,
+    MAX_EVENT_ATTEMPTS,
+    PROVIDER_STATUS_FAILURE_CODES,
+    WorkerConfigError,
+    build_providers,
+    process_owner,
+    run_once,
+)
+from tests.conftest import AuthHeaders, World
+from tests.test_jobs_api import _creative, _post_job
+
+Sessions = async_sessionmaker[AsyncSession]
+
+
+class FakeSink:
+    # Stands in for generated-image storage (NRC-3).
+
+    def __init__(self) -> None:
+        self.stored: list[UUID] = []
+
+    async def store(
+        self, db: AsyncSession, job: Job, image: FetchedImage, provider_name: str, model: str
+    ) -> UUID:
+        assert image.content.startswith(b"\x89PNG")
+        assert provider_name == "simulator"
+        self.stored.append(uuid4())
+        return self.stored[-1]
+
+
+@pytest.fixture
+def sessions(connection: AsyncConnection) -> Sessions:
+    return async_sessionmaker(
+        bind=connection,
+        join_transaction_mode="create_savepoint",
+        expire_on_commit=False,
+        sync_session_class=TenantSession,
+    )
+
+
+@pytest.fixture
+async def job_id(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> UUID:
+    creative_id = await _creative(client, auth, world.a)
+    response = await _post_job(client, auth, world, creative_id)
+    assert response.status_code == 202
+    return UUID(response.json()["job_id"])
+
+
+async def _load(sessions: Sessions, world: World, job_id: UUID) -> tuple[Job, ReservationState]:
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        job = await db.get(Job, job_id)
+        reservation = await db.scalar(
+            select(CreditReservation.state).where(CreditReservation.job_id == job_id)
+        )
+    assert job is not None
+    assert reservation is not None
+    return job, reservation
+
+
+async def _requeue(connection: AsyncConnection, world: World) -> None:
+    # Make every outbox event due now, as if its backoff had passed.
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    await connection.execute(
+        text(
+            "UPDATE outbox_events SET processed_at = NULL,"
+            " available_at = clock_timestamp() - interval '1 second'"
+        )
+    )
+
+
+async def _expire_leases(connection: AsyncConnection, world: World) -> None:
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    await connection.execute(
+        text("UPDATE outbox_events SET leased_until = clock_timestamp() - interval '1 second'")
+    )
+
+
+async def _event(connection: AsyncConnection) -> Row[Any]:
+    # The single outbox event of the test (RLS: tenant A is bound by now).
+    return (
+        await connection.execute(
+            text("SELECT processed_at, lease_owner, last_error_code FROM outbox_events")
+        )
+    ).one()
+
+
+class ScriptedProvider(SimulatedImageProvider):
+    # SIMULATED provider whose next calls can fail on cue.
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Raised by the next submits, after the request was recorded (accepted, response lost).
+        self.submit_errors: list[Exception] = []
+        self.status_error: ProviderError | None = None
+        self.fetch_error: ProviderError | None = None
+        # Status polls still answered "in progress" before the real outcome is reported.
+        self.pending_polls = 0
+        self.outputs_expire_at: datetime | None = None
+        self.estimates = 0
+        self.before_estimate: Callable[[], Awaitable[None]] | None = None
+        self.before_submit: Callable[[], Awaitable[None]] | None = None
+
+    async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
+        self.estimates += 1
+        if self.before_estimate is not None:
+            await self.before_estimate()
+        return await super().estimate_cost_usd(request)
+
+    async def submit(self, request: ImageRequest) -> SubmitResult:
+        if self.before_submit is not None:
+            await self.before_submit()
+        result = await super().submit(request)
+        if self.submit_errors:
+            raise self.submit_errors.pop(0)
+        return result
+
+    async def get_status(self, provider_request_id: str) -> StatusResult:
+        if self.status_error is not None:
+            raise self.status_error
+        result = await super().get_status(provider_request_id)
+        if self.pending_polls > 0:
+            self.pending_polls -= 1
+            return StatusResult(provider_request_id, ProviderJobStatus.IN_PROGRESS)
+        return replace(result, outputs_expire_at=self.outputs_expire_at)
+
+    async def fetch_output(self, result: StatusResult) -> FetchedImage:
+        if self.fetch_error is not None:
+            raise self.fetch_error
+        return await super().fetch_output(result)
+
+
+class IdempotencyConflictError(ProviderOutcomeUnknownError):
+    code = "PROVIDER_IDEMPOTENCY_CONFLICT"
+
+
+async def _run(sessions: Sessions, provider: SimulatedImageProvider, sink: FakeSink) -> int:
+    return await run_once(sessions, {"simulator": provider}, sink, get_settings())
+
+
+async def test_simulated_success_stores_image_and_commits_credits(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+) -> None:
+    provider, sink = SimulatedImageProvider(), FakeSink()
+
+    assert await _run(sessions, provider, sink) == 1
+    assert await _run(sessions, provider, sink) == 0
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert job.result_asset_id == sink.stored[0]
+    assert job.completed_at is not None
+    assert reservation is ReservationState.COMMITTED
+    polled = await client.get(
+        f"/v1/marketing/jobs/{job_id}", headers=auth("creator-a", world.a.tenant_id)
+    )
+    assert polled.json()["state"] == "SUCCEEDED"
+    assert polled.json()["result_asset_id"] == str(sink.stored[0])
+
+
+async def test_simulated_timeout_after_accept_reconciles_with_same_request(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = SimulatedImageProvider(SimulatorScenario.TIMEOUT_AFTER_ACCEPT), FakeSink()
+
+    await _run(sessions, provider, sink)
+    unknown, held = await _load(sessions, world, job_id)
+    key = str(unknown.provider_idempotency_key)
+    assert unknown.state is ExecutionState.UNKNOWN
+    assert held is ReservationState.HELD
+    assert provider.submits == {key: 1}
+
+    await _requeue(connection, world)
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert job.provider_request_id == provider._request_ids[key]
+    assert provider.submits == {key: 2}
+    assert reservation is ReservationState.COMMITTED
+
+
+async def test_terminal_state_does_not_regress(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = SimulatedImageProvider(), FakeSink()
+    await _run(sessions, provider, sink)
+
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        moved = await transition(
+            db, job_id, allowed_from=set(ExecutionState), to=ExecutionState.RUNNING
+        )
+        await db.commit()
+    await _requeue(connection, world)
+    await _run(sessions, provider, sink)
+
+    job, _ = await _load(sessions, world, job_id)
+    assert moved is False
+    assert job.state is ExecutionState.SUCCEEDED
+    assert len(sink.stored) == 1
+
+
+async def test_unknown_stage_is_rejected_on_write(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        with pytest.raises(StatementError, match="submiting"):
+            await transition(
+                db,
+                job_id,
+                allowed_from={ExecutionState.QUEUED},
+                to=ExecutionState.RUNNING,
+                stage="submiting",
+            )
+
+
+async def test_expired_lease_is_processed_once(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = SimulatedImageProvider(), FakeSink()
+    # A worker leases the event and dies; then its lease runs out.
+    crashed = await connection.execute(
+        text("SELECT * FROM lease_outbox_events('crashed-worker', 10, 60)")
+    )
+    assert len(crashed.all()) == 1
+    assert await _run(sessions, provider, sink) == 0
+    await _expire_leases(connection, world)
+
+    assert await _run(sessions, provider, sink) == 1
+    assert await _run(sessions, provider, sink) == 0
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert len(sink.stored) == 1
+
+
+async def test_simulated_provider_failure_fails_the_job(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    await _run(sessions, SimulatedImageProvider(SimulatorScenario.PROVIDER_FAILED), FakeSink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.FAILED
+    assert job.failure_code == "SIMULATED_FAILURE"
+    # The provider bills completed generations only.
+    assert reservation is ReservationState.RELEASED
+
+
+async def test_simulated_rate_limit_retries_then_fails_and_releases_credits(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider = SimulatedImageProvider(SimulatorScenario.RATE_LIMITED)
+
+    for _ in range(get_settings().generation_max_attempts):
+        await _run(sessions, provider, FakeSink())
+        await connection.execute(
+            text("UPDATE outbox_events SET available_at = clock_timestamp() - interval '1 second'")
+        )
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.FAILED
+    assert job.failure_code == "PROVIDER_RATE_LIMITED"
+    assert sum(provider.submits.values()) == get_settings().generation_max_attempts
+    assert reservation is ReservationState.RELEASED
+
+
+async def test_job_past_deadline_fails_without_submitting(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    provider = SimulatedImageProvider()
+    later = datetime.now(UTC) + timedelta(days=2)
+
+    await run_once(sessions, {"simulator": provider}, FakeSink(), get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.FAILED
+    assert job.failure_code == "DEADLINE_EXCEEDED"
+    assert not provider.submits
+    assert reservation is ReservationState.RELEASED
+
+
+async def _accepted_then_past_deadline(
+    sessions: Sessions,
+    provider: ScriptedProvider,
+    sink: FakeSink,
+    connection: AsyncConnection,
+    world: World,
+    job_id: UUID,
+) -> datetime:
+    # The provider accepts the job and is still working on it; returns the job's deadline.
+    provider.pending_polls = 1
+    await _run(sessions, provider, sink)
+    await _requeue(connection, world)
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.WAITING_PROVIDER
+    return job.deadline_at
+
+
+def _grace() -> timedelta:
+    return timedelta(seconds=get_settings().generation_accepted_grace_seconds)
+
+
+async def test_accepted_job_past_grace_still_fetches_a_completed_image(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    # Once the provider reports COMPLETED the grace window no longer applies: it billed.
+    provider, sink = ScriptedProvider(), FakeSink()
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
+    later = deadline + _grace() + timedelta(days=1)
+    provider.outputs_expire_at = later + timedelta(hours=1)
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.SUCCEEDED, JobStage.STORED)
+    assert job.result_asset_id == sink.stored[0]
+    assert reservation is ReservationState.COMMITTED
+    assert sum(provider.submits.values()) == 1
+
+
+async def test_accepted_job_within_grace_keeps_polling_while_in_progress(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
+    later = deadline + _grace() - timedelta(seconds=1)
+    provider.pending_polls = 2
+
+    for _ in range(2):
+        await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+        job, reservation = await _load(sessions, world, job_id)
+        assert (job.state, job.stage) == (
+            ExecutionState.WAITING_PROVIDER,
+            JobStage.WAITING_PROVIDER,
+        )
+        assert reservation is ReservationState.RESERVED
+        assert (await _event(connection)).processed_at is None
+        await _requeue(connection, world)
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+
+
+async def test_accepted_job_still_running_past_grace_is_parked_and_frees_its_slot(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
+    provider.pending_polls = 1
+
+    with caplog.at_level("ERROR", logger="app.workers.connector"):
+        await run_once(
+            sessions, {"simulator": provider}, sink, get_settings(), now=deadline + _grace()
+        )
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.stage) == (ExecutionState.UNKNOWN, JobStage.RECONCILE)
+    assert job.failure_code == "PROVIDER_STILL_RUNNING"
+    assert reservation is ReservationState.HELD
+    assert not sink.stored
+    assert (await _event(connection)).processed_at is not None
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert str(job_id) in errors[0]
+    assert str(job.provider_request_id) in errors[0]
+    # UNKNOWN takes no active slot: the tenant can still start its full allowance of jobs.
+    creative_id = await _creative(client, auth, world.a)
+    for _ in range(get_settings().generation_max_active_jobs_per_tenant):
+        assert (await _post_job(client, auth, world, creative_id)).status_code == 202
+
+
+async def test_accepted_job_past_deadline_fails_when_the_provider_fails(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
+    provider.scenario = SimulatorScenario.PROVIDER_FAILED
+
+    await run_once(
+        sessions, {"simulator": provider}, sink, get_settings(), now=deadline + timedelta(days=2)
+    )
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "SIMULATED_FAILURE")
+    assert reservation is ReservationState.RELEASED
+
+
+async def test_expired_output_fails_with_credits_committed_and_is_never_fetched(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
+    later = deadline + timedelta(days=2)
+    provider.outputs_expire_at = later - timedelta(hours=1)
+    # A fetch would end the job with a different failure code.
+    provider.fetch_error = ProviderOutputError("Must not be fetched.")
+
+    await run_once(sessions, {"simulator": provider}, sink, get_settings(), now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
+    assert not sink.stored
+    assert (await _event(connection)).processed_at is not None
+
+
+async def test_output_expiring_during_fetch_fails_with_credits_committed(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    # The provider's own expiry check at fetch time ends the job the same way.
+    provider, sink = ScriptedProvider(), FakeSink()
+    provider.fetch_error = ProviderOutputExpiredError("Simulated output expired.")
+
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_EXPIRED")
+    assert reservation is ReservationState.COMMITTED
+    assert not sink.stored
+
+
+async def test_accepted_job_past_deadline_is_parked_once_attempts_run_out(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    deadline = await _accepted_then_past_deadline(
+        sessions, provider, sink, connection, world, job_id
+    )
+    provider.pending_polls = 1
+    await connection.execute(
+        text("UPDATE outbox_events SET attempts = :n"), {"n": MAX_EVENT_ATTEMPTS}
+    )
+
+    await run_once(
+        sessions, {"simulator": provider}, sink, get_settings(), now=deadline + timedelta(days=2)
+    )
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "ATTEMPTS_EXHAUSTED")
+    assert reservation is ReservationState.HELD
+
+
+async def test_simulated_cost_above_cap_fails_without_submitting(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    cap = get_settings().generation_max_cost_usd_per_image
+    provider = SimulatedImageProvider(cost_usd=cap + Decimal("0.01"))
+
+    await _run(sessions, provider, FakeSink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.FAILED
+    assert job.failure_code == "COST_ABOVE_LIMIT"
+    assert job.provider_cost_estimate_usd_micros == int((cap + Decimal("0.01")) * 1_000_000)
+    assert not provider.submits
+    assert reservation is ReservationState.RELEASED
+
+
+async def test_simulated_cost_estimate_is_stored_on_the_job(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    await _run(sessions, SimulatedImageProvider(cost_usd=Decimal("0.094")), FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert job.provider_cost_estimate_usd_micros == 94_000
+
+
+async def test_missing_cost_estimate_never_submits(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    provider = SimulatedImageProvider(cost_usd=None)
+
+    await _run(sessions, provider, FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.FAILED
+    assert not provider.submits
+
+
+async def test_crash_after_submit_commit_reconciles_instead_of_resubmitting(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider = ScriptedProvider()
+    provider.submit_errors = [RuntimeError("worker died during the call")]
+    await _run(sessions, provider, FakeSink())
+    crashed, _ = await _load(sessions, world, job_id)
+    assert (crashed.state, crashed.stage) == (ExecutionState.RUNNING, JobStage.SUBMITTING)
+
+    await _expire_leases(connection, world)
+    await _run(sessions, provider, FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    key = str(job.provider_idempotency_key)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert job.provider_request_id == provider._request_ids[key]
+    assert provider.submits == {key: 2}
+    assert provider.estimates == 1
+
+
+async def test_reconcile_retries_transient_errors_until_it_succeeds(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider = ScriptedProvider()
+    provider.submit_errors = [
+        ProviderOutcomeUnknownError("Simulated lost response."),
+        ProviderRateLimitedError("Simulated rate limit.", retry_after_seconds=1),
+    ]
+    await _run(sessions, provider, FakeSink())
+    await _requeue(connection, world)
+
+    await _run(sessions, provider, FakeSink())
+    waiting, held = await _load(sessions, world, job_id)
+    assert (waiting.state, waiting.failure_code) == (
+        ExecutionState.UNKNOWN,
+        "PROVIDER_RATE_LIMITED",
+    )
+    assert held is ReservationState.HELD
+    assert (await _event(connection)).processed_at is None
+
+    await _requeue(connection, world)
+    await _run(sessions, provider, FakeSink())
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert provider.submits == {str(job.provider_idempotency_key): 3}
+
+
+async def test_reconcile_stops_on_idempotency_conflict(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider = ScriptedProvider()
+    provider.submit_errors = [
+        ProviderOutcomeUnknownError("Simulated lost response."),
+        IdempotencyConflictError("Simulated key conflict."),
+    ]
+    await _run(sessions, provider, FakeSink())
+    await _requeue(connection, world)
+
+    await _run(sessions, provider, FakeSink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (
+        ExecutionState.UNKNOWN,
+        "PROVIDER_IDEMPOTENCY_CONFLICT",
+    )
+    assert reservation is ReservationState.HELD
+    assert (await _event(connection)).processed_at is not None
+
+
+async def test_reconcile_never_resends_after_a_model_change(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider = ScriptedProvider()
+    provider.submit_errors = [ProviderOutcomeUnknownError("Simulated lost response.")]
+    await _run(sessions, provider, FakeSink())
+    provider.model = "simulated-image-v2"
+    await _requeue(connection, world)
+
+    await _run(sessions, provider, FakeSink())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "MODEL_CHANGED")
+    assert sum(provider.submits.values()) == 1
+
+
+async def test_status_error_after_acceptance_holds_credits(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    provider = ScriptedProvider()
+    provider.status_error = ProviderConfigError("Simulated rejected key.")
+
+    await _run(sessions, provider, FakeSink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.UNKNOWN, "PROVIDER_CONFIG")
+    assert job.provider_request_id is not None
+    assert reservation is ReservationState.HELD
+
+
+async def test_unusable_output_fails_and_keeps_credits_billed(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    provider = ScriptedProvider()
+    provider.fetch_error = ProviderOutputError("Simulated oversize output.")
+
+    await _run(sessions, provider, FakeSink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_UNAVAILABLE")
+    assert reservation is ReservationState.COMMITTED
+
+
+async def test_lost_lease_abandons_the_step_without_touching_the_job(
+    sessions: Sessions,
+    job_id: UUID,
+    world: World,
+    connection: AsyncConnection,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = ScriptedProvider()
+
+    async def another_worker_takes_over() -> None:
+        await connection.execute(text("UPDATE outbox_events SET lease_owner = 'other-worker'"))
+
+    provider.before_estimate = another_worker_takes_over
+
+    await _run(sessions, provider, FakeSink())
+
+    # The takeover shares the test's connection, so the abandoned step's rollback also undoes it;
+    # the outcome checked here is that the job was left alone and nothing was submitted.
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.QUEUED
+    assert not provider.submits
+    assert "lease lost, event abandoned" in caplog.text
+
+
+async def test_second_worker_cannot_lease_an_event_in_progress(
+    sessions: Sessions, job_id: UUID, world: World
+) -> None:
+    # Even a misconfigured zero-second lease is clamped, so worker B finds nothing to do.
+    settings = get_settings().model_copy(update={"worker_lease_seconds": 0})
+    provider, sink = ScriptedProvider(), FakeSink()
+    leased_by_b: list[int] = []
+
+    async def worker_b_runs() -> None:
+        leased_by_b.append(
+            await run_once(sessions, {"simulator": provider}, sink, settings, owner="worker-b")
+        )
+
+    provider.before_submit = worker_b_runs
+
+    await run_once(sessions, {"simulator": provider}, sink, settings, owner="worker-a")
+
+    job, _ = await _load(sessions, world, job_id)
+    assert leased_by_b == [0]
+    assert sum(provider.submits.values()) == 1
+    assert job.state is ExecutionState.SUCCEEDED
+
+
+async def test_event_past_attempt_cap_is_given_up(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    await connection.execute(
+        text("UPDATE outbox_events SET attempts = :n"), {"n": MAX_EVENT_ATTEMPTS}
+    )
+
+    await _run(sessions, SimulatedImageProvider(), FakeSink())
+
+    job, reservation = await _load(sessions, world, job_id)
+    event = await _event(connection)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "ATTEMPTS_EXHAUSTED")
+    assert reservation is ReservationState.RELEASED
+    assert event.processed_at is not None
+    assert event.last_error_code == "ATTEMPTS_EXHAUSTED"
+
+
+async def test_jobs_parked_without_storage_do_not_block_new_jobs(
+    sessions: Sessions, client: httpx.AsyncClient, auth: AuthHeaders, world: World
+) -> None:
+    creative_id = await _creative(client, auth, world.a)
+    for _ in range(get_settings().generation_max_active_jobs_per_tenant):
+        assert (await _post_job(client, auth, world, creative_id)).status_code == 202
+        # No sink until NRC-3: completed jobs park at the provider result.
+        await run_once(sessions, {"simulator": SimulatedImageProvider()}, None, get_settings())
+
+    third = await _post_job(client, auth, world, creative_id)
+
+    assert third.status_code == 202
+
+
+def test_lease_owner_is_unique_even_with_the_same_host_and_pid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Two containers can both be "worker" with PID 1.
+    monkeypatch.setattr(socket, "gethostname", lambda: "worker")
+    monkeypatch.setattr(os, "getpid", lambda: 1)
+
+    first, second = process_owner(), process_owner()
+
+    assert re.fullmatch(r"worker:1:[0-9a-f]{8}", first)
+    assert first != second
+
+
+def test_default_owner_is_this_process_with_a_random_suffix() -> None:
+    host, pid, suffix = DEFAULT_OWNER.rsplit(":", 2)
+
+    assert (host, pid) == (socket.gethostname(), str(os.getpid()))
+    assert re.fullmatch(r"[0-9a-f]{8}", suffix)
+
+
+def test_http_timeout_must_be_below_the_lease() -> None:
+    settings = get_settings().model_copy(
+        update={"worker_lease_seconds": 5, "http_timeout_seconds": 5}
+    )
+
+    with pytest.raises(WorkerConfigError, match="HTTP_TIMEOUT_SECONDS"):
+        build_providers(settings)
+
+
+def _live(**overrides: object) -> Settings:
+    return get_settings().model_copy(update={"generation_mode": "live", **overrides})
+
+
+def test_live_mode_without_keys_refuses_to_start() -> None:
+    settings = _live(hf_key=None, higgsfield_model=None, higgsfield_output_hosts=())
+
+    with pytest.raises(WorkerConfigError, match="HF_KEY") as refused:
+        build_providers(settings)
+
+    assert "HIGGSFIELD_MODEL, HIGGSFIELD_OUTPUT_HOSTS" in str(refused.value)
+    assert "validation-PASS gate" in str(refused.value)
+
+
+def test_live_mode_with_stub_validation_gate_refuses_to_start() -> None:
+    settings = _live(
+        hf_key=SecretStr("test-id:test-secret"),
+        higgsfield_model="test/model",
+        higgsfield_output_hosts=("images.example.test",),
+    )
+
+    with pytest.raises(WorkerConfigError, match=r"refused: the validation-PASS gate is still"):
+        build_providers(settings)
+
+
+@pytest.mark.parametrize("value", ["no-separator-value", ":only-secret", "only-id:", ""])
+def test_malformed_hf_key_is_rejected_without_echoing_it(value: str) -> None:
+    settings = _live(hf_key=SecretStr(value) if value else None)
+
+    with pytest.raises(ValueError, match="HF_KEY") as rejected:
+        settings.higgsfield_credentials()
+
+    assert not value or value not in str(rejected.value)
+
+
+def test_hf_key_splits_on_first_colon() -> None:
+    key_id, key_secret = _live(hf_key=SecretStr("id-1:se:cret")).higgsfield_credentials()
+
+    assert (key_id.get_secret_value(), key_secret.get_secret_value()) == ("id-1", "se:cret")
+
+
+def test_every_unsuccessful_provider_status_has_a_failure_code() -> None:
+    unsuccessful = TERMINAL_PROVIDER_STATUSES - {ProviderJobStatus.COMPLETED}
+
+    assert PROVIDER_STATUS_FAILURE_CODES.keys() == unsuccessful
+    assert PROVIDER_STATUS_FAILURE_CODES[ProviderJobStatus.CANCELED] == "PROVIDER_CANCELED"
