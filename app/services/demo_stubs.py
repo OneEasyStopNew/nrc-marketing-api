@@ -24,7 +24,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.access import TenantContext
 from app.core.errors import (
     ExportNotReadyError,
-    GenerationNotEligibleError,
     IdempotencyKeyReusedError,
     NoActivePolicyError,
     NotFoundError,
@@ -44,7 +43,7 @@ from app.schemas.validations import (
 )
 from app.services import (
     creatives,
-    eligibility,
+    generation_checks,
     idempotency,
     policies,
     rules,
@@ -225,10 +224,14 @@ class DemoStubs:
     ) -> tuple[JobAccepted, bool]:
         """Record a generation job for an eligible version. Returns the job and whether replayed.
 
+        The same gate as real jobs (generation_checks), so the demo answers with the same errors.
+
         Raises:
-            NotFoundError: unknown creative or version.
-            GenerationNotEligibleError: no current passing brief validation for this version, a
-                stale version or a closed study; details.reason says which.
+            NotFoundError: unknown creative.
+            VersionConflictError: not the current version (412, details.current_version).
+            GenerationNotEligibleError: closed study, language or format; details.reason says which.
+            ValidationNotPassedError: no passing brief validation of this version against the
+                active policy; details.validation_run_id and details.status.
             IdempotencyKeyReusedError: the key was used before with a different body.
         """
         fingerprint = idempotency.request_hash(ctx.principal.sub, body)
@@ -236,11 +239,9 @@ class DemoStubs:
         if replayed is not None:
             return replayed, True
 
-        check = await eligibility.check_generation_eligibility(
+        await generation_checks.assert_generation_eligible(
             db, ctx, body.creative_id, body.creative_version
         )
-        if not check.eligible:
-            raise GenerationNotEligibleError(check.message, details={"reason": check.reason.value})
         creative = await creatives.get_creative(db, ctx, body.creative_id)
 
         # No await from here on (see the module docstring).
@@ -331,7 +332,7 @@ class DemoStubs:
         if record is None or not self._is_done(record.started, self._timings.generation_seconds):
             raise ExportNotReadyError()
         latest = await validations.latest_summary(db, ctx, creative_id, creative.version)
-        policy = await policies.get_active_policy_summary(db, ctx)
+        policy = await policies.get_active_policy_summary(db, ctx.tenant_id)
         return ExportManifest(
             status="DRAFT",
             creative_id=creative_id,

@@ -174,13 +174,16 @@ async def test_failed_brief_blocks_generation(
     client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
     creative = await _creative(client, auth, world, RISKY_PROMPT)
-    await _finished_run(client, auth, world, clock, creative)
+    run = await _finished_run(client, auth, world, clock, creative)
 
     response = await _generate(client, auth, world, creative)
 
     assert response.status_code == 409
-    assert response.json()["code"] == "GENERATION_NOT_ELIGIBLE"
-    assert response.json()["details"] == {"reason": "VALIDATION_FAILED"}
+    assert response.json()["code"] == "VALIDATION_NOT_PASSED"
+    assert response.json()["details"] == {
+        "validation_run_id": run["validation_run_id"],
+        "status": "VALIDATION_FAILED",
+    }
 
 
 async def test_generation_progresses_to_a_downloadable_image_and_export(

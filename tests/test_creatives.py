@@ -287,8 +287,8 @@ async def test_generation_refuses_a_brief_that_was_never_validated(
     )
 
     assert response.status_code == 409
-    assert response.json()["code"] == "GENERATION_NOT_ELIGIBLE"
-    assert response.json()["details"] == {"reason": "NOT_VALIDATED"}
+    assert response.json()["code"] == "VALIDATION_NOT_PASSED"
+    assert response.json()["details"] == {"validation_run_id": None, "status": "NOT_VALIDATED"}
 
 
 async def test_media_library_says_not_implemented_without_demo_stubs(

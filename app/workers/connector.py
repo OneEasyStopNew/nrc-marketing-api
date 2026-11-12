@@ -40,6 +40,7 @@ from app.models import CreativeVersion, Job, OutboxEvent
 from app.models.enums import FORMAT_SPECS, ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.schemas.jobs import JobKind
+from app.services import generation_checks
 from app.services.jobs import (
     HIGGSFIELD_NAME,
     NON_TERMINAL_STATES,
@@ -675,8 +676,7 @@ def check_worker_settings(settings: Settings) -> None:
 
 
 def check_live_mode(settings: Settings) -> None:
-    # Live mode must have real credentials; it never falls back. Job admission enforces the
-    # validation-PASS gate (app.services.eligibility.assert_generation_eligible).
+    # Live mode must have real credentials and a real validation gate; it never falls back.
     problems: list[str] = []
     try:
         settings.higgsfield_credentials()
@@ -692,6 +692,8 @@ def check_live_mode(settings: Settings) -> None:
     ]
     if missing:
         problems.append(f"missing {', '.join(missing)}")
+    if generation_checks.VALIDATION_GATE_IS_STUB:
+        problems.append("the validation-PASS gate is still the stub (NRC-7)")
     if problems:
         raise WorkerConfigError(f"GENERATION_MODE=live refused: {'; '.join(problems)}")
 

@@ -16,7 +16,7 @@ from app.models import Creative, CreditReservation, Job, OutboxEvent
 from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobKind, JobRead
-from app.services import eligibility, idempotency
+from app.services import generation_checks, idempotency
 from app.services.providers.simulator import SIMULATOR_MODEL, SIMULATOR_NAME
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,8 @@ async def accept_creative_job(
 
     Raises:
         IdempotencyKeyReusedError: the key was used before with a different payload.
-        NotFoundError / VersionConflictError / GenerationNotEligibleError: see eligibility.
+        NotFoundError, VersionConflictError, GenerationNotEligibleError and
+            ValidationNotPassedError: see generation_checks.
         GenerationLimitError: too many active jobs, or the daily credit ceiling would be passed.
     """
     fingerprint = idempotency.request_hash(ctx.principal.sub, data)
@@ -67,7 +68,7 @@ async def accept_creative_job(
         return JobAccepted(job_id=existing_id, state=state), True
 
     provider, model = _provider_for(settings)
-    eligible = await eligibility.assert_generation_eligible(
+    eligible = await generation_checks.assert_generation_eligible(
         db, ctx, data.creative_id, data.creative_version
     )
     # Serialise admission per tenant, so two requests cannot both take the last slot.

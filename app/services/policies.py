@@ -1,5 +1,7 @@
 # The tenant's active policy bundle: the highest approved version.
 
+from uuid import UUID
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,7 +37,7 @@ async def get_active_policy(db: AsyncSession, ctx: TenantContext) -> PolicyBundl
     )
 
 
-async def get_active_policy_summary(db: AsyncSession, ctx: TenantContext) -> PolicySummary | None:
+async def get_active_policy_summary(db: AsyncSession, tenant_id: UUID) -> PolicySummary | None:
     # Version and rule count only, so /context does not load every rule.
     row = (
         await db.execute(
@@ -46,7 +48,7 @@ async def get_active_policy_summary(db: AsyncSession, ctx: TenantContext) -> Pol
                 PolicyBundle.is_synthetic,
                 func.jsonb_array_length(PolicyBundle.rules).label("rule_count"),
             )
-            .where(PolicyBundle.tenant_id == ctx.tenant_id)
+            .where(PolicyBundle.tenant_id == tenant_id)
             .order_by(PolicyBundle.version.desc())
             .limit(1)
         )

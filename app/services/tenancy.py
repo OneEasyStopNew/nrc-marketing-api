@@ -135,7 +135,7 @@ async def get_context(db: AsyncSession, ctx: TenantContext) -> ContextRead:
             )
             for post_format, spec in FORMAT_SPECS.items()
         ],
-        active_policy=await policies.get_active_policy_summary(db, ctx),
+        active_policy=await policies.get_active_policy_summary(db, ctx.tenant_id),
     )
 
 

@@ -111,9 +111,15 @@ worker. Image validation, generation jobs, assets, the media list and export the
 simulated data in the real contract shapes. Brief and caption validation is always real.
 
 With `DEMO_STUBS=false`, generation jobs are the real durable jobs (NRC-6, run by the connector
-worker) and the rest answer `501` until storage and image checks ship. Either way, a job is
-accepted only for a version whose current brief run passed against the active policy; otherwise
-409 `GENERATION_NOT_ELIGIBLE` with `details.reason`.
+worker) and the rest answer `501` until storage and image checks ship. Both use the same gate
+(`app.services.generation_checks`):
+
+- 412 `VERSION_CONFLICT`: not the current version.
+- 409 `GENERATION_NOT_ELIGIBLE`, `details.reason` = `STUDY_CLOSED`, `LANGUAGE_NOT_ALLOWED` or
+  `FORMAT_NOT_ALLOWED`.
+- 409 `VALIDATION_NOT_PASSED` (not retryable): the latest brief run of this version did not pass
+  against the active policy. `details.status` = `NOT_VALIDATED`, `VALIDATION_FAILED`,
+  `NEEDS_REVIEW` or `NO_ACTIVE_POLICY`; `details.validation_run_id` is that run (null if none).
 
 - A generation job takes 6 s (QUEUED, RUNNING, WAITING_PROVIDER, SUCCEEDED) and an image check 2 s,
   so polling UIs can be exercised. Generation needs a stored, current, passing brief run.
