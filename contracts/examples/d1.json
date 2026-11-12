@@ -207,6 +207,12 @@
     "schema": "ErrorBody",
     "body": {"code": "GENERATION_NOT_ELIGIBLE", "message": "This creative version has not passed brief validation yet.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e19", "details": {"reason": "NOT_VALIDATED"}, "retryable": false}
   },
+  "error_409_no_active_policy": {
+    "request": "POST /validations in a tenant that has no policy yet",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {"code": "NO_ACTIVE_POLICY", "message": "This tenant has no active policy to validate against.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e21", "details": null, "retryable": false}
+  },
   "error_412_stale_edit": {
     "request": "PATCH /creatives/{id} with If-Match: \"1\" after someone saved version 2",
     "status": 412,
@@ -226,10 +232,10 @@
     "body": {"code": "PRECONDITION_REQUIRED", "message": "Send If-Match with the version you edited, e.g. If-Match: \"3\".", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e17", "details": null, "retryable": false}
   },
   "error_501_not_implemented": {
-    "request": "POST /validations before D2 ships",
+    "request": "POST /validations with input_kind image while DEMO_STUBS is off",
     "status": 501,
     "schema": "ErrorBody",
-    "body": {"code": "NOT_IMPLEMENTED", "message": "Validation is not implemented yet.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e18", "details": null, "retryable": false}
+    "body": {"code": "NOT_IMPLEMENTED", "message": "Image validation is not implemented yet.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e18", "details": null, "retryable": false}
   },
   "error_503_dependency": {
     "request": "Any authenticated call while Cognito's signing keys cannot be fetched",

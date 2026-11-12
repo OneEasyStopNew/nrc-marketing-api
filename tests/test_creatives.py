@@ -281,9 +281,9 @@ async def test_unimplemented_contract_endpoints_say_so(
     created = await _create(client, auth, world)
 
     response = await client.post(
-        "/v1/marketing/validations",
+        "/v1/marketing/creative-jobs",
         headers=auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": uuid4().hex}),
-        json={"creative_id": created["id"], "creative_version": 1, "input_kind": "brief"},
+        json={"creative_id": created["id"], "creative_version": 1, "kind": "image_generation"},
     )
 
     assert response.status_code == 501

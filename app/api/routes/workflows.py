@@ -1,5 +1,6 @@
-# Validation, generation and asset endpoints. Contract published now; implemented in D2-D4.
-# With DEMO_STUBS=true they answer with simulated data (app.services.demo_stubs); otherwise 501.
+# Validation, generation and asset endpoints.
+# Briefs and captions are validated for real (app.services.validations). Image validation,
+# generation, assets and export answer from the demo stubs when DEMO_STUBS=true, else 501.
 
 from typing import Any
 from uuid import UUID
@@ -14,11 +15,17 @@ from app.api.deps import (
     IdempotencyKey,
     ValidationRunner,
 )
-from app.core.errors import FeatureNotAvailableError
+from app.core.errors import FeatureNotAvailableError, NotFoundError
 from app.schemas.assets import AssetRead
 from app.schemas.common import ErrorBody
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobRead
-from app.schemas.validations import ValidationAccepted, ValidationCreate, ValidationRunRead
+from app.schemas.validations import (
+    ValidationAccepted,
+    ValidationCreate,
+    ValidationInputKind,
+    ValidationRunRead,
+)
+from app.services import validations
 from app.services.demo_stubs import DemoStubs
 
 router = APIRouter()
@@ -27,9 +34,12 @@ _NOT_YET: dict[int | str, dict[str, Any]] = {
     404: {"model": ErrorBody, "description": "Not found, or not visible to the caller."},
     501: {"model": ErrorBody, "description": "Not implemented yet (DEMO_STUBS is off)."},
 }
-_COMMANDS: dict[int | str, dict[str, Any]] = {
+_VALIDATIONS: dict[int | str, dict[str, Any]] = {
     **_NOT_YET,
-    409: {"model": ErrorBody, "description": "Idempotency-Key reused with a different body."},
+    409: {
+        "model": ErrorBody,
+        "description": "NO_ACTIVE_POLICY, or Idempotency-Key reused with a different body.",
+    },
 }
 _GENERATION: dict[int | str, dict[str, Any]] = {
     **_NOT_YET,
@@ -51,10 +61,12 @@ def _stubs(stubs: DemoStubs | None, feature: str) -> DemoStubs:
     "/validations",
     tags=["validations"],
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Start validating a brief, caption or image (D2/D4)",
-    description="Poll GET /validations/{validation_run_id} until state is SUCCEEDED. "
-    "A retry with the same Idempotency-Key and body returns the original run.",
-    responses=_COMMANDS,
+    summary="Validate a brief, caption or image",
+    description="Briefs and captions are checked against the active policy and the study facts "
+    "before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until "
+    "validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until "
+    "SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run.",
+    responses=_VALIDATIONS,
 )
 async def create_validation(
     body: ValidationCreate,
@@ -64,8 +76,11 @@ async def create_validation(
     stubs: DemoStubsDep,
     response: Response,
 ) -> ValidationAccepted:
-    service = _stubs(stubs, "Validation")
-    accepted, replayed = await service.start_validation(db, ctx, body, idempotency_key)
+    if body.input_kind is ValidationInputKind.IMAGE:
+        service = _stubs(stubs, "Image validation")
+        accepted, replayed = await service.start_validation(db, ctx, body, idempotency_key)
+    else:
+        accepted, replayed = await validations.create_validation(db, ctx, body, idempotency_key)
     if replayed:
         response.headers["Idempotent-Replayed"] = "true"
     return accepted
@@ -74,13 +89,19 @@ async def create_validation(
 @router.get(
     "/validations/{validation_run_id}",
     tags=["validations"],
-    summary="Validation outcome, gates, findings and coverage gaps (D2/D4)",
+    summary="Validation outcome, gates, findings and coverage gaps",
     responses=_NOT_YET,
 )
 async def get_validation(
     validation_run_id: UUID, ctx: CreativeReader, db: DbSession, stubs: DemoStubsDep
 ) -> ValidationRunRead:
-    return await _stubs(stubs, "Validation").get_validation(db, ctx, validation_run_id)
+    try:
+        return await validations.get_validation(db, ctx, validation_run_id)
+    except NotFoundError:
+        # Image runs exist only in the demo stubs' memory.
+        if stubs is None:
+            raise
+    return await stubs.get_validation(db, ctx, validation_run_id)
 
 
 @router.post(

@@ -4,14 +4,13 @@ The generation job (NRC-6/NRC-10) calls check_generation_eligibility before it s
 to a provider, and raises GenerationNotEligibleError when the result is not eligible. The same
 result is exposed to the UI so the Generate button can explain why it is disabled.
 
-The latest finished brief validation of the version decides the rest. Until D2 stores real
-runs, a BriefValidationLookup supplies them (the demo stubs); without one, the best possible
-answer is NOT_VALIDATED.
+The latest stored brief validation of the version decides the rest. A run checked against an
+older policy version no longer counts, so a new policy makes every brief validate again.
 """
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final
 from uuid import UUID
 
 from sqlalchemy import select
@@ -21,9 +20,9 @@ from app.auth.access import TenantContext
 from app.core.errors import NotFoundError
 from app.models import Creative, StudySnapshot
 from app.models.enums import RecruitmentStatus
-from app.schemas.policies import EligibilityReason, GenerationEligibility
+from app.schemas.policies import EligibilityReason, GenerationEligibility, PolicySummary
 from app.schemas.validations import Outcome
-from app.services import policies
+from app.services import policies, validations
 from app.services.creatives import visible_to
 
 REASON_MESSAGES: Final[Mapping[EligibilityReason, str]] = MappingProxyType(
@@ -46,21 +45,11 @@ _REASON_BY_OUTCOME: Final[Mapping[Outcome, EligibilityReason]] = MappingProxyTyp
 )
 
 
-class BriefValidationLookup(Protocol):
-    def latest_brief_outcome(
-        self, tenant_id: UUID, creative_id: UUID, version: int
-    ) -> tuple[UUID, Outcome] | None:
-        """Latest finished brief validation run of the version and its outcome, if any."""
-        ...
-
-
 async def check_generation_eligibility(
     db: AsyncSession,
     ctx: TenantContext,
     creative_id: UUID,
     creative_version: int | None = None,
-    *,
-    brief_runs: BriefValidationLookup | None = None,
 ) -> GenerationEligibility:
     """Decide whether generation may start for one creative version (default: the current one).
 
@@ -82,11 +71,12 @@ async def check_generation_eligibility(
         raise NotFoundError("Creative version not found.")
     policy = await policies.get_active_policy_summary(db, ctx)
     reason = await _blocking_reason(db, ctx, creative.study_id, version, creative.current_version)
-    if reason is None and policy is None:
-        reason = EligibilityReason.NO_ACTIVE_POLICY
     run_id = None
     if reason is None:
-        reason, run_id = _validation_reason(brief_runs, ctx.tenant_id, creative_id, version)
+        if policy is None:
+            reason = EligibilityReason.NO_ACTIVE_POLICY
+        else:
+            reason, run_id = await _validation_reason(db, ctx, creative_id, version, policy)
 
     return GenerationEligibility(
         creative_id=creative_id,
@@ -115,17 +105,12 @@ async def _blocking_reason(
     return None
 
 
-def _validation_reason(
-    brief_runs: BriefValidationLookup | None, tenant_id: UUID, creative_id: UUID, version: int
+async def _validation_reason(
+    db: AsyncSession, ctx: TenantContext, creative_id: UUID, version: int, policy: PolicySummary
 ) -> tuple[EligibilityReason, UUID | None]:
     # The run ID is reported only when it is what makes the version eligible.
-    latest = (
-        None
-        if brief_runs is None
-        else brief_runs.latest_brief_outcome(tenant_id, creative_id, version)
-    )
-    if latest is None:
+    latest = await validations.latest_brief_outcome(db, ctx, creative_id, version)
+    if latest is None or latest.policy_bundle_version != policy.version:
         return EligibilityReason.NOT_VALIDATED, None
-    run_id, outcome = latest
-    reason = _REASON_BY_OUTCOME[outcome]
-    return reason, run_id if reason is EligibilityReason.ELIGIBLE else None
+    reason = _REASON_BY_OUTCOME[latest.outcome]
+    return reason, latest.validation_run_id if reason is EligibilityReason.ELIGIBLE else None

@@ -131,12 +131,9 @@ async def get_generation_eligibility(
     creative_id: UUID,
     ctx: CreativeReader,
     db: DbSession,
-    stubs: DemoStubsDep,
     version: Annotated[int | None, Query(ge=1, description="Defaults to the current one.")] = None,
 ) -> GenerationEligibility:
-    return await eligibility.check_generation_eligibility(
-        db, ctx, creative_id, version, brief_runs=stubs
-    )
+    return await eligibility.check_generation_eligibility(db, ctx, creative_id, version)
 
 
 @router.get(
