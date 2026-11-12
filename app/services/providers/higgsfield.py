@@ -527,6 +527,9 @@ def missing_live_settings(settings: Settings) -> list[str]:
     ]
     if missing:
         problems.append(f"missing {', '.join(missing)}")
+    elif settings.higgsfield_model not in SUPPORTED_ASPECT_RATIOS:
+        # Submit refuses such a model, so start-up refuses it before any job is estimated.
+        problems.append("HIGGSFIELD_MODEL is not in SUPPORTED_ASPECT_RATIOS (probe it first)")
     return problems
 
 
