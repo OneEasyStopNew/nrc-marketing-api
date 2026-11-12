@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.auth.access import Capability, TenantContext
 from app.auth.tokens import Principal, SigningKeyProvider, verify_access_token
 from app.core.config import Settings, get_settings
-from app.core.errors import AuthenticationError, PermissionDeniedError
+from app.core.errors import AuthenticationError, FeatureNotAvailableError, PermissionDeniedError
 from app.services import tenancy
 from app.services.demo_stubs import DemoStubs
 
@@ -36,6 +36,14 @@ async def get_demo_stubs(request: Request) -> DemoStubs | None:
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 DemoStubsDep = Annotated[DemoStubs | None, Depends(get_demo_stubs)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def require_stubs(stubs: DemoStubs | None, feature: str) -> DemoStubs:
+    # For endpoints that only the demo stubs implement so far: 501 when DEMO_STUBS is off.
+    if stubs is None:
+        raise FeatureNotAvailableError(f"{feature} is not implemented yet.")
+    return stubs
+
 
 _bearer = HTTPBearer(auto_error=False, description="Cognito access token.")
 

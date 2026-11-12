@@ -107,8 +107,13 @@ Validation (NRC-7):
 ## Demo stubs (frontend integration before D3-D5)
 
 Set `DEMO_STUBS=true` (and `DEMO_PUBLIC_BASE_URL` to the address the frontend uses) and run one
-worker. Image validation, generation jobs, assets, the media list and export then answer with simulated data in
-the real contract shapes instead of `501`. Brief and caption validation is always real.
+worker. Image validation, generation jobs, assets, the media list and export then answer with
+simulated data in the real contract shapes. Brief and caption validation is always real.
+
+With `DEMO_STUBS=false`, generation jobs are the real durable jobs (NRC-6, run by the connector
+worker) and the rest answer `501` until storage and image checks ship. Either way, a job is
+accepted only for a version whose current brief run passed against the active policy; otherwise
+409 `GENERATION_NOT_ELIGIBLE` with `details.reason`.
 
 - A generation job takes 6 s (QUEUED, RUNNING, WAITING_PROVIDER, SUCCEEDED) and an image check 2 s,
   so polling UIs can be exercised. Generation needs a stored, current, passing brief run.

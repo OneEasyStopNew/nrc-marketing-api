@@ -1125,7 +1125,7 @@
           "jobs"
         ],
         "summary": "Start image generation for a validated brief (D3)",
-        "description": "Only a version whose brief passed validation can generate. Poll GET /jobs/{job_id}; when it SUCCEEDED, result_asset_id is the image.",
+        "description": "Returns at once; poll the Location URL. A retry with the same Idempotency-Key and body returns the original job with Idempotent-Replayed: true.",
         "operationId": "create_creative_job",
         "security": [
           {
@@ -1212,17 +1212,7 @@
             }
           },
           "404": {
-            "description": "Not found, or not visible to the caller.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "501": {
-            "description": "Not implemented yet (DEMO_STUBS is off).",
+            "description": "Creative not found or not permitted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1232,7 +1222,27 @@
             }
           },
           "409": {
-            "description": "GENERATION_NOT_ELIGIBLE (details.reason says why), or IDEMPOTENCY_KEY_REUSED.",
+            "description": "GENERATION_NOT_ELIGIBLE (details.reason), or Idempotency-Key reused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Not the current creative version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GENERATION_LIMIT_REACHED: active jobs or daily credits (retryable).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1322,24 +1332,14 @@
             }
           },
           "404": {
-            "description": "Not found, or not visible to the caller.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
-            }
-          },
-          "501": {
-            "description": "Not implemented yet (DEMO_STUBS is off).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            },
+            "description": "Not Found"
           }
         }
       }
@@ -2514,13 +2514,12 @@
           "stage": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/JobStage"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Stage"
+            ]
           },
           "provider_request_id": {
             "anyOf": [
@@ -2607,6 +2606,19 @@
           "completed_at"
         ],
         "title": "JobRead"
+      },
+      "JobStage": {
+        "type": "string",
+        "enum": [
+          "submitting",
+          "retry_wait",
+          "reconcile",
+          "waiting_provider",
+          "output_ready",
+          "stored"
+        ],
+        "title": "JobStage",
+        "description": "Where a job is inside its execution state. Shown in the UI, so values are part of the API."
       },
       "Language": {
         "type": "string",

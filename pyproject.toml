@@ -7,8 +7,10 @@ requires-python = ">=3.14"
 dependencies = [
     "alembic>=1.16",
     "asyncpg>=0.31",
+    "boto3>=1.40",
     "fastapi>=0.120",
     "httpx>=0.28",
+    "pillow>=11.3",
     "pydantic>=2.12",
     "pydantic-settings>=2.10",
     "pyjwt[crypto]>=2.10",
@@ -21,6 +23,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "asgi-lifespan>=2.1",
+    "boto3-stubs[s3]>=1.40",
     "cryptography>=44",
     "mypy>=1.17",
     "pytest>=8.4",

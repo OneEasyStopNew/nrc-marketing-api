@@ -1,28 +1,31 @@
 """Generation eligibility: may image generation start for this creative version?
 
-The generation job (NRC-6/NRC-10) calls check_generation_eligibility before it submits anything
-to a provider, and raises GenerationNotEligibleError when the result is not eligible. The same
-result is exposed to the UI so the Generate button can explain why it is disabled.
+Two entry points share the same validation rule:
 
-The latest stored brief validation of the version decides the rest. A run checked against an
-older policy version no longer counts, so a new policy makes every brief validate again.
+- check_generation_eligibility answers the UI, so the Generate button can say why it is disabled.
+- assert_generation_eligible is the gate job admission (app.services.jobs) runs before a job is
+  queued; it raises instead of answering.
+
+The latest stored brief validation of the version decides. A run checked against an older policy
+version no longer counts, so a new policy makes every brief validate again.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, NoReturn
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
-from app.core.errors import NotFoundError
+from app.core.errors import GenerationNotEligibleError, NotFoundError, VersionConflictError
 from app.models import Creative, StudySnapshot
-from app.models.enums import RecruitmentStatus
+from app.models.enums import FORMAT_SPECS, PostFormat, RecruitmentStatus
 from app.schemas.policies import EligibilityReason, GenerationEligibility, PolicySummary
 from app.schemas.validations import Outcome
-from app.services import policies, validations
+from app.services import creatives, policies, validations
 from app.services.creatives import visible_to
 
 REASON_MESSAGES: Final[Mapping[EligibilityReason, str]] = MappingProxyType(
@@ -43,6 +46,15 @@ _REASON_BY_OUTCOME: Final[Mapping[Outcome, EligibilityReason]] = MappingProxyTyp
         Outcome.NEEDS_REVIEW: EligibilityReason.NEEDS_REVIEW,
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class EligibleCreative:
+    # The study snapshot the content was written against, recorded on the job.
+
+    study_snapshot_id: UUID
+    study_snapshot_version: int
+    post_format: PostFormat
 
 
 async def check_generation_eligibility(
@@ -89,6 +101,53 @@ async def check_generation_eligibility(
     )
 
 
+async def assert_generation_eligible(
+    db: AsyncSession, ctx: TenantContext, creative_id: UUID, creative_version: int
+) -> EligibleCreative:
+    """Check every precondition for generating an image of this exact creative version.
+
+    Raises:
+        NotFoundError: no such creative visible to the caller (tenant and study access).
+        VersionConflictError: creative_version is not the current one (details.current_version).
+        GenerationNotEligibleError: details.reason names the failed check: STUDY_NOT_RECRUITING,
+            LANGUAGE_NOT_ALLOWED, FORMAT_NOT_ALLOWED, or one of the EligibilityReason values
+            NO_ACTIVE_POLICY, NOT_VALIDATED, VALIDATION_FAILED and NEEDS_REVIEW.
+    """
+    creative = await creatives.get_creative(db, ctx, creative_id)
+    if creative.version != creative_version:
+        raise VersionConflictError(details={"current_version": creative.version})
+
+    # The latest snapshot decides: a study closed after the draft was written is not eligible.
+    latest = (
+        await db.execute(
+            select(StudySnapshot.recruitment_status, StudySnapshot.language)
+            .where(
+                StudySnapshot.tenant_id == ctx.tenant_id,
+                StudySnapshot.study_id == creative.study_id,
+            )
+            .order_by(StudySnapshot.version.desc())
+            .limit(1)
+        )
+    ).one()
+    if latest.recruitment_status is not RecruitmentStatus.RECRUITING:
+        _not_eligible("STUDY_NOT_RECRUITING")
+    if creative.language != latest.language:
+        _not_eligible("LANGUAGE_NOT_ALLOWED")
+    spec = FORMAT_SPECS.get(creative.post_format)
+    if spec is None or spec.channel != creative.channel:
+        _not_eligible("FORMAT_NOT_ALLOWED")
+
+    policy = await policies.get_active_policy_summary(db, ctx)
+    if policy is None:
+        _not_eligible(EligibilityReason.NO_ACTIVE_POLICY)
+    reason, _ = await _validation_reason(db, ctx, creative_id, creative_version, policy)
+    if reason is not EligibilityReason.ELIGIBLE:
+        _not_eligible(reason)
+    return EligibleCreative(
+        creative.study_snapshot_id, creative.study_snapshot_version, creative.post_format
+    )
+
+
 async def _blocking_reason(
     db: AsyncSession, ctx: TenantContext, study_id: UUID, version: int, current_version: int
 ) -> EligibilityReason | None:
@@ -114,3 +173,7 @@ async def _validation_reason(
         return EligibilityReason.NOT_VALIDATED, None
     reason = _REASON_BY_OUTCOME[latest.outcome]
     return reason, latest.validation_run_id if reason is EligibilityReason.ELIGIBLE else None
+
+
+def _not_eligible(reason: str) -> NoReturn:
+    raise GenerationNotEligibleError(details={"reason": str(reason)})

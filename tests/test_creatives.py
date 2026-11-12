@@ -275,7 +275,7 @@ async def test_version_history_pages_newest_first(
     assert second_page.json()["next_cursor"] is None
 
 
-async def test_unimplemented_contract_endpoints_say_so(
+async def test_generation_refuses_a_brief_that_was_never_validated(
     client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     created = await _create(client, auth, world)
@@ -286,8 +286,9 @@ async def test_unimplemented_contract_endpoints_say_so(
         json={"creative_id": created["id"], "creative_version": 1, "kind": "image_generation"},
     )
 
-    assert response.status_code == 501
-    assert response.json()["code"] == "NOT_IMPLEMENTED"
+    assert response.status_code == 409
+    assert response.json()["code"] == "GENERATION_NOT_ELIGIBLE"
+    assert response.json()["details"] == {"reason": "NOT_VALIDATED"}
 
 
 async def test_media_library_says_not_implemented_without_demo_stubs(
