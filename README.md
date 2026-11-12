@@ -22,7 +22,27 @@ uv run uvicorn app.main:create_app --factory --port 8000
 ```
 
 API docs are at http://127.0.0.1:8000/docs when `ENABLE_DOCS=true`. Calls need a real Cognito access
-token, so set the `COGNITO_*` values from Bhushan first.
+token, so set the `COGNITO_*` values for the staging pool first (from Prabhu) and leave
+`DEV_JWKS_FILE` empty.
+
+## Test users and roles
+
+Roles come from memberships in the database, which the API reads on every request. They are not
+taken from the token's `cognito:groups` claim: groups apply to the whole user pool, not to one
+tenant, and the API's database role can only read memberships. The web app reads roles from `/me`
+and `/context`.
+
+To give a Cognito user a role in an existing tenant (and every study in it):
+
+```powershell
+# The sub is in /me (signed in, before any membership) or in the Cognito console.
+uv run python -m scripts.grant_access --tenant-id <tenant-uuid> `
+    --member <sub>=creator --member <sub>=reviewer --member <sub>=publisher `
+    --member <sub>=policy_admin --member <sub>=admin
+```
+
+The Cognito group `policy-admin` corresponds to the role `policy_admin`. Re-running replaces the user's roles and
+reactivates the membership. Admin is not a super-role; it only manages memberships.
 
 ## Checks
 
@@ -81,9 +101,9 @@ real contract shapes instead of `501`:
 
 Never enable it in staging or production.
 
-## Dev tokens (before Cognito exists)
+## Dev tokens (offline, without Cognito)
 
-Until Bhushan's Cognito pool is ready, sign tokens locally. The API still checks issuer, client,
+For offline work without Cognito, sign tokens locally. The API still checks issuer, client,
 scope, expiry and tenant membership; only the signing key changes.
 
 ```powershell

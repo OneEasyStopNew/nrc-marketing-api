@@ -161,7 +161,7 @@ def demo_policy_rules() -> list[dict[str, object]]:
     return [PolicyRule.model_validate(rule).model_dump(mode="json") for rule in DEMO_POLICY_RULES]
 
 
-def _member(value: str) -> tuple[str, list[str]]:
+def parse_member(value: str) -> tuple[str, list[str]]:
     sub, _, roles = value.partition("=")
     role_names = [role.strip() for role in roles.split(",") if role.strip()]
     if not _SUB.fullmatch(sub) or not role_names:
@@ -233,7 +233,7 @@ async def seed(tenant_name: str, members: list[tuple[str, list[str]]]) -> dict[s
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--tenant-name", required=True)
-    parser.add_argument("--member", type=_member, action="append", required=True)
+    parser.add_argument("--member", type=parse_member, action="append", required=True)
     args = parser.parse_args()
     print(json.dumps(asyncio.run(seed(args.tenant_name, args.member)), indent=2))
 
