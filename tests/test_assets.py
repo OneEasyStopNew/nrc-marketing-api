@@ -12,36 +12,29 @@ from PIL import Image
 from pydantic import SecretStr
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.config import get_settings
-from app.db.session import TenantSession, bind_tenant
+from app.db.session import bind_tenant
 from app.models import Asset, CreditReservation, Job
 from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState
 from app.services.assets import StoredImageSink
 from app.services.providers.base import FetchedImage, ProviderOutputError
 from app.services.providers.simulator import SimulatedImageProvider, render_simulated_png
-from app.services.storage import ObjectStorage
+from app.services.storage import ObjectStorage, StorageError
 from app.workers.connector import WorkerConfigError, build_providers, run_once
-from tests.conftest import AuthHeaders, World
-from tests.test_job_worker import ScriptedProvider
-from tests.test_jobs_api import _creative, _post_job
-from tests.test_storage import needs_seaweedfs
+from tests.conftest import (
+    AuthHeaders,
+    ScriptedProvider,
+    Sessions,
+    World,
+    _creative,
+    _post_job,
+    needs_seaweedfs,
+)
 
 pytestmark = needs_seaweedfs
-
-Sessions = async_sessionmaker[AsyncSession]
-
-
-@pytest.fixture
-def sessions(connection: AsyncConnection) -> Sessions:
-    return async_sessionmaker(
-        bind=connection,
-        join_transaction_mode="create_savepoint",
-        expire_on_commit=False,
-        sync_session_class=TenantSession,
-    )
 
 
 @pytest.fixture
@@ -198,6 +191,29 @@ async def test_storage_not_configured_returns_503(
     assert response.json()["code"] == "DEPENDENCY_UNAVAILABLE"
 
 
+async def test_storage_failure_while_signing_the_url_returns_503(
+    sessions: Sessions,
+    sink: StoredImageSink,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, asset_id = await _succeeded_asset(sessions, sink, client, auth, world)
+
+    async def unavailable(*args: object, **kwargs: object) -> str:
+        raise StorageError
+
+    monkeypatch.setattr(ObjectStorage, "presigned_get", unavailable)
+
+    response = await _get_asset(client, auth, "creator-a", world.a.tenant_id, asset_id)
+
+    assert response.status_code == 503
+    body = response.json()
+    assert (body["code"], body["retryable"]) == ("DEPENDENCY_UNAVAILABLE", True)
+    assert "s3" not in body["message"].lower()
+
+
 async def test_payload_that_is_not_an_image_fails_the_job_without_an_asset(
     sessions: Sessions,
     sink: StoredImageSink,
@@ -284,7 +300,7 @@ def test_live_mode_without_storage_refuses_to_start() -> None:
         update={
             "generation_mode": "live",
             "aws_s3_bucket": None,
-            "hf_key": SecretStr("test-id:test-secret"),
+            "higgsfield_api_key": SecretStr("test-id:test-secret"),
             "higgsfield_model": "test/model",
             "higgsfield_output_hosts": ("images.example.test",),
         }
@@ -292,3 +308,56 @@ def test_live_mode_without_storage_refuses_to_start() -> None:
 
     with pytest.raises(WorkerConfigError, match="AWS_S3_BUCKET"):
         build_providers(settings)
+
+
+async def test_success_queues_one_asset_generated_event_that_this_worker_never_leases(
+    sessions: Sessions,
+    sink: StoredImageSink,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+) -> None:
+    job_id, asset_id = await _succeeded_asset(sessions, sink, client, auth, world)
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    # Due now: only the event-type filter keeps the worker away from it.
+    await connection.execute(
+        text("UPDATE outbox_events SET available_at = clock_timestamp() - interval '1 minute'")
+    )
+
+    assert (
+        await run_once(sessions, {"simulator": SimulatedImageProvider()}, sink, get_settings()) == 0
+    )
+
+    events = (
+        await connection.execute(
+            text(
+                "SELECT payload, attempts, lease_owner, processed_at FROM outbox_events"
+                " WHERE event_type = 'asset.generated'"
+            )
+        )
+    ).all()
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        asset = (await db.execute(select(Asset))).scalar_one()
+    assert len(events) == 1
+    event = events[0]
+    assert (event.attempts, event.lease_owner, event.processed_at) == (0, None, None)
+    assert event.payload == {
+        "event_version": 1,
+        "job_id": str(job_id),
+        "asset_id": asset_id,
+        "tenant_id": str(world.a.tenant_id),
+        "creative_id": str(asset.creative_id),
+        "creative_version": 1,
+        "bucket": asset.bucket,
+        "s3_key": asset.s3_key,
+        "s3_version_id": asset.s3_version_id,
+        "checksum_sha256": asset.checksum_sha256,
+        "mime_type": "image/png",
+        "width_px": 1080,
+        "height_px": 1080,
+    }
+    assert "http" not in str(event.payload)

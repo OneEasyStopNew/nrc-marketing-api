@@ -47,6 +47,15 @@ def test_job_stage_is_a_published_enum() -> None:
         {"type": "null"},
     ]
     assert schemas["JobStage"]["enum"] == [stage.value for stage in JobStage]
+    assert [stage.value for stage in JobStage] == [
+        "submitting",
+        "retry_wait",
+        "reconcile",
+        "waiting_provider",
+        "output_ready",
+        "fetching_output",
+        "stored",
+    ]
 
 
 def _examples() -> list[tuple[str, str]]:

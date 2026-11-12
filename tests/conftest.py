@@ -2,14 +2,20 @@
 
 Each test runs in one outer transaction that is rolled back afterwards. Data is seeded as the
 owner, then the connection switches to the marketing_app role so row-level security applies.
+API request sessions run as marketing_app and worker sessions (`sessions`) as marketing_worker,
+each switching role when its transaction begins.
 """
 
+import dataclasses
+import os
 import time
 import warnings
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
@@ -24,17 +30,43 @@ from jwt.algorithms import RSAAlgorithm
 from PIL import Image
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
+from sqlalchemy import Connection, Row, event, select, text
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import Session, SessionTransaction
 from sqlalchemy.pool import NullPool
 
 from app.api.deps import get_db, get_signing_keys
 from app.core.config import get_settings
 from app.core.errors import AuthenticationError
-from app.db.session import TenantSession
+from app.db.base import Base
+from app.db.session import TenantSession, bind_tenant
 from app.main import create_app
-from app.models import Membership, MembershipStudy, Study, StudySnapshot, Tenant
+from app.models import (
+    Asset,
+    CreditReservation,
+    Job,
+    Membership,
+    MembershipStudy,
+    Study,
+    StudySnapshot,
+    Tenant,
+)
 from app.models.enums import Language, RecruitmentStatus
+from app.models.jobs import ReservationState
+from app.services.providers.base import (
+    FetchedImage,
+    ImageRequest,
+    ProviderError,
+    ProviderJobStatus,
+    StatusResult,
+    SubmitResult,
+)
+from app.services.providers.simulator import SimulatedImageProvider
 from scripts.seed_demo import SYNTHETIC_FACTS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +76,11 @@ ISSUER = f"https://cognito-idp.{REGION}.amazonaws.com/{POOL_ID}"
 CLIENT_ID = "test-client"
 SCOPE = "marketing/api"
 KID = "test-key"
+# Local SeaweedFS from docker compose, and the versioned test bucket in it.
+ENDPOINT = "http://127.0.0.1:8333"
+BUCKET = "nrc-test-media"
+APP_ROLE = "marketing_app"
+WORKER_ROLE = "marketing_worker"
 
 
 class IntegrationEnv(BaseSettings):
@@ -52,6 +89,7 @@ class IntegrationEnv(BaseSettings):
     )
 
     test_database_url: SecretStr
+    test_worker_database_url: SecretStr
     test_migration_database_url: SecretStr
 
 
@@ -65,14 +103,15 @@ def app_environment(test_env: IntegrationEnv) -> Iterator[None]:
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("ENABLE_DOCS", "false")
         patch.setenv("DATABASE_URL", test_env.test_database_url.get_secret_value())
+        patch.setenv("WORKER_DATABASE_URL", test_env.test_worker_database_url.get_secret_value())
         patch.setenv("COGNITO_REGION", REGION)
         patch.setenv("COGNITO_USER_POOL_ID", POOL_ID)
         patch.setenv("COGNITO_CLIENT_IDS", CLIENT_ID)
         patch.setenv("REQUIRED_SCOPE", SCOPE)
         patch.setenv("CORS_ORIGINS", "")
         # Local SeaweedFS; these credentials only open that container, not AWS.
-        patch.setenv("AWS_S3_BUCKET", "nrc-test-media")
-        patch.setenv("AWS_ENDPOINT_URL_S3", "http://127.0.0.1:8333")
+        patch.setenv("AWS_S3_BUCKET", BUCKET)
+        patch.setenv("AWS_ENDPOINT_URL_S3", ENDPOINT)
         patch.setenv("S3_FORCE_PATH_STYLE", "true")
         patch.setenv("AWS_ACCESS_KEY_ID", "localdev")
         patch.setenv("AWS_SECRET_ACCESS_KEY", "localdev-password")
@@ -210,12 +249,52 @@ async def connection(test_env: IntegrationEnv) -> AsyncIterator[AsyncConnection]
     await engine.dispose()
 
 
-def _session(conn: AsyncConnection) -> AsyncSession:
+Sessions = async_sessionmaker[AsyncSession]
+
+
+class RoleSession(TenantSession):
+    # A test session on the shared connection that acts as session.info["role"], if set.
+    pass
+
+
+@event.listens_for(RoleSession, "after_begin")
+def _apply_role(session: Session, transaction: SessionTransaction, connection: Connection) -> None:
+    role = session.info.get("role")
+    if role in (APP_ROLE, WORKER_ROLE):
+        # Lasts until the outer test transaction ends, or until a savepoint rollback.
+        connection.execute(text(f"SET LOCAL ROLE {role}"))
+
+
+def _session(conn: AsyncConnection, role: str | None = None) -> AsyncSession:
     return AsyncSession(
         bind=conn,
         join_transaction_mode="create_savepoint",
         expire_on_commit=False,
-        sync_session_class=TenantSession,
+        sync_session_class=RoleSession,
+        info={"role": role},
+    )
+
+
+def app_session(conn: AsyncConnection) -> AsyncSession:
+    # As the API's role, on the test's connection.
+    return _session(conn, APP_ROLE)
+
+
+async def as_role(conn: AsyncConnection, role: str) -> None:
+    # Switch the test's own statements to one of the two login roles.
+    assert role in (APP_ROLE, WORKER_ROLE)
+    await conn.execute(text(f"SET LOCAL ROLE {role}"))
+
+
+@pytest.fixture
+def sessions(connection: AsyncConnection) -> Sessions:
+    # The worker's sessions: marketing_worker on the test's connection.
+    return async_sessionmaker(
+        bind=connection,
+        join_transaction_mode="create_savepoint",
+        expire_on_commit=False,
+        sync_session_class=RoleSession,
+        info={"role": WORKER_ROLE},
     )
 
 
@@ -228,7 +307,7 @@ async def world(connection: AsyncConnection) -> World:
         b = await seed_tenant(seed, name="Tenant B", members={"creator-b": ["creator"]})
         await seed.commit()
     # From here on the connection behaves like the API's role: RLS applies, no owner rights.
-    await connection.execute(text("SET LOCAL ROLE marketing_app"))
+    await as_role(connection, APP_ROLE)
     return World(a, b)
 
 
@@ -238,7 +317,7 @@ async def client(
 ) -> AsyncIterator[httpx.AsyncClient]:
     async def request_session() -> AsyncIterator[AsyncSession]:
         # One session per request, like production: uncommitted work is rolled back on close.
-        async with _session(connection) as session:
+        async with app_session(connection) as session:
             yield session
 
     app = create_app()
@@ -270,3 +349,222 @@ class AuthHeaders:
 @pytest.fixture
 def auth(signing_key: RSAPrivateKey) -> AuthHeaders:
     return AuthHeaders(signing_key)
+
+
+@pytest.fixture
+async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTenant]:
+    # Committed data (no shared test transaction), so parallel requests really race.
+    engine = create_async_engine(
+        test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
+    )
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        seeded = await seed_tenant(db, name="Job race tenant", members={"creator-a": ["creator"]})
+        await db.commit()
+    try:
+        yield seeded
+    finally:
+        async with AsyncSession(engine) as db:
+            # jobs and assets reference each other: break the cycle before deleting.
+            await db.execute(
+                text("UPDATE jobs SET result_asset_id = NULL WHERE tenant_id = :t"),
+                {"t": seeded.tenant_id},
+            )
+            for table in reversed(Base.metadata.sorted_tables):
+                if table.name == "provider_spend":
+                    # Not tenant data (one counter per provider).
+                    continue
+                column = table.c.id if table.name == "tenants" else table.c.tenant_id
+                await db.execute(table.delete().where(column == seeded.tenant_id))
+            await db.commit()
+        await engine.dispose()
+
+
+# ---- Helpers shared by test modules (no test module imports another).
+
+
+JOBS = "/v1/marketing/creative-jobs"
+
+
+async def _creative(client: httpx.AsyncClient, auth: AuthHeaders, tenant: SeededTenant) -> str:
+    response = await client.post(
+        "/v1/marketing/creatives",
+        headers=auth("creator-a", tenant.tenant_id, **{"Idempotency-Key": uuid4().hex}),
+        json={
+            "study_id": str(tenant.study_id),
+            "prompt": "Invite adults with high blood pressure to learn about the study.",
+            "language": "en",
+            "channel": "facebook",
+            "post_format": "feed_image",
+        },
+    )
+    assert response.status_code == 201, response.text
+    creative_id: str = response.json()["id"]
+    return creative_id
+
+
+async def _post_job(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    creative_id: str,
+    *,
+    key: str | None = None,
+    sub: str = "creator-a",
+    version: int = 1,
+) -> httpx.Response:
+    headers = auth(sub, world.a.tenant_id, **{"Idempotency-Key": key or uuid4().hex})
+    body = {"creative_id": creative_id, "creative_version": version, "kind": "image_generation"}
+    return await client.post(JOBS, headers=headers, json=body)
+
+
+class FakeSink:
+    # Stands in for generated-image storage: a metadata row without any object.
+
+    def __init__(self) -> None:
+        self.stored: list[UUID] = []
+
+    async def store(
+        self, db: AsyncSession, job: Job, image: FetchedImage, provider_name: str, model: str
+    ) -> UUID:
+        assert image.content.startswith(b"\x89PNG")
+        assert provider_name == "simulator"
+        # A real row, because jobs.result_asset_id is a foreign key to assets.
+        asset = Asset(
+            tenant_id=job.tenant_id,
+            creative_id=job.creative_id,
+            creative_version=job.creative_version,
+            job_id=job.id,
+            origin="generated",
+            bucket="fake",
+            s3_key=f"fake/{uuid4()}.png",
+            mime_type="image/png",
+            width_px=1,
+            height_px=1,
+            size_bytes=len(image.content),
+            checksum_sha256="0" * 64,
+            created_by=job.created_by,
+        )
+        db.add(asset)
+        await db.flush()
+        self.stored.append(asset.id)
+        return asset.id
+
+
+async def _load(sessions: Sessions, world: World, job_id: UUID) -> tuple[Job, ReservationState]:
+    async with sessions() as db:
+        await bind_tenant(db, world.a.tenant_id)
+        job = await db.get(Job, job_id)
+        reservation = await db.scalar(
+            select(CreditReservation.state).where(CreditReservation.job_id == job_id)
+        )
+    assert job is not None
+    assert reservation is not None
+    return job, reservation
+
+
+async def _requeue(connection: AsyncConnection, world: World) -> None:
+    # Make every outbox event due now, as if its backoff had passed.
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    await connection.execute(
+        text(
+            "UPDATE outbox_events SET processed_at = NULL,"
+            " available_at = clock_timestamp() - interval '1 second'"
+        )
+    )
+
+
+async def _event(connection: AsyncConnection) -> Row[Any]:
+    # The single outbox event of the test (RLS: tenant A is bound by now).
+    return (
+        await connection.execute(
+            text(
+                "SELECT processed_at, lease_owner, last_error_code, attempts, failed_attempts"
+                " FROM outbox_events WHERE event_type = 'job.run'"
+            )
+        )
+    ).one()
+
+
+class ScriptedProvider(SimulatedImageProvider):
+    # SIMULATED provider whose next calls can fail on cue.
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Raised by the next submits, after the request was recorded (accepted, response lost).
+        self.submit_errors: list[Exception] = []
+        self.status_error: ProviderError | None = None
+        self.fetch_error: ProviderError | None = None
+        # Reported in the COMPLETED status, as a provider stating its actual cost would.
+        self.actual_cost_usd: Decimal | None = None
+        self.estimates = 0
+        self.before_estimate: Callable[[], Awaitable[None]] | None = None
+        self.before_submit: Callable[[], Awaitable[None]] | None = None
+        self.before_fetch: Callable[[], Awaitable[None]] | None = None
+        # Status checks that still report the generation as in progress.
+        self.pending_polls = 0
+        # Reported in the COMPLETED status: when the provider deletes the output.
+        self.outputs_expire_at: datetime | None = None
+
+    async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
+        self.estimates += 1
+        if self.before_estimate is not None:
+            await self.before_estimate()
+        return await super().estimate_cost_usd(request)
+
+    async def submit(self, request: ImageRequest) -> SubmitResult:
+        if self.before_submit is not None:
+            await self.before_submit()
+        result = await super().submit(request)
+        if self.submit_errors:
+            raise self.submit_errors.pop(0)
+        return result
+
+    async def get_status(self, provider_request_id: str) -> StatusResult:
+        if self.status_error is not None:
+            raise self.status_error
+        if self.pending_polls:
+            self.pending_polls -= 1
+            return StatusResult(provider_request_id, ProviderJobStatus.IN_PROGRESS)
+        result = await super().get_status(provider_request_id)
+        return dataclasses.replace(
+            result, actual_cost_usd=self.actual_cost_usd, outputs_expire_at=self.outputs_expire_at
+        )
+
+    async def fetch_output(self, result: StatusResult) -> FetchedImage:
+        if self.before_fetch is not None:
+            await self.before_fetch()
+        if self.fetch_error is not None:
+            raise self.fetch_error
+        return await super().fetch_output(result)
+
+
+async def _spend(connection: AsyncConnection, provider: str = "simulator") -> tuple[int, int]:
+    # (reserved, committed) micro-USD of the global spend counter; only the worker may read it.
+    await as_role(connection, WORKER_ROLE)
+    row = (
+        await connection.execute(
+            text(
+                "SELECT reserved_usd_micros, committed_usd_micros FROM provider_spend"
+                " WHERE provider = :p"
+            ),
+            {"p": provider},
+        )
+    ).one()
+    return int(row.reserved_usd_micros), int(row.committed_usd_micros)
+
+
+def _seaweedfs_reachable() -> bool:
+    try:
+        httpx.get(ENDPOINT, timeout=2)
+    except httpx.HTTPError:
+        return False
+    return True
+
+
+# Locally the tests skip without SeaweedFS; in CI (CI env var set) they run and so fail loudly.
+needs_seaweedfs = pytest.mark.skipif(
+    "CI" not in os.environ and not _seaweedfs_reachable(),
+    reason=f"SeaweedFS is not reachable at {ENDPOINT}",
+)

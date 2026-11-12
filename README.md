@@ -78,6 +78,47 @@ SIMULATED. End to end you will see:
 Without `AWS_S3_BUCKET` the simulator worker still runs, but finished jobs stop at stage
 `output_ready`. `GENERATION_MODE=live` refuses to start without storage.
 
+The worker connects as `marketing_worker` through `WORKER_DATABASE_URL` and refuses to start
+without it. A job it gives up on while the provider may still have it stays `UNKNOWN` with its
+credits held; `uv run python -m scripts.list_unknown_jobs` lists those (ids only, read-only) for an
+operator to settle.
+
+### Higgsfield (live)
+
+Live mode (`GENERATION_MODE=live`) stays off: the worker refuses to start until the validation-PASS
+gate (NRC-7) exists, as well as without a key, `HIGGSFIELD_MODEL`, `HIGGSFIELD_OUTPUT_HOSTS` or
+storage.
+
+- **Key.** Locally, put it in `.env.local` (git-ignored) as `HIGGSFIELD_API_KEY=<key-id>:<key-secret>`,
+  never in `.env`. On staging the worker reads it at startup from Secrets Manager
+  (`HIGGSFIELD_SECRET_ID=nrc/stg/higgsfield`, JSON entry `HIGGSFIELD_API_KEY`)
+  through its IAM role and keeps it in memory only.
+- **Connectivity check.** `scripts/higgsfield_smoke.py` runs outside the API. `--help` lists the
+  candidate model ids and their smallest documented settings, with the doc source.
+
+  ```powershell
+  # Free: calls only /estimate and prints model + USD.
+  uv run python -m scripts.higgsfield_smoke estimate --models higgsfield-ai/soul/standard,higgsfield-ai/soul/v2/standard
+  # Real money, one image: refuses without --confirm-spend, above GENERATION_MAX_COST_USD_PER_IMAGE,
+  # or unless AWS_ENDPOINT_URL_S3 points at local SeaweedFS. Prints ids, checksum, size and S3 key.
+  uv run python -m scripts.higgsfield_smoke generate --model higgsfield-ai/soul/v2/standard --confirm-spend
+  ```
+
+- **Cost guard.** Before the first submit the worker prices the image with `/estimate`. Above
+  `GENERATION_MAX_COST_USD_PER_IMAGE` the job fails `COST_ABOVE_LIMIT`. It then reserves the estimate
+  against `GENERATION_GLOBAL_BUDGET_USD` (default 40, across all tenants, table `provider_spend`) in
+  the same transaction that marks it submitting; past the budget it fails `BUDGET_EXHAUSTED` and
+  nothing is sent. Failed, rejected and canceled requests give the amount back, completed ones commit
+  it (the actual cost if Higgsfield ever reports one, else the estimate), and `UNKNOWN` jobs keep it
+  until reconciled.
+- **Output host not allowed.** Images are downloaded only from `HIGGSFIELD_OUTPUT_HOSTS`. If
+  Higgsfield answers with another host, the worker logs `provider output host not allowed ...
+  host=<host>` at ERROR (host only, never the URL) and keeps the job waiting, retrying with
+  backoff. To recover, add that host to `HIGGSFIELD_OUTPUT_HOSTS` and restart the worker before
+  the output expires; after expiry the job fails `OUTPUT_EXPIRED` (billed). Without an
+  `expires_at` from Higgsfield, expiry is `PROVIDER_OUTPUT_RETENTION_FALLBACK_SECONDS` (7 days)
+  after the worker first saw the output completed.
+
 ## Checks
 
 CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, plus a
@@ -113,6 +154,12 @@ Conventions:
 
 - A Postgres login role `marketing_app` that does not own the tables and has no `BYPASSRLS`. The API's
   `DATABASE_URL` uses it. Migrations run as the owner through `MIGRATION_DATABASE_URL`.
+- A second login role `marketing_worker`, created the same way (not an owner, no `BYPASSRLS`, not a
+  member of the owner role), before `alembic upgrade head`, which grants it the worker's tables. The
+  connector worker's `WORKER_DATABASE_URL` uses it and the worker refuses to start without it.
+- Deploy order for migration `3fb9adf5dfbe`: create `marketing_worker` and switch every worker to
+  `WORKER_DATABASE_URL` BEFORE it runs. It revokes the lease function and `provider_spend` from
+  `marketing_app`, so a worker still on `DATABASE_URL` stops leasing.
 - Cognito: `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_IDS` and a resource-server
   scope matching `REQUIRED_SCOPE`.
 - `ENABLE_DOCS=false`, `CORS_ORIGINS` set to the frontend origin, and `FORWARDED_ALLOW_IPS` set to the
@@ -121,6 +168,6 @@ Conventions:
 
 ## Not done yet
 
-Validation (D2), Higgsfield generation and assets (D3), image checks (D4), export (D5), and the
+Validation (D2), live Higgsfield generation through the app (D3, waits for the validation gate), image checks (D4), export (D5), and the
 staging deployment (D6). Cleanup of old idempotency keys and the study import from the approved
 demo study are still to do. The seeded study is synthetic.

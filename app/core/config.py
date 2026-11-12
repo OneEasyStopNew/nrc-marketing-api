@@ -7,11 +7,16 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+# lease_outbox_events() clamps its lease to the same range in SQL; keep the two in sync.
+LEASE_MIN_SECONDS = 5
+LEASE_MAX_SECONDS = 600
+
 
 class Settings(BaseSettings):
     # Typed configuration. Required values have no default, so a missing one fails at startup.
 
-    # .env.local (git-ignored, local only) overrides .env; it holds provider keys such as HF_KEY.
+    # .env.local (git-ignored, local only) overrides .env; it holds provider keys such as
+    # HIGGSFIELD_API_KEY.
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"), env_file_encoding="utf-8", extra="ignore", frozen=True
     )
@@ -43,18 +48,44 @@ class Settings(BaseSettings):
     # A job whose provider estimate is above this fails before anything is submitted.
     # One dollar is ten times the default; a still image costing more is a misconfiguration.
     generation_max_cost_usd_per_image: Decimal = Field(default=Decimal("0.10"), ge=0, le=1)
+    # Cap on provider spend across all tenants (reserved estimates plus committed costs), kept per
+    # provider in provider_spend. A job that would pass it fails BUDGET_EXHAUSTED before submit.
+    # 250 times the default: room to grow, but a typo cannot remove the cap.
+    generation_global_budget_usd: Decimal = Field(default=Decimal(40), ge=0, le=10_000)
+    # Failed processing attempts per outbox event (a crash, an expired lease, no handler) before
+    # the worker gives up. Polls and retryable provider errors don't count: the job deadline
+    # bounds those (the agreed retry policy) until the provider accepts the job. After that, the
+    # grace window below bounds an unfinished job and output expiry bounds a completed one.
+    # Stored on each job when it is accepted, so a change applies to new jobs only.
     generation_max_attempts: int = Field(default=3, ge=1, le=10)
     generation_deadline_seconds: int = Field(default=900, ge=60, le=86_400)
     # How long past its deadline an accepted job may stay queued or in progress at the provider
     # before it is parked as UNKNOWN for review. Does not apply once the provider has completed.
     generation_accepted_grace_seconds: int = Field(default=3600, ge=60, le=86_400)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
-    worker_lease_seconds: int = Field(default=60, ge=5, le=3600)
+    # Retry and poll backoff per event: doubles from the base up to the max, with jitter.
+    worker_backoff_base_seconds: float = Field(default=2.0, gt=0, le=60)
+    worker_backoff_max_seconds: float = Field(default=60.0, gt=0, le=3600)
+    worker_lease_seconds: int = Field(default=60, ge=LEASE_MIN_SECONDS, le=LEASE_MAX_SECONDS)
+    # Events one worker leases and runs, one at a time, before it polls again.
+    worker_max_events_per_run: int = Field(default=10, ge=1, le=100)
+    # Retry delay for an event whose job has no handler (e.g. a kind deployed before its worker).
+    worker_no_handler_retry_seconds: float = Field(default=60, gt=0, le=3600)
     higgsfield_base_url: str = "https://api.higgsfield.ai"
     higgsfield_model: str | None = None
-    # "<key-id>:<key-secret>", the Higgsfield SDK's format. Read it via higgsfield_credentials().
-    hf_key: SecretStr | None = None
+    # "<key-id>:<key-secret>", the Higgsfield SDK's format. Parsed by
+    # app.services.providers.higgsfield.higgsfield_credentials.
+    higgsfield_api_key: SecretStr | None = None
+    # Staging/production: AWS Secrets Manager secret holding the key (e.g. nrc/stg/higgsfield).
+    # The worker reads it at startup when HIGGSFIELD_API_KEY is not set.
+    higgsfield_secret_id: str | None = None
     higgsfield_output_hosts: Annotated[tuple[str, ...], NoDecode] = ()
+    # Downloading one provider output; the worker also caps it at half its lease.
+    provider_output_fetch_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    # How long a completed output is assumed to stay downloadable when the provider's status
+    # gives no expiry, counted from when the worker first saw it completed. Default: 7 days,
+    # Higgsfield's documented minimum retention.
+    provider_output_retention_fallback_seconds: int = Field(default=604_800, ge=3600, le=1_209_600)
 
     # Media storage (NRC-3). The bucket comes only from configuration, never from code.
     aws_region: str = "us-east-1"
@@ -63,6 +94,11 @@ class Settings(BaseSettings):
     aws_endpoint_url_s3: str | None = None
     s3_force_path_style: bool = False
     aws_profile: str | None = None
+    # S3 client: timeouts per request, and botocore's retries after the first attempt (standard
+    # mode).
+    s3_connect_timeout_seconds: float = Field(default=5, gt=0, le=60)
+    s3_read_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    s3_max_retries: int = Field(default=3, ge=0, le=10)
     # The whole image is held in memory while it is checked and stored: 50 MiB at most.
     max_generated_image_bytes: int = Field(default=10_485_760, ge=1024, le=52_428_800)
     # Decoding allocates about 4 bytes per pixel, so 100 megapixels bounds it near 400 MB.
@@ -77,20 +113,6 @@ class Settings(BaseSettings):
             return tuple(item.strip() for item in value.split(",") if item.strip())
         return value
 
-    def higgsfield_credentials(self) -> tuple[SecretStr, SecretStr]:
-        """Split HF_KEY into (key id, key secret) at the first ':'.
-
-        Not a field validator, because pydantic echoes input values in its errors.
-
-        Raises:
-            ValueError: HF_KEY is missing or malformed. The message never contains the value.
-        """
-        raw = self.hf_key.get_secret_value() if self.hf_key is not None else ""
-        key_id, separator, key_secret = raw.partition(":")
-        if not separator or not key_id.strip() or not key_secret.strip():
-            raise ValueError("HF_KEY is missing or not in the form <key-id>:<key-secret>.")
-        return SecretStr(key_id), SecretStr(key_secret)
-
     @property
     def cognito_issuer(self) -> str:
         return (
@@ -100,6 +122,17 @@ class Settings(BaseSettings):
     @property
     def cognito_jwks_url(self) -> str:
         return f"{self.cognito_issuer}/.well-known/jwks.json"
+
+
+class WorkerDatabaseSettings(BaseSettings):
+    # The connector worker's connection, as marketing_worker. Required: the worker refuses to
+    # start without it; the API never uses it.
+
+    model_config = SettingsConfigDict(
+        env_file=(".env", ".env.local"), env_file_encoding="utf-8", extra="ignore"
+    )
+
+    worker_database_url: SecretStr
 
 
 class OwnerDatabaseSettings(BaseSettings):

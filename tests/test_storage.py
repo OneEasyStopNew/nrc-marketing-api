@@ -1,8 +1,8 @@
 """Object storage against the local SeaweedFS (bucket nrc-test-media)."""
 
 import hashlib
-import os
 import re
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import boto3
@@ -16,24 +16,7 @@ from app.services.storage import (
     StorageError,
     StorageNotConfiguredError,
 )
-
-ENDPOINT = "http://127.0.0.1:8333"
-BUCKET = "nrc-test-media"
-
-
-def _seaweedfs_reachable() -> bool:
-    try:
-        httpx.get(ENDPOINT, timeout=2)
-    except httpx.HTTPError:
-        return False
-    return True
-
-
-# Locally the tests skip without SeaweedFS; in CI (CI env var set) they run and so fail loudly.
-needs_seaweedfs = pytest.mark.skipif(
-    "CI" not in os.environ and not _seaweedfs_reachable(),
-    reason=f"SeaweedFS is not reachable at {ENDPOINT}",
-)
+from tests.conftest import BUCKET, ENDPOINT, needs_seaweedfs
 
 
 @pytest.fixture(autouse=True)
@@ -158,3 +141,19 @@ async def test_missing_version_id_is_logged_and_kept_none(
         stored = await storage.save_generated_image(b"x", ext="png", content_type="image/png")
     assert stored.version_id is None
     assert "no version id" in caplog.text
+
+
+def test_s3_client_timeouts_and_retries_come_from_settings() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "s3_connect_timeout_seconds": 2.5,
+            "s3_read_timeout_seconds": 12.0,
+            "s3_max_retries": 4,
+        }
+    )
+
+    config: Any = ObjectStorage(settings)._client.meta.config
+
+    assert (config.connect_timeout, config.read_timeout) == (2.5, 12.0)
+    # botocore counts the first attempt too: 4 retries are 5 attempts.
+    assert config.retries == {"total_max_attempts": 5, "mode": "standard"}

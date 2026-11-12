@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Final
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
 from app.core.config import Settings
-from app.core.errors import NotFoundError
-from app.models import Asset, Creative, Job
+from app.core.errors import DependencyUnavailableError, NotFoundError
+from app.models import Asset, Creative, Job, OutboxEvent
 from app.schemas.assets import AssetOrigin, AssetRead
 from app.services import media
 from app.services.media import MediaRejectedError
@@ -19,6 +20,10 @@ from app.services.providers.base import FetchedImage, ProviderError, ProviderOut
 from app.services.storage import ObjectStorage, StorageError
 
 logger = logging.getLogger(__name__)
+
+ASSET_GENERATED_EVENT: Final = "asset.generated"
+# Payload contract version, agreed with the NRC-7 handler; bump it on any incompatible change.
+ASSET_GENERATED_EVENT_VERSION: Final = 1
 
 
 class ImageStorageUnavailableError(ProviderError):
@@ -84,6 +89,43 @@ class StoredImageSink:
         return asset.id
 
 
+async def emit_asset_generated(db: AsyncSession, asset_id: UUID) -> None:
+    """Queue the hand-off to image validation (NRC-7) for a stored asset.
+
+    Called in the transaction that marks its job SUCCEEDED. The payload is ids and the storage
+    location only, never a URL: validation reads our stored copy, never the provider's.
+    """
+    asset = await db.get(Asset, asset_id)
+    if asset is None:
+        raise LookupError("The stored asset is not visible in this transaction")
+    db.add(
+        OutboxEvent(
+            tenant_id=asset.tenant_id,
+            job_id=asset.job_id,
+            event_type=ASSET_GENERATED_EVENT,
+            payload={
+                "event_version": ASSET_GENERATED_EVENT_VERSION,
+                "job_id": str(asset.job_id),
+                "asset_id": str(asset.id),
+                "tenant_id": str(asset.tenant_id),
+                "creative_id": str(asset.creative_id),
+                "creative_version": asset.creative_version,
+                "bucket": asset.bucket,
+                "s3_key": asset.s3_key,
+                "s3_version_id": asset.s3_version_id,
+                "checksum_sha256": asset.checksum_sha256,
+                "mime_type": asset.mime_type,
+                "width_px": asset.width_px,
+                "height_px": asset.height_px,
+            },
+            attempts=0,
+        )
+    )
+    logger.info(
+        "asset.generated queued asset=%s job=%s tenant=%s", asset.id, asset.job_id, asset.tenant_id
+    )
+
+
 async def get_asset(
     db: AsyncSession,
     ctx: TenantContext,
@@ -112,7 +154,12 @@ async def get_asset(
     ttl = settings.asset_url_ttl_seconds
     expires_at = datetime.now(UTC) + timedelta(seconds=ttl)
     # The URL is returned to the caller only: never stored or logged.
-    url = await storage.presigned_get(asset.s3_key, version_id=asset.s3_version_id, expires_in=ttl)
+    try:
+        url = await storage.presigned_get(
+            asset.s3_key, version_id=asset.s3_version_id, expires_in=ttl
+        )
+    except StorageError:
+        raise DependencyUnavailableError("Image storage is temporarily unavailable.") from None
     return AssetRead(
         asset_id=asset.id,
         creative_id=asset.creative_id,

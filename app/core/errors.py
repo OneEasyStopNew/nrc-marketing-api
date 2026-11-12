@@ -55,9 +55,15 @@ class StudySnapshotMissingError(ConflictError):
 
 
 class GenerationNotEligibleError(ConflictError):
-    # details.reason says which check failed (e.g. STUDY_NOT_RECRUITING).
+    # details.reason says which check failed (e.g. STUDY_CLOSED).
     code = "GENERATION_NOT_ELIGIBLE"
     default_message = "This creative version cannot be sent for image generation."
+
+
+class ValidationNotPassedError(ConflictError):
+    # details: validation_run_id and status of the latest run for that exact creative version.
+    code = "VALIDATION_NOT_PASSED"
+    default_message = "This creative version has not passed validation."
 
 
 class GenerationLimitError(AppError):

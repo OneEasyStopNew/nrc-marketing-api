@@ -12,6 +12,7 @@ from app.services.media import MediaRejectedError, inspect_header
 from app.services.providers.base import (
     FetchedImage,
     ProviderOutputError,
+    ProviderOutputHostError,
     ProviderOutputUnavailableError,
 )
 
@@ -25,6 +26,7 @@ def build_fetch_client() -> httpx.AsyncClient:
 
 
 async def _default_resolver(host: str) -> list[str]:
+    # 443: output URLs must be https (checked before this runs).
     infos = await asyncio.get_running_loop().getaddrinfo(host, 443, type=socket.SOCK_STREAM)
     return [str(info[4][0]) for info in infos]
 
@@ -59,12 +61,15 @@ class SafeFetcher:
         self,
         client: httpx.AsyncClient,
         *,
+        timeout_seconds: float,
         resolver: Callable[[str], Awaitable[list[str]]] | None = None,
-        timeout_seconds: float = 30,
     ) -> None:
         self._client = client
         self._resolver = resolver or _default_resolver
         self._timeout = timeout_seconds
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def __call__(
         self, url: str, *, allowed_hosts: frozenset[str], max_bytes: int
@@ -95,8 +100,10 @@ class SafeFetcher:
             raise ProviderOutputError("The provider output URL must use https")
         if parts.username or parts.password:
             raise ProviderOutputError("The provider output URL must not carry credentials")
-        if not host or host not in allowed_hosts:
-            raise ProviderOutputError("The provider output host is not allowed")
+        if not host:
+            raise ProviderOutputError("The provider output URL is invalid")
+        if host not in allowed_hosts:
+            raise ProviderOutputHostError(host)
         return host
 
     async def _run(self, url: str, host: str, max_bytes: int) -> FetchedImage:

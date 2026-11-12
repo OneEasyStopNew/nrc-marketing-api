@@ -6,24 +6,25 @@ from datetime import UTC, datetime, timedelta
 from typing import Final
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
 from app.core.config import Settings
 from app.core.errors import DependencyUnavailableError, GenerationLimitError, NotFoundError
-from app.models import Creative, CreditReservation, Job, OutboxEvent
+from app.db.session import bind_tenant
+from app.models import Creative, CreditReservation, Job, OutboxEvent, Tenant
 from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobKind, JobRead
-from app.services import eligibility, idempotency
+from app.services import generation_checks, idempotency
+from app.services.providers.base import HIGGSFIELD_NAME
 from app.services.providers.simulator import SIMULATOR_MODEL, SIMULATOR_NAME
 
 logger = logging.getLogger(__name__)
 
 CREATE_ROUTE: Final = "POST /creative-jobs"
 RUN_EVENT: Final = "job.run"
-HIGGSFIELD_NAME: Final = "higgsfield"
 TERMINAL_STATES: Final = frozenset(
     {ExecutionState.SUCCEEDED, ExecutionState.FAILED, ExecutionState.CANCELLED}
 )
@@ -37,6 +38,7 @@ _TAKES_SLOT: Final = or_(
         Job.stage.is_distinct_from(JobStage.OUTPUT_READY),
     ),
 )
+# The "daily" in GENERATION_DAILY_CREDIT_CEILING_PER_TENANT: part of that setting's meaning.
 _CREDIT_WINDOW: Final = timedelta(hours=24)
 
 
@@ -51,7 +53,7 @@ async def accept_creative_job(
 
     Raises:
         IdempotencyKeyReusedError: the key was used before with a different payload.
-        NotFoundError / VersionConflictError / GenerationNotEligibleError: see eligibility.
+        NotFoundError / VersionConflictError / GenerationNotEligibleError: see generation_checks.
         GenerationLimitError: too many active jobs, or the daily credit ceiling would be passed.
     """
     fingerprint = idempotency.request_hash(ctx.principal.sub, data)
@@ -67,7 +69,7 @@ async def accept_creative_job(
         return JobAccepted(job_id=existing_id, state=state), True
 
     provider, model = _provider_for(settings)
-    eligible = await eligibility.assert_generation_eligible(
+    eligible = await generation_checks.assert_generation_eligible(
         db, ctx, data.creative_id, data.creative_version
     )
     # Serialise admission per tenant, so two requests cannot both take the last slot.
@@ -92,7 +94,7 @@ async def accept_creative_job(
             deadline_at=datetime.now(UTC) + timedelta(seconds=settings.generation_deadline_seconds),
             provider=provider,
             model=model,
-            provider_idempotency_key=uuid4(),
+            provider_idempotency_key=provider_idempotency_key(job_id),
             created_by=ctx.principal.sub,
         )
     )
@@ -120,6 +122,11 @@ async def accept_creative_job(
     await db.commit()
     logger.info("job accepted job=%s tenant=%s", job_id, ctx.tenant_id)
     return JobAccepted(job_id=job_id, state=ExecutionState.QUEUED), False
+
+
+def provider_idempotency_key(job_id: UUID) -> str:
+    # Derived from the job, so Higgsfield support can trace a request back to it.
+    return f"nrc-job-{job_id}"
 
 
 async def get_job(db: AsyncSession, ctx: TenantContext, job_id: UUID) -> JobRead:
@@ -202,6 +209,38 @@ async def settle_reservation(db: AsyncSession, job_id: UUID, to: ReservationStat
         .values(**values)
         .execution_options(synchronize_session=False)
     )
+
+
+async def jobs_awaiting_review(db: AsyncSession) -> list[tuple[UUID, UUID]]:
+    """(tenant id, job id) of UNKNOWN jobs the worker has stopped working on, across tenants.
+
+    The worker gives up on them (no unprocessed outbox event is left) while the provider may have
+    billed them, so their credits stay HELD until an operator settles each one. Binds each tenant
+    in turn, so it works under row-level security with any role that can read tenants and jobs.
+    """
+    pending = (
+        select(OutboxEvent.id)
+        .where(
+            OutboxEvent.tenant_id == Job.tenant_id,
+            OutboxEvent.job_id == Job.id,
+            OutboxEvent.processed_at.is_(None),
+        )
+        .correlate(Job)
+    )
+    found: list[tuple[UUID, UUID]] = []
+    for tenant_id in (await db.scalars(select(Tenant.id).order_by(Tenant.id))).all():
+        await bind_tenant(db, tenant_id)
+        job_ids = await db.scalars(
+            select(Job.id)
+            .where(
+                Job.tenant_id == tenant_id,
+                Job.state == ExecutionState.UNKNOWN,
+                ~exists(pending),
+            )
+            .order_by(Job.updated_at)
+        )
+        found.extend((tenant_id, job_id) for job_id in job_ids)
+    return found
 
 
 def _provider_for(settings: Settings) -> tuple[str, str]:

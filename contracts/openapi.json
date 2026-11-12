@@ -981,7 +981,7 @@
             }
           },
           "409": {
-            "description": "GENERATION_NOT_ELIGIBLE (details.reason), or Idempotency-Key reused.",
+            "description": "GENERATION_NOT_ELIGIBLE (details.reason), VALIDATION_NOT_PASSED (details.validation_run_id and status), or Idempotency-Key reused.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1192,7 +1192,7 @@
             }
           },
           "503": {
-            "description": "Object storage is not configured.",
+            "description": "Object storage is not configured or temporarily unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2163,6 +2163,7 @@
           "reconcile",
           "waiting_provider",
           "output_ready",
+          "fetching_output",
           "stored"
         ],
         "title": "JobStage",

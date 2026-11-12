@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
 
 from app.api.deps import CreativeReader, DbSession, GenerationRunner, IdempotencyKey, SettingsDep
 from app.schemas.common import ErrorBody
@@ -22,7 +22,8 @@ router = APIRouter(tags=["jobs"])
         404: {"model": ErrorBody, "description": "Creative not found or not permitted."},
         409: {
             "model": ErrorBody,
-            "description": "GENERATION_NOT_ELIGIBLE (details.reason), or Idempotency-Key reused.",
+            "description": "GENERATION_NOT_ELIGIBLE (details.reason), VALIDATION_NOT_PASSED "
+            "(details.validation_run_id and status), or Idempotency-Key reused.",
         },
         412: {"model": ErrorBody, "description": "Not the current creative version."},
         429: {
@@ -37,10 +38,12 @@ async def create_creative_job(
     db: DbSession,
     settings: SettingsDep,
     idempotency_key: IdempotencyKey,
+    request: Request,
     response: Response,
 ) -> JobAccepted:
     accepted, replayed = await jobs.accept_creative_job(db, ctx, body, idempotency_key, settings)
-    response.headers["Location"] = f"/v1/marketing/jobs/{accepted.job_id}"
+    # The poll route's own path, so the API prefix has one source (app.main.API_PREFIX).
+    response.headers["Location"] = request.app.url_path_for("get_job", job_id=str(accepted.job_id))
     if replayed:
         response.headers["Idempotent-Replayed"] = "true"
     return accepted

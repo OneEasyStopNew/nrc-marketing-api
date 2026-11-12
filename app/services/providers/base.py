@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import ClassVar, Protocol
+from typing import ClassVar, Final, Protocol
+
+# Provider names stored as jobs.provider and provider_spend.provider (seeded by migration
+# 440a8d5dba9a). Here, not in the adapter, so the API can name a provider without importing it.
+HIGGSFIELD_NAME: Final = "higgsfield"
 
 
 class ProviderJobStatus(StrEnum):
@@ -52,6 +56,8 @@ class StatusResult:
     outputs_expire_at: datetime | None = None
     # Safe, provider-supplied reason for FAILED or REJECTED. Never contains credentials.
     failure_code: str | None = None
+    # What the provider says the request cost, only when its response states it explicitly.
+    actual_cost_usd: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +141,7 @@ class ProviderOutcomeUnknownError(ProviderError):
 
 
 class ProviderOutputError(ProviderError):
-    # The output could not be fetched safely (host not allowed, too large, wrong type, expired).
+    # The output could not be fetched safely (too large, wrong type, expired, unreachable).
     code = "PROVIDER_OUTPUT_INVALID"
 
 
@@ -149,3 +155,15 @@ class ProviderOutputUnavailableError(ProviderOutputError):
 class ProviderOutputExpiredError(ProviderOutputError):
     # The provider's output expired before it was fetched. It billed the generation regardless.
     code = "OUTPUT_EXPIRED"
+
+
+class ProviderOutputHostError(ProviderOutputError):
+    # The output URL's host is not in the allowlist, so it is never fetched. Retryable: ops can
+    # add the host (HIGGSFIELD_OUTPUT_HOSTS, then restart the worker) until the output expires.
+    code = "OUTPUT_HOST_NOT_ALLOWED"
+    retryable = True
+
+    def __init__(self, host: str) -> None:
+        # The host only, safe to log: the URL's path and query carry its signature.
+        self.host = host
+        super().__init__("The provider output host is not allowed")

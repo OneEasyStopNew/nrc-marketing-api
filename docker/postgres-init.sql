@@ -3,4 +3,8 @@
 \getenv app_password APP_DB_PASSWORD
 CREATE ROLE marketing_app WITH LOGIN PASSWORD :'app_password'
     NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+-- The connector worker's role, the same way: row-level security applies to it too.
+\getenv worker_password WORKER_DB_PASSWORD
+CREATE ROLE marketing_worker WITH LOGIN PASSWORD :'worker_password'
+    NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
 CREATE DATABASE marketing_test;
