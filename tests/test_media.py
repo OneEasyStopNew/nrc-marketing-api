@@ -294,13 +294,13 @@ def test_fit_applies_exif_orientation() -> None:
 
 
 def test_fit_keeps_the_pixel_cap() -> None:
-    with pytest.raises(MediaRejectedError) as raised:
+    with pytest.raises(MediaRejectedError, match="too many pixels") as raised:
         fit_to_format(_image("PNG", (100, 100)), width_px=1080, height_px=1080, max_pixels=9_999)
     assert raised.value.code == "MEDIA_TOO_LARGE"
 
 
 def test_fit_rejects_a_corrupt_image() -> None:
-    with pytest.raises(MediaRejectedError) as raised:
+    with pytest.raises(MediaRejectedError, match="not a valid, complete image") as raised:
         fit_to_format(_image("PNG")[:-20], width_px=1080, height_px=1080, max_pixels=MAX_PIXELS)
     assert raised.value.code == "MEDIA_CORRUPT"
 
@@ -309,6 +309,6 @@ def test_fit_rejects_a_corrupt_image() -> None:
 @pytest.mark.parametrize("size", [(120, 100), (200, 100)])
 def test_fit_to_format_respects_the_pillow_limit(size: tuple[int, int]) -> None:
     configure_pillow(get_settings().model_copy(update={"max_image_pixels": 10_000}))
-    with pytest.raises(MediaRejectedError) as raised:
+    with pytest.raises(MediaRejectedError, match="too many pixels") as raised:
         fit_to_format(_image("PNG", size), width_px=10, height_px=10, max_pixels=MAX_PIXELS)
     assert raised.value.code == "MEDIA_TOO_LARGE"

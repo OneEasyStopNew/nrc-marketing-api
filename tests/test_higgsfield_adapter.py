@@ -532,9 +532,9 @@ async def test_unsupported_aspect_ratio_fails_before_any_request() -> None:
         prompt=PROMPT, width_px=1, height_px=1, aspect_ratio="21:9", idempotency_key="k"
     )
     provider = make(handler)
-    with pytest.raises(ProviderRejectedError):
+    with pytest.raises(ProviderRejectedError, match="aspect ratio"):
         await provider.estimate_cost_usd(odd)
-    with pytest.raises(ProviderRejectedError):
+    with pytest.raises(ProviderRejectedError, match="aspect ratio"):
         await provider.submit(odd)
     assert seen == []
 
