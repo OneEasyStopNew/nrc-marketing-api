@@ -66,12 +66,37 @@ def test_init_refuses_to_overwrite_without_force() -> None:
 
 
 @pytest.mark.usefixtures("key_dir")
-@pytest.mark.parametrize(("sub", "hours"), [("bad sub", 1), ("dev-x", 0), ("dev-x", 25)])
-def test_issue_rejects_bad_input(sub: str, hours: int) -> None:
+@pytest.mark.parametrize(
+    ("sub", "hours", "message"),
+    [("bad sub", 1, "invalid --sub"), ("dev-x", 0, "--hours"), ("dev-x", 25, "--hours")],
+)
+def test_issue_rejects_bad_input(sub: str, hours: int, message: str) -> None:
     dev_token.init(force=False)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit, match=message):
         dev_token.issue(sub, hours=hours)
+
+
+@pytest.mark.usefixtures("key_dir")
+def test_init_keeps_the_existing_key_when_refusing() -> None:
+    dev_token.init(force=False)
+    original = dev_token.PRIVATE_KEY.read_bytes()
+
+    with pytest.raises(SystemExit, match="already exists"):
+        dev_token.init(force=False)
+
+    assert dev_token.PRIVATE_KEY.read_bytes() == original
+    assert not list(dev_token.KEY_DIR.glob("*.tmp"))
+
+
+@pytest.mark.usefixtures("key_dir")
+def test_init_with_force_replaces_the_key() -> None:
+    dev_token.init(force=False)
+    original = dev_token.PRIVATE_KEY.read_bytes()
+
+    dev_token.init(force=True)
+
+    assert dev_token.PRIVATE_KEY.read_bytes() != original
 
 
 @pytest.mark.parametrize("app_env", ["staging", "production"])

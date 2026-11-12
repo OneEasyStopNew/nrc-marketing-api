@@ -72,9 +72,14 @@ async def test_unknown_tenant_is_rejected(connection: AsyncConnection) -> None:
 
 
 @pytest.mark.parametrize(
-    "value",
-    [f"{COGNITO_SUB}=", "=creator", f"{COGNITO_SUB}=policy-admin", "bad sub=creator"],
+    ("value", "message"),
+    [
+        (f"{COGNITO_SUB}=", "expected <cognito-sub>="),
+        ("=creator", "expected <cognito-sub>="),
+        (f"{COGNITO_SUB}=policy-admin", "unknown roles"),
+        ("bad sub=creator", "expected <cognito-sub>="),
+    ],
 )
-def test_member_argument_is_validated(value: str) -> None:
-    with pytest.raises(argparse.ArgumentTypeError):
+def test_member_argument_is_validated(value: str, message: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match=message):
         parse_member(value)

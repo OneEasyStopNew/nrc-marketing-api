@@ -35,14 +35,22 @@ MAX_HOURS: Final = 24
 _SUB: Final = re.compile(r"[A-Za-z0-9-]{1,128}")
 
 
-def _write_atomic(path: Path, content: bytes, mode: int) -> None:
-    # Owner-only permissions from creation (where the OS supports them), then an atomic rename.
+def _write_atomic(path: Path, content: bytes, mode: int, *, overwrite: bool) -> None:
+    """Write a complete file in one step, with owner-only permissions from creation.
+
+    With overwrite=False the file system itself refuses an existing target (FileExistsError),
+    so there is no gap between checking and writing.
+    """
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
         os.chmod(tmp, mode)
         with os.fdopen(fd, "wb") as handle:
             handle.write(content)
-        os.replace(tmp, path)
+        if overwrite:
+            os.replace(tmp, path)
+        else:
+            os.link(tmp, path)
+            os.unlink(tmp)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
@@ -50,8 +58,6 @@ def _write_atomic(path: Path, content: bytes, mode: int) -> None:
 
 def init(*, force: bool) -> Path:
     """Create the key pair. Returns the JWKS path to set as DEV_JWKS_FILE."""
-    if PRIVATE_KEY.exists() and not force:
-        raise SystemExit(f"{PRIVATE_KEY} already exists; pass --force to replace it.")
     KEY_DIR.mkdir(mode=0o700, exist_ok=True)
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     pem = key.private_bytes(
@@ -61,8 +67,11 @@ def init(*, force: bool) -> Path:
     )
     public_jwk = RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
     jwks = {"keys": [{**public_jwk, "kid": KID, "alg": "RS256", "use": "sig"}]}
-    _write_atomic(PRIVATE_KEY, pem, 0o600)
-    _write_atomic(JWKS, json.dumps(jwks, indent=2).encode("utf-8"), 0o644)
+    try:
+        _write_atomic(PRIVATE_KEY, pem, 0o600, overwrite=force)
+    except FileExistsError:
+        raise SystemExit(f"{PRIVATE_KEY} already exists; pass --force to replace it.") from None
+    _write_atomic(JWKS, json.dumps(jwks, indent=2).encode("utf-8"), 0o644, overwrite=True)
     return JWKS
 
 
