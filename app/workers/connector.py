@@ -41,6 +41,7 @@ from app.models.enums import FORMAT_SPECS, ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.schemas.jobs import JobKind
 from app.services import eligibility
+from app.services.assets import StoredImageSink
 from app.services.jobs import (
     HIGGSFIELD_NAME,
     NON_TERMINAL_STATES,
@@ -48,6 +49,7 @@ from app.services.jobs import (
     settle_reservation,
     transition,
 )
+from app.services.media import configure_pillow
 from app.services.providers.base import (
     TERMINAL_PROVIDER_STATUSES,
     FetchedImage,
@@ -60,6 +62,7 @@ from app.services.providers.base import (
     SubmitResult,
 )
 from app.services.providers.simulator import SIMULATOR_NAME, SimulatedImageProvider
+from app.services.storage import ObjectStorage
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +120,7 @@ class LeaseLostError(Exception):
 
 
 class GeneratedImageSink(Protocol):
-    """Stores a generated image and its asset row (real implementation: NRC-3).
+    """Stores a generated image and its asset row (implementation: app.services.assets).
 
     Called inside the job's transaction with the tenant bound; returns the new asset id, which
     the worker records as the job's result_asset_id in the same transaction. Raise a
@@ -692,6 +695,9 @@ def check_live_mode(settings: Settings) -> None:
     ]
     if missing:
         problems.append(f"missing {', '.join(missing)}")
+    if not settings.aws_s3_bucket:
+        # Without storage, finished jobs would park forever; production never runs that way.
+        problems.append("missing AWS_S3_BUCKET (generated images need storage)")
     if eligibility.VALIDATION_GATE_IS_STUB:
         problems.append("the validation-PASS gate is still the stub (NRC-7)")
     if problems:
@@ -729,8 +735,8 @@ async def run_forever(settings: Settings) -> None:
     sessions = create_sessionmaker(engine)
     stop = asyncio.Event()
     _stop_on_signals(stop)
-    # Storage is wired in NRC-3; until then completed jobs stop at the persisted provider result.
-    sink: GeneratedImageSink | None = None
+    # Simulator mode may run without storage: completed jobs then park at the provider result.
+    sink = StoredImageSink(ObjectStorage(settings), settings) if settings.aws_s3_bucket else None
     logger.info("connector worker started mode=%s", settings.generation_mode)
     try:
         while not stop.is_set():
@@ -761,6 +767,7 @@ def _stop_on_signals(stop: asyncio.Event) -> None:
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    configure_pillow(settings)
     try:
         asyncio.run(run_forever(settings))
     except WorkerConfigError as error:

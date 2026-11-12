@@ -7,15 +7,28 @@ import pytest
 from pydantic import BaseModel
 
 from app.models.enums import JobStage
+from app.schemas.assets import AssetRead
 from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeRead, CreativeVersionPage
+from app.schemas.jobs import JobAccepted, JobRead
 from app.schemas.tenancy import ContextRead, MeRead
 from scripts.export_openapi import CONTRACT_PATH, render
 
-EXAMPLES = Path(__file__).resolve().parents[1] / "contracts" / "examples" / "d1.json"
+EXAMPLE_FILES = sorted(
+    (Path(__file__).resolve().parents[1] / "contracts" / "examples").glob("*.json")
+)
 SCHEMAS: dict[str, type[BaseModel]] = {
     model.__name__: model
-    for model in (ContextRead, CreativeRead, CreativeVersionPage, ErrorBody, MeRead)
+    for model in (
+        AssetRead,
+        ContextRead,
+        CreativeRead,
+        CreativeVersionPage,
+        ErrorBody,
+        JobAccepted,
+        JobRead,
+        MeRead,
+    )
 }
 
 
@@ -36,12 +49,19 @@ def test_job_stage_is_a_published_enum() -> None:
     assert schemas["JobStage"]["enum"] == [stage.value for stage in JobStage]
 
 
-@pytest.mark.parametrize(
-    "name",
-    [name for name in json.loads(EXAMPLES.read_text(encoding="utf-8")) if not name.startswith("_")],
-)
-def test_example_matches_schema(name: str) -> None:
-    example = json.loads(EXAMPLES.read_text(encoding="utf-8"))[name]
+def _examples() -> list[tuple[str, str]]:
+    return [
+        (path.name, name)
+        for path in EXAMPLE_FILES
+        for name in json.loads(path.read_text(encoding="utf-8"))
+        if not name.startswith("_")
+    ]
+
+
+@pytest.mark.parametrize(("file", "name"), _examples())
+def test_example_matches_schema(file: str, name: str) -> None:
+    path = next(path for path in EXAMPLE_FILES if path.name == file)
+    example = json.loads(path.read_text(encoding="utf-8"))[name]
 
     model = SCHEMAS[example["schema"]].model_validate(example["body"])
 

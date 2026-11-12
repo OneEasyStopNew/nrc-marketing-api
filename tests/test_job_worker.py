@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionm
 
 from app.core.config import Settings, get_settings
 from app.db.session import TenantSession, bind_tenant
-from app.models import CreditReservation, Job
+from app.models import Asset, CreditReservation, Job
 from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.services.jobs import transition
@@ -33,6 +33,7 @@ from app.services.providers.base import (
     ProviderOutcomeUnknownError,
     ProviderOutputError,
     ProviderOutputExpiredError,
+    ProviderOutputUnavailableError,
     ProviderRateLimitedError,
     StatusResult,
     SubmitResult,
@@ -54,7 +55,7 @@ Sessions = async_sessionmaker[AsyncSession]
 
 
 class FakeSink:
-    # Stands in for generated-image storage (NRC-3).
+    # Stands in for generated-image storage: a metadata row without any object.
 
     def __init__(self) -> None:
         self.stored: list[UUID] = []
@@ -64,8 +65,26 @@ class FakeSink:
     ) -> UUID:
         assert image.content.startswith(b"\x89PNG")
         assert provider_name == "simulator"
-        self.stored.append(uuid4())
-        return self.stored[-1]
+        # A real row, because jobs.result_asset_id is a foreign key to assets.
+        asset = Asset(
+            tenant_id=job.tenant_id,
+            creative_id=job.creative_id,
+            creative_version=job.creative_version,
+            job_id=job.id,
+            origin="generated",
+            bucket="fake",
+            s3_key=f"fake/{uuid4()}.png",
+            mime_type="image/png",
+            width_px=1,
+            height_px=1,
+            size_bytes=len(image.content),
+            checksum_sha256="0" * 64,
+            created_by=job.created_by,
+        )
+        db.add(asset)
+        await db.flush()
+        self.stored.append(asset.id)
+        return asset.id
 
 
 @pytest.fixture
@@ -655,6 +674,29 @@ async def test_unusable_output_fails_and_keeps_credits_billed(
     job, reservation = await _load(sessions, world, job_id)
     assert (job.state, job.failure_code) == (ExecutionState.FAILED, "OUTPUT_UNAVAILABLE")
     assert reservation is ReservationState.COMMITTED
+
+
+async def test_transient_fetch_failure_keeps_the_job_and_retries_the_fetch(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    provider, sink = ScriptedProvider(), FakeSink()
+    provider.fetch_error = ProviderOutputUnavailableError("Simulated network blip.")
+
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.WAITING_PROVIDER
+    assert reservation is ReservationState.RESERVED
+    assert (await _event(connection)).processed_at is None
+
+    provider.fetch_error = None
+    await _requeue(connection, world)
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert reservation is ReservationState.COMMITTED
+    assert len(sink.stored) == 1
 
 
 async def test_lost_lease_abandons_the_step_without_touching_the_job(

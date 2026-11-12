@@ -44,6 +44,12 @@ class Job(Base):
             ["tenant_id", "study_snapshot_id"],
             ["study_snapshots.tenant_id", "study_snapshots.id"],
         ),
+        # use_alter: jobs and assets reference each other, so this one is added after both exist.
+        ForeignKeyConstraint(
+            ["tenant_id", "result_asset_id"],
+            ["assets.tenant_id", "assets.id"],
+            use_alter=True,
+        ),
         Index("ix_jobs_tenant_id_state", "tenant_id", "state"),
     )
 
@@ -70,7 +76,6 @@ class Job(Base):
     provider_cost_estimate_usd_micros: Mapped[int | None] = mapped_column(BigInteger)
     failure_code: Mapped[str | None] = mapped_column(String(64))
     failure_message: Mapped[str | None] = mapped_column(String(500))
-    # The foreign key to assets arrives with the assets table (NRC-3).
     result_asset_id: Mapped[UUID | None]
     created_by: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

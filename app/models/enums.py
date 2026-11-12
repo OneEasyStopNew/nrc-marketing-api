@@ -48,7 +48,7 @@ class JobStage(StrEnum):
     RETRY_WAIT = "retry_wait"
     RECONCILE = "reconcile"
     WAITING_PROVIDER = "waiting_provider"
-    # Provider finished but no storage is wired yet (NRC-3): the job is parked at this result.
+    # Provider finished but the worker has no storage configured: the job is parked at this result.
     OUTPUT_READY = "output_ready"
     STORED = "stored"
 
