@@ -84,20 +84,35 @@ Policy and generation:
 - `GET /creatives/{id}/generation-eligibility[?version=N]` says whether generation may start and why
   not (`reason`). The generation job calls `app.services.eligibility.check_generation_eligibility`
   and raises `GenerationNotEligibleError` (409 `GENERATION_NOT_ELIGIBLE`) unless it is eligible.
-  Until brief validation ships, the best possible answer is `NOT_VALIDATED`.
+  Only the latest stored brief run of that exact version counts, and only if it was checked against
+  the current policy version.
 
-## Demo stubs (frontend integration before D2-D5)
+Validation (NRC-7):
+
+- `POST /validations` with `input_kind` `brief` (the prompt) or `text` (the caption) runs the rule
+  checks in `app/services/rules.py` and stores the run before it answers, so `state` is already
+  `SUCCEEDED`. `job_id` equals `validation_run_id` until validation runs on the job framework.
+- The checks are phrase and study-fact matches: REC-01 to REC-06 phrases, REC-07 the research and
+  voluntary disclosure (captions only), REC-08 ages and payment amounts against the approved study
+  facts. A policy rule with no check is `UNABLE_TO_ASSESS` and listed in `coverage_gaps`; if it is
+  mandatory, the outcome is `NEEDS_REVIEW`. Every run also says that no review of meaning ran.
+- Runs are immutable: the API role can insert them but not change them. `is_current` turns false
+  when the creative gets a new version or the policy a new version.
+- A tenant without a policy gets 409 `NO_ACTIVE_POLICY`. Image input answers 501 unless
+  `DEMO_STUBS=true`.
+
+## Demo stubs (frontend integration before D3-D5)
 
 Set `DEMO_STUBS=true` (and `DEMO_PUBLIC_BASE_URL` to the address the frontend uses) and run one
-worker. Validations, generation jobs, assets and export then answer with simulated data in the
-real contract shapes instead of `501`:
+worker. Image validation, generation jobs, assets and export then answer with simulated data in
+the real contract shapes instead of `501`. Brief and caption validation is always real.
 
-- Validation results come from phrase checks against the tenant's active policy (for example
-  "guaranteed" fails REC-04), not from a real validator. Every run says so in `coverage_gaps`.
-- A brief run takes 2 s and a generation job 6 s (QUEUED, RUNNING, WAITING_PROVIDER, SUCCEEDED),
-  so polling UIs can be exercised. Generation needs a passing brief run for that exact version.
-- The image is a placeholder SVG served from `/demo-files/{asset_id}`.
-- Nothing is stored in the database; restarting the API forgets every run, job and asset.
+- A generation job takes 6 s (QUEUED, RUNNING, WAITING_PROVIDER, SUCCEEDED) and an image check 2 s,
+  so polling UIs can be exercised. Generation needs a stored, current, passing brief run.
+- The image is a placeholder SVG served from `/demo-files/{asset_id}`. Its check uses the brief,
+  since the placeholder has no content: a brief that says "get paid" gets a REC-06 region.
+- Export bundles the image with the latest stored validation run of the current version.
+- Stub jobs, images and image checks live in memory; restarting the API forgets them.
 
 Never enable it in staging or production.
 
@@ -129,6 +144,7 @@ machine that ran `init`.
 
 ## Not done yet
 
-Validation (D2), Higgsfield generation and assets (D3), image checks (D4), export (D5), and the
+A review of meaning (AI checks and GraphRAG over the policy sources) for briefs and captions,
+Higgsfield generation and assets (D3), image checks (D4), export (D5), and the
 staging deployment (D6). Cleanup of old idempotency keys, the study import from the approved demo
 study and the approved policy rules are still to do. The seeded study and policy are synthetic.

@@ -5,6 +5,7 @@ from app.models.idempotency import IdempotencyRecord
 from app.models.policies import PolicyBundle
 from app.models.studies import Study, StudySnapshot
 from app.models.tenancy import Membership, MembershipStudy, Tenant
+from app.models.validations import ValidationRun
 
 __all__ = [
     "Creative",
@@ -16,4 +17,5 @@ __all__ = [
     "Study",
     "StudySnapshot",
     "Tenant",
+    "ValidationRun",
 ]

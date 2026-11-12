@@ -60,6 +60,11 @@ class GenerationNotEligibleError(ConflictError):
     default_message = "This creative version has not passed brief validation yet."
 
 
+class NoActivePolicyError(ConflictError):
+    code = "NO_ACTIVE_POLICY"
+    default_message = "This tenant has no active policy to validate against."
+
+
 class ExportNotReadyError(ConflictError):
     code = "EXPORT_NOT_READY"
     default_message = "Generate an image for the current version before exporting."

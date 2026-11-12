@@ -1,4 +1,8 @@
-"""Simulated validation, generation, assets and export (DEMO_STUBS=true)."""
+"""Simulated image validation, generation, assets and export (DEMO_STUBS=true).
+
+Briefs are validated for real (tests/test_validations.py); the stubs' generation gate reads
+those stored runs.
+"""
 
 from collections.abc import Callable
 from typing import Any
@@ -124,29 +128,28 @@ async def _generate(
     )
 
 
-async def test_validation_runs_then_reports_findings_with_spans(
+async def test_image_validation_runs_then_finishes(
     client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
-    creative = await _creative(client, auth, world, RISKY_PROMPT)
+    creative = await _creative(client, auth, world)
+    await _finished_run(client, auth, world, clock, creative)
+    job_id = (await _generate(client, auth, world, creative)).json()["job_id"]
+    clock.now += 6
+    headers = auth("creator-a", world.a.tenant_id)
+    asset_id = (await client.get(f"{API}/jobs/{job_id}", headers=headers)).json()["result_asset_id"]
 
-    started = await _validate(client, auth, world, creative)
+    started = await _validate(client, auth, world, creative, "image", asset_id=asset_id)
     run_url = f"{API}/validations/{started.json()['validation_run_id']}"
-    running = await client.get(run_url, headers=auth("creator-a", world.a.tenant_id))
+    running = await client.get(run_url, headers=headers)
     clock.now += 2
-    finished = await client.get(run_url, headers=auth("creator-a", world.a.tenant_id))
+    finished = await client.get(run_url, headers=headers)
 
     assert started.status_code == 202
     assert running.json()["state"] == "RUNNING"
     assert running.json()["outcome"] is None
-    body = finished.json()
-    assert body["state"] == "SUCCEEDED"
-    assert body["outcome"] == "FAIL"
-    assert body["policy_bundle_version"] == 1
-    excerpts = {f["rule_id"]: f["offending_excerpt"] for f in body["findings"]}
-    assert excerpts == {"REC-03": "new drug", "REC-04": "Guaranteed", "REC-05": "free treatment"}
-    span = next(f["text_span"] for f in body["findings"] if f["rule_id"] == "REC-04")
-    assert RISKY_PROMPT[span["start"] : span["end"]] == "Guaranteed"
-    assert body["coverage_gaps"][0]["reason"].startswith("Demo stub")
+    assert finished.json()["state"] == "SUCCEEDED"
+    assert finished.json()["outcome"] == "PASS"
+    assert finished.json()["coverage_gaps"][-1]["reason"].startswith("Demo stub")
 
 
 async def test_clean_brief_passes_and_makes_the_version_eligible(
@@ -216,7 +219,9 @@ async def test_generation_progresses_to_a_downloadable_image_and_export(
 async def test_image_validation_flags_payment_in_a_region(
     client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
-    creative = await _creative(client, auth, world, f"{CLEAN_PROMPT} Get paid $50.")
+    # "Get paid" without an amount: REC-06 (payment emphasis) checks images, not briefs, and with
+    # no amount REC-08 (approved compensation) has nothing to flag, so the brief still passes.
+    creative = await _creative(client, auth, world, f"{CLEAN_PROMPT} Get paid for your time.")
     brief = await _finished_run(client, auth, world, clock, creative)
     job_id = (await _generate(client, auth, world, creative)).json()["job_id"]
     clock.now += 6
@@ -285,6 +290,26 @@ async def test_export_needs_an_image_for_the_current_version(
 
     assert response.status_code == 409
     assert response.json()["code"] == "EXPORT_NOT_READY"
+
+
+async def test_image_of_another_version_is_not_found(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+) -> None:
+    creative = await _creative(client, auth, world)
+    await _finished_run(client, auth, world, clock, creative)
+    job_id = (await _generate(client, auth, world, creative)).json()["job_id"]
+    clock.now += 6
+    headers = auth("creator-a", world.a.tenant_id)
+    asset_id = (await client.get(f"{API}/jobs/{job_id}", headers=headers)).json()["result_asset_id"]
+    edited = await client.patch(
+        f"{API}/creatives/{creative['id']}",
+        headers=auth("creator-a", world.a.tenant_id, **{"If-Match": '"1"'}),
+        json={"caption": "Learn about a research study near you. Taking part is voluntary."},
+    )
+
+    response = await _validate(client, auth, world, edited.json(), "image", asset_id=asset_id)
+
+    assert response.status_code == 404
 
 
 async def test_image_validation_needs_a_generated_asset(

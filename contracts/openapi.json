@@ -899,8 +899,8 @@
         "tags": [
           "validations"
         ],
-        "summary": "Start validating a brief, caption or image (D2/D4)",
-        "description": "Poll GET /validations/{validation_run_id} until state is SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run.",
+        "summary": "Validate a brief, caption or image",
+        "description": "Briefs and captions are checked against the active policy and the study facts before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run.",
         "operationId": "create_validation",
         "security": [
           {
@@ -1007,7 +1007,7 @@
             }
           },
           "409": {
-            "description": "Idempotency-Key reused with a different body.",
+            "description": "NO_ACTIVE_POLICY, or Idempotency-Key reused with a different body.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1024,7 +1024,7 @@
         "tags": [
           "validations"
         ],
-        "summary": "Validation outcome, gates, findings and coverage gaps (D2/D4)",
+        "summary": "Validation outcome, gates, findings and coverage gaps",
         "operationId": "get_validation",
         "security": [
           {
