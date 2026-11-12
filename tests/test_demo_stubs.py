@@ -13,7 +13,7 @@ import pytest
 
 from app.api.deps import get_demo_stubs
 from app.services.demo_stubs import DemoStubs, StubTimings
-from tests.conftest import AuthHeaders, World
+from tests.conftest import CREATOR_A_NAME, AuthHeaders, World
 
 API = "/v1/marketing"
 CLEAN_PROMPT = "Invite adults with high blood pressure to learn about our research study."
@@ -326,3 +326,70 @@ async def test_unknown_or_unfinished_file_is_not_found(client: httpx.AsyncClient
     response = await client.get(f"/demo-files/{UUID(int=1)}")
 
     assert response.status_code == 404
+
+
+async def _generated_image(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    clock: FakeClock,
+    prompt: str = CLEAN_PROMPT,
+) -> str:
+    creative = await _creative(client, auth, world, prompt)
+    await _finished_run(client, auth, world, clock, creative)
+    job_id = (await _generate(client, auth, world, creative)).json()["job_id"]
+    clock.now += 6
+    job = await client.get(f"{API}/jobs/{job_id}", headers=auth("creator-a", world.a.tenant_id))
+    asset_id: str = job.json()["result_asset_id"]
+    return asset_id
+
+
+async def test_media_lists_finished_images_newest_first_in_pages(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+) -> None:
+    older = await _generated_image(client, auth, world, clock)
+    newer = await _generated_image(client, auth, world, clock, f"{CLEAN_PROMPT} Ask your doctor.")
+    unfinished = await _creative(client, auth, world, f"{CLEAN_PROMPT} Find out more.")
+    await _finished_run(client, auth, world, clock, unfinished)
+    await _generate(client, auth, world, unfinished)
+    headers = auth("creator-a", world.a.tenant_id)
+
+    first = await client.get(f"{API}/media", params={"limit": 1}, headers=headers)
+    second = await client.get(
+        f"{API}/media",
+        params={"limit": 1, "cursor": first.json()["next_cursor"]},
+        headers=headers,
+    )
+
+    assert first.status_code == 200, first.text
+    assert [item["asset_id"] for item in first.json()["items"]] == [newer]
+    assert [item["asset_id"] for item in second.json()["items"]] == [older]
+    assert second.json()["next_cursor"] is None
+    item = first.json()["items"][0]
+    assert item["origin"] == "generated"
+    assert item["creative_version"] == 1
+    assert (item["created_by"], item["created_by_name"]) == ("creator-a", CREATOR_A_NAME)
+    assert item["download_url"].startswith(f"{BASE_URL}/demo-files/")
+
+
+async def test_media_of_another_tenant_is_not_listed(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+) -> None:
+    await _generated_image(client, auth, world, clock)
+
+    response = await client.get(f"{API}/media", headers=auth("creator-b", world.b.tenant_id))
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "next_cursor": None}
+
+
+async def test_media_cursor_must_carry_a_time_zone(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    response = await client.get(
+        f"{API}/media",
+        params={"cursor": "2026-11-12T10:00:00"},
+        headers=auth("creator-a", world.a.tenant_id),
+    )
+
+    assert response.status_code == 422

@@ -13,10 +13,12 @@ not to one tenant.
 import argparse
 import asyncio
 import json
-from collections.abc import Sequence
+import unicodedata
+from collections.abc import Mapping, Sequence
+from typing import Final
 from uuid import UUID
 
-from sqlalchemy import literal, select
+from sqlalchemy import func, literal, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -26,15 +28,31 @@ from app.db.session import TenantSession, bind_tenant
 from app.models import Membership, MembershipStudy, Study, Tenant
 from scripts.seed_demo import parse_member
 
+MAX_DISPLAY_NAME: Final = 200
+
 
 class UnknownTenantError(LookupError):
     pass
 
 
+def parse_display_name(value: str) -> tuple[str, str]:
+    sub, _, raw_name = value.partition("=")
+    # NFC for display text (PY-120); collapse runs of whitespace so names render on one line.
+    name = " ".join(unicodedata.normalize("NFC", raw_name).split())
+    if not sub or not name or len(name) > MAX_DISPLAY_NAME:
+        raise argparse.ArgumentTypeError(
+            f"expected <cognito-sub>=<name of 1-{MAX_DISPLAY_NAME} characters>, got {value!r}"
+        )
+    return sub, name
+
+
 async def grant_access(
-    db: AsyncSession, tenant_id: UUID, members: Sequence[tuple[str, list[str]]]
+    db: AsyncSession,
+    tenant_id: UUID,
+    members: Sequence[tuple[str, list[str]]],
+    display_names: Mapping[str, str] | None = None,
 ) -> list[UUID]:
-    """Upsert each member's roles in the tenant and give them every study in it.
+    """Upsert each member's roles (and display name, when given) and give them every study.
 
     Returns:
         The study IDs the members can now use.
@@ -45,12 +63,21 @@ async def grant_access(
     if await db.get(Tenant, tenant_id) is None:
         raise UnknownTenantError(f"no tenant with id {tenant_id}")
     await bind_tenant(db, tenant_id)
+    names = display_names or {}
     for sub, roles in members:
-        upsert = insert(Membership).values(tenant_id=tenant_id, user_sub=sub, roles=roles)
+        upsert = insert(Membership).values(
+            tenant_id=tenant_id, user_sub=sub, roles=roles, display_name=names.get(sub)
+        )
         await db.execute(
             upsert.on_conflict_do_update(
                 index_elements=[Membership.tenant_id, Membership.user_sub],
-                set_={"roles": upsert.excluded.roles, "is_active": True},
+                set_={
+                    "roles": upsert.excluded.roles,
+                    "is_active": True,
+                    "display_name": func.coalesce(
+                        upsert.excluded.display_name, Membership.display_name
+                    ),
+                },
             )
         )
         await db.execute(
@@ -65,13 +92,15 @@ async def grant_access(
     return sorted(study_ids)
 
 
-async def _run(tenant_id: UUID, members: Sequence[tuple[str, list[str]]]) -> list[UUID]:
+async def _run(
+    tenant_id: UUID, members: Sequence[tuple[str, list[str]]], display_names: Mapping[str, str]
+) -> list[UUID]:
     engine = create_async_engine(
         OwnerDatabaseSettings().migration_database_url.get_secret_value(), poolclass=NullPool
     )
     try:
         async with AsyncSession(engine, sync_session_class=TenantSession) as db:
-            study_ids = await grant_access(db, tenant_id, members)
+            study_ids = await grant_access(db, tenant_id, members, display_names)
             await db.commit()
     finally:
         await engine.dispose()
@@ -82,9 +111,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--tenant-id", type=UUID, required=True)
     parser.add_argument("--member", type=parse_member, action="append", required=True)
+    parser.add_argument(
+        "--display-name", type=parse_display_name, action="append", default=[], metavar="SUB=NAME"
+    )
     args = parser.parse_args()
+    display_names = dict(args.display_name)
+    unknown = sorted(display_names.keys() - {sub for sub, _ in args.member})
+    if unknown:
+        parser.error(f"--display-name given for subs without --member: {unknown}")
     try:
-        study_ids = asyncio.run(_run(args.tenant_id, args.member))
+        study_ids = asyncio.run(_run(args.tenant_id, args.member, display_names))
     except UnknownTenantError as err:
         parser.error(str(err))
     result = {

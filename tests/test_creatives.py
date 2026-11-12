@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
-from tests.conftest import AuthHeaders, World
+from tests.conftest import CREATOR_A_NAME, AuthHeaders, World
 
 CREATIVES = "/v1/marketing/creatives"
 
@@ -288,3 +288,36 @@ async def test_unimplemented_contract_endpoints_say_so(
 
     assert response.status_code == 501
     assert response.json()["code"] == "NOT_IMPLEMENTED"
+
+
+async def test_media_library_says_not_implemented_without_demo_stubs(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    response = await client.get("/v1/marketing/media", headers=auth("creator-a", world.a.tenant_id))
+
+    assert response.status_code == 501
+    assert response.json()["code"] == "NOT_IMPLEMENTED"
+
+
+async def test_version_history_names_the_author(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    named = await _create(client, auth, world)
+    unnamed = await client.post(
+        CREATIVES,
+        headers=auth("creator-b", world.b.tenant_id, **{"Idempotency-Key": uuid4().hex}),
+        json=_draft(world.b.study_id),
+    )
+
+    named_versions = await client.get(
+        f"{CREATIVES}/{named['id']}/versions", headers=auth("creator-a", world.a.tenant_id)
+    )
+    unnamed_versions = await client.get(
+        f"{CREATIVES}/{unnamed.json()['id']}/versions",
+        headers=auth("creator-b", world.b.tenant_id),
+    )
+
+    assert named_versions.json()["items"][0]["created_by"] == "creator-a"
+    assert named_versions.json()["items"][0]["created_by_name"] == CREATOR_A_NAME
+    assert unnamed_versions.json()["items"][0]["created_by"] == "creator-b"
+    assert unnamed_versions.json()["items"][0]["created_by_name"] is None

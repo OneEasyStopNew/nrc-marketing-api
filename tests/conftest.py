@@ -5,7 +5,7 @@ owner, then the connection switches to the marketing_app role so row-level secur
 """
 
 import time
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -130,16 +130,26 @@ class SeededTenant:
     policy_bundle_id: UUID | None
 
 
+CREATOR_A_NAME = "Priya Shah"
+
+
 async def seed_tenant(
-    db: AsyncSession, *, name: str, members: dict[str, list[str]], with_policy: bool
+    db: AsyncSession,
+    *,
+    name: str,
+    members: dict[str, list[str]],
+    with_policy: bool,
+    display_names: Mapping[str, str] | None = None,
 ) -> SeededTenant:
     # Tenant with one recruiting and one closed synthetic study; every member gets both.
     tenant_id, study_id, closed_study_id, snapshot_id = uuid4(), uuid4(), uuid4(), uuid4()
     # Models have no ORM relationships, so each parent level is flushed before its children.
     db.add(Tenant(id=tenant_id, name=name))
     await db.flush()
+    names = display_names or {}
     db.add_all(
-        Membership(tenant_id=tenant_id, user_sub=sub, roles=roles) for sub, roles in members.items()
+        Membership(tenant_id=tenant_id, user_sub=sub, roles=roles, display_name=names.get(sub))
+        for sub, roles in members.items()
     )
     db.add_all(
         [
@@ -192,6 +202,7 @@ async def seed_tenant(
 @dataclass(frozen=True, slots=True)
 class World:
     # Two tenants. creator-a and reviewer-a belong to A; creator-b to B. Only A has a policy.
+    # Only creator-a has a display name.
 
     a: SeededTenant
     b: SeededTenant
@@ -228,6 +239,7 @@ async def world(connection: AsyncConnection) -> World:
             name="Tenant A",
             members={"creator-a": ["creator"], "reviewer-a": ["reviewer"]},
             with_policy=True,
+            display_names={"creator-a": CREATOR_A_NAME},
         )
         b = await seed_tenant(
             seed, name="Tenant B", members={"creator-b": ["creator"]}, with_policy=False

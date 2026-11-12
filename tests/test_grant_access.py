@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.db.session import TenantSession
 from app.models import Membership, MembershipStudy
-from scripts.grant_access import UnknownTenantError, grant_access
+from scripts.grant_access import UnknownTenantError, grant_access, parse_display_name
 from scripts.seed_demo import parse_member
 from tests.conftest import seed_tenant
 
@@ -83,3 +83,34 @@ async def test_unknown_tenant_is_rejected(connection: AsyncConnection) -> None:
 def test_member_argument_is_validated(value: str, message: str) -> None:
     with pytest.raises(argparse.ArgumentTypeError, match=message):
         parse_member(value)
+
+
+async def test_display_name_is_set_and_kept_on_rerun_without_one(
+    connection: AsyncConnection,
+) -> None:
+    async with _owner_session(connection) as db:
+        tenant = await seed_tenant(db, name="Demo", members={}, with_policy=False)
+        await grant_access(
+            db, tenant.tenant_id, [(COGNITO_SUB, ["creator"])], {COGNITO_SUB: "Priya Shah"}
+        )
+
+        await grant_access(db, tenant.tenant_id, [(COGNITO_SUB, ["reviewer"])])
+
+        name = await db.scalar(
+            select(Membership.display_name).where(Membership.user_sub == COGNITO_SUB)
+        )
+    assert name == "Priya Shah"
+
+
+def test_display_name_argument_is_normalised() -> None:
+    sub, name = parse_display_name(f"{COGNITO_SUB}=  José   Ruiz ")
+
+    assert (sub, name) == (COGNITO_SUB, "José Ruiz")
+
+
+@pytest.mark.parametrize(
+    "value", [f"{COGNITO_SUB}=", f"{COGNITO_SUB}=   ", "=Priya", "x=" + "a" * 201]
+)
+def test_display_name_argument_is_validated(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="expected <cognito-sub>="):
+        parse_display_name(value)

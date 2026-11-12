@@ -1,11 +1,12 @@
-# Validation, generation and asset endpoints.
+# Validation, generation, asset and media endpoints.
 # Briefs and captions are validated for real (app.services.validations). Image validation,
-# generation, assets and export answer from the demo stubs when DEMO_STUBS=true, else 501.
+# generation, assets, media and export answer from the demo stubs when DEMO_STUBS=true, else 501.
 
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
+from pydantic import AwareDatetime
 
 from app.api.deps import (
     CreativeReader,
@@ -16,7 +17,7 @@ from app.api.deps import (
     ValidationRunner,
 )
 from app.core.errors import FeatureNotAvailableError, NotFoundError
-from app.schemas.assets import AssetRead
+from app.schemas.assets import AssetRead, MediaPage
 from app.schemas.common import ErrorBody
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobRead
 from app.schemas.validations import (
@@ -30,9 +31,12 @@ from app.services.demo_stubs import DemoStubs
 
 router = APIRouter()
 
+_NOT_BUILT: dict[int | str, dict[str, Any]] = {
+    501: {"model": ErrorBody, "description": "Not implemented yet (DEMO_STUBS is off)."},
+}
 _NOT_YET: dict[int | str, dict[str, Any]] = {
     404: {"model": ErrorBody, "description": "Not found, or not visible to the caller."},
-    501: {"model": ErrorBody, "description": "Not implemented yet (DEMO_STUBS is off)."},
+    **_NOT_BUILT,
 }
 _VALIDATIONS: dict[int | str, dict[str, Any]] = {
     **_NOT_YET,
@@ -148,3 +152,24 @@ async def get_asset(
     asset_id: UUID, ctx: CreativeReader, db: DbSession, stubs: DemoStubsDep
 ) -> AssetRead:
     return await _stubs(stubs, "Assets").get_asset(db, ctx, asset_id)
+
+
+@router.get(
+    "/media",
+    tags=["assets"],
+    summary="Generated images in this tenant, newest first (read-only)",
+    description="Only finished images from studies the caller can use. Uploads are not "
+    "supported yet. download_url is short-lived: list again, or GET /assets/{asset_id}, for a "
+    "fresh one.",
+    responses=_NOT_BUILT,
+)
+async def list_media(
+    ctx: CreativeReader,
+    db: DbSession,
+    stubs: DemoStubsDep,
+    cursor: Annotated[
+        AwareDatetime | None, Query(description="next_cursor from the last page.")
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> MediaPage:
+    return await _stubs(stubs, "The media library").list_media(db, ctx, before=cursor, limit=limit)

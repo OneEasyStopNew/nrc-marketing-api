@@ -44,6 +44,9 @@ uv run python -m scripts.grant_access --tenant-id <tenant-uuid> `
 The Cognito group `policy-admin` corresponds to the role `policy_admin`. Re-running replaces the user's roles and
 reactivates the membership. Admin is not a super-role; it only manages memberships.
 
+Add `--display-name "<sub>=Priya Shah"` (once per member) to show a name instead of the sub in
+version history and the media library. Re-running without it keeps the name already set.
+
 ## Checks
 
 CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, plus a
@@ -104,13 +107,15 @@ Validation (NRC-7):
 ## Demo stubs (frontend integration before D3-D5)
 
 Set `DEMO_STUBS=true` (and `DEMO_PUBLIC_BASE_URL` to the address the frontend uses) and run one
-worker. Image validation, generation jobs, assets and export then answer with simulated data in
+worker. Image validation, generation jobs, assets, the media list and export then answer with simulated data in
 the real contract shapes instead of `501`. Brief and caption validation is always real.
 
 - A generation job takes 6 s (QUEUED, RUNNING, WAITING_PROVIDER, SUCCEEDED) and an image check 2 s,
   so polling UIs can be exercised. Generation needs a stored, current, passing brief run.
 - The image is a placeholder SVG served from `/demo-files/{asset_id}`. Its check uses the brief,
   since the placeholder has no content: a brief that says "get paid" gets a REC-06 region.
+- `GET /media` lists the finished images in the caller's studies, newest first. It is read-only;
+  uploads are not supported.
 - Export bundles the image with the latest stored validation run of the current version.
 - Stub jobs, images and image checks live in memory; restarting the API forgets them.
 
