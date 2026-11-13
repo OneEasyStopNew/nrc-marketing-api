@@ -32,6 +32,7 @@ def test_asset_url_ttl_is_at_most_fifteen_minutes() -> None:
         ("generation_daily_credit_ceiling_per_tenant", 1001),
         ("generation_credits_per_image", 101),
         ("generation_max_cost_usd_per_image", Decimal("1.01")),
+        ("generation_global_budget_usd", Decimal("10000.01")),
         ("max_generated_image_bytes", 52_428_801),
         ("max_image_pixels", 100_000_001),
     ],

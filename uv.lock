@@ -202,6 +202,9 @@ wheels = [
 s3 = [
     { name = "mypy-boto3-s3" },
 ]
+secretsmanager = [
+    { name = "mypy-boto3-secretsmanager" },
+]
 
 [[package]]
 name = "botocore"
@@ -715,6 +718,15 @@ wheels = [
 ]
 
 [[package]]
+name = "mypy-boto3-secretsmanager"
+version = "1.43.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/e0/3b9f954dcce063407224e6601ed5af2d684185387b0572901c5f984fc8f6/mypy_boto3_secretsmanager-1.43.0.tar.gz", hash = "sha256:265ee2fddf9d3e42ae39685625fb7861a539110d8e324372847c0e1cbd666b20", size = 19967, upload-time = "2026-04-29T23:05:45.139Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/93/ae939d61eed240972553395b5e31f780825685b99f0ab4ebe5767430f103/mypy_boto3_secretsmanager-1.43.0-py3-none-any.whl", hash = "sha256:38415cdecb73dd20e485707a7cf456f6dde54ff4b155e7fb255eb001eb47d5bc", size = 27335, upload-time = "2026-04-29T23:05:43.152Z" },
+]
+
+[[package]]
 name = "mypy-extensions"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -745,7 +757,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "asgi-lifespan" },
-    { name = "boto3-stubs", extra = ["s3"] },
+    { name = "boto3-stubs", extra = ["s3", "secretsmanager"] },
     { name = "cryptography" },
     { name = "mypy" },
     { name = "pytest" },
@@ -772,7 +784,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "asgi-lifespan", specifier = ">=2.1" },
-    { name = "boto3-stubs", extras = ["s3"], specifier = ">=1.40" },
+    { name = "boto3-stubs", extras = ["s3", "secretsmanager"], specifier = ">=1.40" },
     { name = "cryptography", specifier = ">=44" },
     { name = "mypy", specifier = ">=1.17" },
     { name = "pytest", specifier = ">=8.4" },

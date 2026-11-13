@@ -3,7 +3,7 @@
 from typing import Final
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, func, select, update
+from sqlalchemy import ColumnElement, ScalarSelect, and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
@@ -13,7 +13,7 @@ from app.core.errors import (
     StudySnapshotMissingError,
     VersionConflictError,
 )
-from app.models import Creative, CreativeVersion, StudySnapshot
+from app.models import Asset, Creative, CreativeVersion, StudySnapshot
 from app.models.enums import RecruitmentStatus
 from app.schemas.creatives import (
     CreativeCreate,
@@ -92,6 +92,7 @@ async def get_creative(db: AsyncSession, ctx: TenantContext, creative_id: UUID) 
             CreativeVersion.post_format,
             CreativeVersion.study_snapshot_id,
             StudySnapshot.version.label("study_snapshot_version"),
+            _current_asset_id().label("asset_id"),
             Creative.created_by,
             Creative.created_at,
             Creative.updated_at,
@@ -200,6 +201,23 @@ async def list_versions(
     items = [CreativeVersionRead.model_validate(row) for row in rows[:limit]]
     next_cursor = items[-1].version if len(rows) > limit else None
     return CreativeVersionPage(items=items, next_cursor=next_cursor)
+
+
+def _current_asset_id() -> ScalarSelect[UUID]:
+    # Newest image generated for the creative's current version; an edit makes it NULL again.
+    # Correlated per creative row, so a list built on the same select stays one query.
+    return (
+        select(Asset.id)
+        .where(
+            Asset.tenant_id == Creative.tenant_id,
+            Asset.creative_id == Creative.id,
+            Asset.creative_version == Creative.current_version,
+        )
+        .order_by(Asset.created_at.desc(), Asset.id.desc())
+        .limit(1)
+        .correlate(Creative)
+        .scalar_subquery()
+    )
 
 
 def _visible(ctx: TenantContext) -> tuple[ColumnElement[bool], ...]:

@@ -1,9 +1,9 @@
 # Generation job API (simulated provider mode): admission, idempotency, limits and isolation.
 
 import asyncio
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 import pytest
@@ -15,43 +15,19 @@ from sqlalchemy.pool import NullPool
 
 from app.api.deps import get_signing_keys
 from app.core.config import get_settings
-from app.db.base import Base
+from app.core.errors import ValidationNotPassedError
 from app.main import create_app
-from tests.conftest import AuthHeaders, IntegrationEnv, SeededTenant, StaticKeys, World, seed_tenant
-
-JOBS = "/v1/marketing/creative-jobs"
-
-
-async def _creative(client: httpx.AsyncClient, auth: AuthHeaders, tenant: SeededTenant) -> str:
-    response = await client.post(
-        "/v1/marketing/creatives",
-        headers=auth("creator-a", tenant.tenant_id, **{"Idempotency-Key": uuid4().hex}),
-        json={
-            "study_id": str(tenant.study_id),
-            "prompt": "Invite adults with high blood pressure to learn about the study.",
-            "language": "en",
-            "channel": "facebook",
-            "post_format": "feed_image",
-        },
-    )
-    assert response.status_code == 201, response.text
-    creative_id: str = response.json()["id"]
-    return creative_id
-
-
-async def _post_job(
-    client: httpx.AsyncClient,
-    auth: AuthHeaders,
-    world: World,
-    creative_id: str,
-    *,
-    key: str | None = None,
-    sub: str = "creator-a",
-    version: int = 1,
-) -> httpx.Response:
-    headers = auth(sub, world.a.tenant_id, **{"Idempotency-Key": key or uuid4().hex})
-    body = {"creative_id": creative_id, "creative_version": version, "kind": "image_generation"}
-    return await client.post(JOBS, headers=headers, json=body)
+from app.services import generation_checks
+from tests.conftest import (
+    JOBS,
+    AuthHeaders,
+    IntegrationEnv,
+    SeededTenant,
+    StaticKeys,
+    World,
+    _creative,
+    _post_job,
+)
 
 
 async def _count(connection: AsyncConnection, tenant_id: UUID, table: str) -> int:
@@ -158,7 +134,7 @@ async def test_closed_study_is_not_eligible(
 
     assert response.status_code == 409
     assert _error(response)["code"] == "GENERATION_NOT_ELIGIBLE"
-    assert _error(response)["details"] == {"reason": "STUDY_NOT_RECRUITING"}
+    assert _error(response)["details"] == {"reason": "STUDY_CLOSED"}
 
 
 async def test_reviewer_cannot_start_generation(
@@ -221,26 +197,6 @@ async def test_daily_credit_ceiling_returns_429(
     assert _error(response)["details"] == {"reason": "CREDIT_CEILING"}
 
 
-@pytest.fixture
-async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTenant]:
-    # Committed data (no shared test transaction), so parallel requests really race.
-    engine = create_async_engine(
-        test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
-    )
-    async with AsyncSession(engine, expire_on_commit=False) as db:
-        seeded = await seed_tenant(db, name="Job race tenant", members={"creator-a": ["creator"]})
-        await db.commit()
-    try:
-        yield seeded
-    finally:
-        async with AsyncSession(engine) as db:
-            for table in reversed(Base.metadata.sorted_tables):
-                column = table.c.id if table.name == "tenants" else table.c.tenant_id
-                await db.execute(table.delete().where(column == seeded.tenant_id))
-            await db.commit()
-        await engine.dispose()
-
-
 async def test_parallel_duplicate_jobs_make_one_job(
     committed_tenant: SeededTenant, signing_key: RSAPrivateKey, test_env: IntegrationEnv
 ) -> None:
@@ -272,3 +228,32 @@ async def test_parallel_duplicate_jobs_make_one_job(
             )
             assert count == 1
     await engine.dispose()
+
+
+async def test_validation_gate_refusal_is_a_409_and_queues_nothing(
+    client: httpx.AsyncClient,
+    world: World,
+    auth: AuthHeaders,
+    connection: AsyncConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    creative_id = await _creative(client, auth, world.a)
+    calls: list[tuple[UUID, UUID, int]] = []
+
+    # Stands in for Dinesh's gate (NRC-7), which has the same signature as the stub.
+    async def not_passed(
+        session: AsyncSession, tenant_id: UUID, creative: UUID, creative_version: int
+    ) -> None:
+        calls.append((tenant_id, creative, creative_version))
+        raise ValidationNotPassedError(details={"validation_run_id": "run-1", "status": "FAILED"})
+
+    monkeypatch.setattr(generation_checks, "assert_generation_allowed", not_passed)
+
+    response = await _post_job(client, auth, world, creative_id)
+
+    assert response.status_code == 409
+    body = _error(response)
+    assert (body["code"], body["retryable"]) == ("VALIDATION_NOT_PASSED", False)
+    assert body["details"] == {"validation_run_id": "run-1", "status": "FAILED"}
+    assert calls == [(world.a.tenant_id, UUID(creative_id), 1)]
+    assert await _count(connection, world.a.tenant_id, "jobs") == 0
