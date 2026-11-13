@@ -1125,7 +1125,7 @@
           "jobs"
         ],
         "summary": "Start image generation for a validated brief (D3)",
-        "description": "Only a version whose brief passed validation can generate. Poll GET /jobs/{job_id}; when it SUCCEEDED, result_asset_id is the image.",
+        "description": "Returns at once; poll the Location URL. A retry with the same Idempotency-Key and body returns the original job with Idempotent-Replayed: true.",
         "operationId": "create_creative_job",
         "security": [
           {
@@ -1212,17 +1212,7 @@
             }
           },
           "404": {
-            "description": "Not found, or not visible to the caller.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "501": {
-            "description": "Not implemented yet (DEMO_STUBS is off).",
+            "description": "Creative not found or not permitted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1232,7 +1222,27 @@
             }
           },
           "409": {
-            "description": "GENERATION_NOT_ELIGIBLE (details.reason says why), or IDEMPOTENCY_KEY_REUSED.",
+            "description": "GENERATION_NOT_ELIGIBLE (details.reason), VALIDATION_NOT_PASSED (details.validation_run_id and status), or Idempotency-Key reused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Not the current creative version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GENERATION_LIMIT_REACHED: active jobs or daily credits (retryable).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1322,24 +1332,14 @@
             }
           },
           "404": {
-            "description": "Not found, or not visible to the caller.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
-            }
-          },
-          "501": {
-            "description": "Not implemented yet (DEMO_STUBS is off).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            },
+            "description": "Not Found"
           }
         }
       }
@@ -1423,6 +1423,118 @@
           },
           "404": {
             "description": "Not found, or not visible to the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not implemented yet (DEMO_STUBS is off).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/media": {
+      "get": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "Generated images in this tenant, newest first (read-only)",
+        "description": "Only finished images from studies the caller can use. Uploads are not supported yet. download_url is short-lived: list again, or GET /assets/{asset_id}, for a fresh one.",
+        "operationId": "list_media",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the last page.",
+              "title": "Cursor"
+            },
+            "description": "next_cursor from the last page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1960,6 +2072,18 @@
             "type": "string",
             "title": "Created By"
           },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Name",
+            "description": "The author's display name in this tenant; null when none is set."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -1976,6 +2100,7 @@
           "channel",
           "post_format",
           "created_by",
+          "created_by_name",
           "created_at"
         ],
         "title": "CreativeVersionRead"
@@ -2389,13 +2514,12 @@
           "stage": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/JobStage"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Stage"
+            ]
           },
           "provider_request_id": {
             "anyOf": [
@@ -2483,6 +2607,19 @@
         ],
         "title": "JobRead"
       },
+      "JobStage": {
+        "type": "string",
+        "enum": [
+          "submitting",
+          "retry_wait",
+          "reconcile",
+          "waiting_provider",
+          "output_ready",
+          "stored"
+        ],
+        "title": "JobStage",
+        "description": "Where a job is inside its execution state. Shown in the UI, so values are part of the API."
+      },
       "Language": {
         "type": "string",
         "enum": [
@@ -2515,6 +2652,136 @@
           "memberships"
         ],
         "title": "MeRead"
+      },
+      "MediaItem": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Asset Id"
+          },
+          "creative_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Creative Id"
+          },
+          "creative_version": {
+            "type": "integer",
+            "title": "Creative Version"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/AssetOrigin"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "width_px": {
+            "type": "integer",
+            "title": "Width Px"
+          },
+          "height_px": {
+            "type": "integer",
+            "title": "Height Px"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Name",
+            "description": "Display name of whoever started the generation; null when none is set."
+          },
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url",
+            "description": "Short-lived; do not store or log it."
+          },
+          "download_url_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id",
+          "creative_id",
+          "creative_version",
+          "origin",
+          "mime_type",
+          "width_px",
+          "height_px",
+          "size_bytes",
+          "created_at",
+          "created_by",
+          "created_by_name",
+          "download_url",
+          "download_url_expires_at"
+        ],
+        "title": "MediaItem",
+        "description": "A finished generated image the caller can see. Uploads are not supported yet."
+      },
+      "MediaPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MediaItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor",
+            "description": "Pass as cursor for the next (older) page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "MediaPage"
       },
       "Outcome": {
         "type": "string",

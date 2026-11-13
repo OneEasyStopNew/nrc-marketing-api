@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import Field
 
-from app.models.enums import ExecutionState
+from app.models.enums import ExecutionState, JobStage
 from app.schemas.common import ApiModel, RequestModel
 
 
@@ -31,7 +31,7 @@ class JobRead(ApiModel):
     creative_id: UUID
     creative_version: int
     state: ExecutionState
-    stage: str | None
+    stage: JobStage | None
     provider_request_id: str | None
     failure_code: str | None
     failure_message: str | None

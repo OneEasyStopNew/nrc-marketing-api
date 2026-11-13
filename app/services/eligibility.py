@@ -1,14 +1,17 @@
 """Generation eligibility: may image generation start for this creative version?
 
-The generation job (NRC-6/NRC-10) calls check_generation_eligibility before it submits anything
-to a provider, and raises GenerationNotEligibleError when the result is not eligible. The same
-result is exposed to the UI so the Generate button can explain why it is disabled.
+Two entry points share one validation rule:
 
-The latest stored brief validation of the version decides the rest. A run checked against an
-older policy version no longer counts, so a new policy makes every brief validate again.
+- check_generation_eligibility answers the UI, so the Generate button can say why it is disabled.
+- assert_generation_allowed is the gate job admission runs (app.services.generation_checks); it
+  raises ValidationNotPassedError instead of answering.
+
+The latest stored brief validation of the version decides. A run checked against an older policy
+version no longer counts, so a new policy makes every brief validate again.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 from uuid import UUID
@@ -17,10 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
-from app.core.errors import NotFoundError
+from app.core.errors import NotFoundError, ValidationNotPassedError
 from app.models import Creative, StudySnapshot
 from app.models.enums import RecruitmentStatus
-from app.schemas.policies import EligibilityReason, GenerationEligibility, PolicySummary
+from app.schemas.policies import EligibilityReason, GenerationEligibility
 from app.schemas.validations import Outcome
 from app.services import policies, validations
 from app.services.creatives import visible_to
@@ -43,6 +46,15 @@ _REASON_BY_OUTCOME: Final[Mapping[Outcome, EligibilityReason]] = MappingProxyTyp
         Outcome.NEEDS_REVIEW: EligibilityReason.NEEDS_REVIEW,
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidationStatus:
+    # reason is ELIGIBLE only for a PASS against the active policy version.
+    reason: EligibilityReason
+    policy_bundle_version: int | None
+    # The latest finished brief run of the version, whatever its outcome; None when there is none.
+    latest_run_id: UUID | None
 
 
 async def check_generation_eligibility(
@@ -69,23 +81,44 @@ async def check_generation_eligibility(
     version = creative.current_version if creative_version is None else creative_version
     if version > creative.current_version:
         raise NotFoundError("Creative version not found.")
-    policy = await policies.get_active_policy_summary(db, ctx)
+    status = await _validation_status(db, ctx.tenant_id, creative_id, version)
     reason = await _blocking_reason(db, ctx, creative.study_id, version, creative.current_version)
-    run_id = None
     if reason is None:
-        if policy is None:
-            reason = EligibilityReason.NO_ACTIVE_POLICY
-        else:
-            reason, run_id = await _validation_reason(db, ctx, creative_id, version, policy)
+        reason = status.reason
+    eligible = reason is EligibilityReason.ELIGIBLE
 
     return GenerationEligibility(
         creative_id=creative_id,
         creative_version=version,
-        eligible=reason is EligibilityReason.ELIGIBLE,
+        eligible=eligible,
         reason=reason,
         message=REASON_MESSAGES[reason],
-        policy_bundle_version=None if policy is None else policy.version,
-        validation_run_id=run_id,
+        policy_bundle_version=status.policy_bundle_version,
+        # Reported only when it is what makes the version eligible.
+        validation_run_id=status.latest_run_id if eligible else None,
+    )
+
+
+async def assert_generation_allowed(
+    session: AsyncSession, tenant_id: UUID, creative_id: UUID, creative_version: int
+) -> None:
+    """The validation-PASS gate for generating this exact creative version.
+
+    The caller (app.services.generation_checks) has already checked that the creative is visible,
+    current and in a recruiting study.
+
+    Raises:
+        ValidationNotPassedError: details.validation_run_id is the latest brief run of the version
+            (None when there is none) and details.status the EligibilityReason: NOT_VALIDATED,
+            VALIDATION_FAILED, NEEDS_REVIEW or NO_ACTIVE_POLICY.
+    """
+    status = await _validation_status(session, tenant_id, creative_id, creative_version)
+    if status.reason is EligibilityReason.ELIGIBLE:
+        return
+    run_id = None if status.latest_run_id is None else str(status.latest_run_id)
+    raise ValidationNotPassedError(
+        REASON_MESSAGES[status.reason],
+        details={"validation_run_id": run_id, "status": status.reason.value},
     )
 
 
@@ -105,12 +138,14 @@ async def _blocking_reason(
     return None
 
 
-async def _validation_reason(
-    db: AsyncSession, ctx: TenantContext, creative_id: UUID, version: int, policy: PolicySummary
-) -> tuple[EligibilityReason, UUID | None]:
-    # The run ID is reported only when it is what makes the version eligible.
-    latest = await validations.latest_brief_outcome(db, ctx, creative_id, version)
+async def _validation_status(
+    db: AsyncSession, tenant_id: UUID, creative_id: UUID, version: int
+) -> _ValidationStatus:
+    policy = await policies.get_active_policy_summary(db, tenant_id)
+    latest = await validations.latest_brief_outcome(db, tenant_id, creative_id, version)
+    latest_run_id = None if latest is None else latest.validation_run_id
+    if policy is None:
+        return _ValidationStatus(EligibilityReason.NO_ACTIVE_POLICY, None, latest_run_id)
     if latest is None or latest.policy_bundle_version != policy.version:
-        return EligibilityReason.NOT_VALIDATED, None
-    reason = _REASON_BY_OUTCOME[latest.outcome]
-    return reason, latest.validation_run_id if reason is EligibilityReason.ELIGIBLE else None
+        return _ValidationStatus(EligibilityReason.NOT_VALIDATED, policy.version, latest_run_id)
+    return _ValidationStatus(_REASON_BY_OUTCOME[latest.outcome], policy.version, latest_run_id)

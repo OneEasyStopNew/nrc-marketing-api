@@ -1,5 +1,6 @@
 # Memberships, tenant context and the studies a member may use.
 
+from collections.abc import Collection
 from uuid import UUID
 
 from sqlalchemy import and_, select
@@ -83,6 +84,22 @@ async def load_tenant_context(
     )
 
 
+async def display_names(
+    db: AsyncSession, ctx: TenantContext, subs: Collection[str]
+) -> dict[str, str]:
+    # Display names of these users in the caller's tenant; users without one are left out.
+    if not subs:
+        return {}
+    rows = await db.execute(
+        select(Membership.user_sub, Membership.display_name).where(
+            Membership.tenant_id == ctx.tenant_id,
+            Membership.user_sub.in_(subs),
+            Membership.display_name.is_not(None),
+        )
+    )
+    return {sub: name for sub, name in rows if name is not None}
+
+
 async def get_context(db: AsyncSession, ctx: TenantContext) -> ContextRead:
     tenant_name = (
         await db.execute(select(Tenant.name).where(Tenant.id == ctx.tenant_id))
@@ -118,7 +135,7 @@ async def get_context(db: AsyncSession, ctx: TenantContext) -> ContextRead:
             )
             for post_format, spec in FORMAT_SPECS.items()
         ],
-        active_policy=await policies.get_active_policy_summary(db, ctx),
+        active_policy=await policies.get_active_policy_summary(db, ctx.tenant_id),
     )
 
 

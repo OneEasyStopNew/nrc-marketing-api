@@ -55,9 +55,15 @@ class StudySnapshotMissingError(ConflictError):
 
 
 class GenerationNotEligibleError(ConflictError):
-    # Raised by the generation job when GenerationEligibility.eligible is false.
+    # details.reason says which check failed (e.g. STUDY_CLOSED).
     code = "GENERATION_NOT_ELIGIBLE"
-    default_message = "This creative version has not passed brief validation yet."
+    default_message = "This creative version cannot be sent for image generation."
+
+
+class ValidationNotPassedError(ConflictError):
+    # details: validation_run_id and status of the latest run for that exact creative version.
+    code = "VALIDATION_NOT_PASSED"
+    default_message = "This creative version has not passed validation."
 
 
 class NoActivePolicyError(ConflictError):
@@ -68,6 +74,13 @@ class NoActivePolicyError(ConflictError):
 class ExportNotReadyError(ConflictError):
     code = "EXPORT_NOT_READY"
     default_message = "Generate an image for the current version before exporting."
+
+
+class GenerationLimitError(AppError):
+    # details.reason is ACTIVE_JOB_LIMIT or CREDIT_CEILING.
+    code = "GENERATION_LIMIT_REACHED"
+    default_message = "The tenant's generation limit is reached. Try again later."
+    retryable = True
 
 
 class VersionRequiredError(AppError):

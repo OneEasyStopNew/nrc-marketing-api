@@ -110,7 +110,7 @@ async def get_validation(
     if row is None:
         raise NotFoundError("Validation run not found.")
     run, current_version = row
-    active = await policies.get_active_policy_summary(db, ctx)
+    active = await policies.get_active_policy_summary(db, ctx.tenant_id)
     result = _StoredResult.model_validate(run.result)
     return ValidationRunRead(
         validation_run_id=run.id,
@@ -135,14 +135,14 @@ async def get_validation(
 
 
 async def latest_brief_outcome(
-    db: AsyncSession, ctx: TenantContext, creative_id: UUID, version: int
+    db: AsyncSession, tenant_id: UUID, creative_id: UUID, version: int
 ) -> BriefOutcome | None:
     # The caller has already checked that the creative is visible.
     row = (
         await db.execute(
             select(ValidationRun.id, ValidationRun.outcome, ValidationRun.policy_bundle_version)
             .where(
-                ValidationRun.tenant_id == ctx.tenant_id,
+                ValidationRun.tenant_id == tenant_id,
                 ValidationRun.creative_id == creative_id,
                 ValidationRun.creative_version == version,
                 ValidationRun.input_kind == ValidationInputKind.BRIEF,
@@ -174,7 +174,7 @@ async def latest_summary(
     )
     if run is None:
         return None
-    active = await policies.get_active_policy_summary(db, ctx)
+    active = await policies.get_active_policy_summary(db, ctx.tenant_id)
     return ValidationRunSummary(
         validation_run_id=run.id,
         input_kind=run.input_kind,

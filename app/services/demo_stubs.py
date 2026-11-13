@@ -1,4 +1,4 @@
-"""Simulated image validation, image generation, assets and export, enabled by DEMO_STUBS=true.
+"""Simulated image validation, generation, assets, media and export, enabled by DEMO_STUBS=true.
 
 The frontend integrates against these until D3-D5 land. Responses use the real contract
 schemas. Briefs and captions are not simulated: app.services.validations checks and stores
@@ -24,13 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.access import TenantContext
 from app.core.errors import (
     ExportNotReadyError,
-    GenerationNotEligibleError,
     IdempotencyKeyReusedError,
     NoActivePolicyError,
     NotFoundError,
 )
 from app.models.enums import FORMAT_SPECS, ExecutionState
-from app.schemas.assets import AssetOrigin, AssetRead, ExportManifest
+from app.schemas.assets import AssetOrigin, AssetRead, ExportManifest, MediaItem, MediaPage
 from app.schemas.creatives import CreativeRead
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobKind, JobRead
 from app.schemas.policies import PolicyBundleRead
@@ -42,7 +41,15 @@ from app.schemas.validations import (
     ValidationInputKind,
     ValidationRunRead,
 )
-from app.services import creatives, eligibility, idempotency, policies, rules, validations
+from app.services import (
+    creatives,
+    generation_checks,
+    idempotency,
+    policies,
+    rules,
+    tenancy,
+    validations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +87,9 @@ class _BoundedMap[K, V]:
     def get(self, key: K) -> V | None:
         return self._items.get(key)
 
+    def values(self) -> list[V]:
+        return list(self._items.values())
+
     def put(self, key: K, value: V) -> None:
         self._items[key] = value
         self._items.move_to_end(key)
@@ -104,8 +114,10 @@ class _ValidationRecord:
 @dataclass(frozen=True, slots=True)
 class _GenerationRecord:
     tenant_id: UUID
+    study_id: UUID
     creative_id: UUID
     creative_version: int
+    created_by: str
     job_id: UUID
     started: float
     created_at: datetime
@@ -212,10 +224,14 @@ class DemoStubs:
     ) -> tuple[JobAccepted, bool]:
         """Record a generation job for an eligible version. Returns the job and whether replayed.
 
+        The same gate as real jobs (generation_checks), so the demo answers with the same errors.
+
         Raises:
-            NotFoundError: unknown creative or version.
-            GenerationNotEligibleError: no current passing brief validation for this version, a
-                stale version or a closed study; details.reason says which.
+            NotFoundError: unknown creative.
+            VersionConflictError: not the current version (412, details.current_version).
+            GenerationNotEligibleError: closed study, language or format; details.reason says which.
+            ValidationNotPassedError: no passing brief validation of this version against the
+                active policy; details.validation_run_id and details.status.
             IdempotencyKeyReusedError: the key was used before with a different body.
         """
         fingerprint = idempotency.request_hash(ctx.principal.sub, body)
@@ -223,11 +239,9 @@ class DemoStubs:
         if replayed is not None:
             return replayed, True
 
-        check = await eligibility.check_generation_eligibility(
+        await generation_checks.assert_generation_eligible(
             db, ctx, body.creative_id, body.creative_version
         )
-        if not check.eligible:
-            raise GenerationNotEligibleError(check.message, details={"reason": check.reason.value})
         creative = await creatives.get_creative(db, ctx, body.creative_id)
 
         # No await from here on (see the module docstring).
@@ -268,6 +282,32 @@ class DemoStubs:
             raise NotFoundError("Asset not found.")
         return self._asset_view(record)
 
+    async def list_media(
+        self, db: AsyncSession, ctx: TenantContext, *, before: datetime | None, limit: int
+    ) -> MediaPage:
+        """Finished generated images in the caller's studies, newest first.
+
+        Pass the returned next_cursor as `before` to page back. Studies the caller cannot use
+        hide their images, the same as GET /assets/{asset_id}.
+        """
+        visible = sorted(
+            (
+                record
+                for record in self._jobs.values()
+                if record.tenant_id == ctx.tenant_id
+                and record.study_id in ctx.study_ids
+                and self._is_done(record.started, self._timings.generation_seconds)
+                and (before is None or record.asset.created_at < before)
+            ),
+            key=lambda record: record.asset.created_at,
+            reverse=True,
+        )
+        page = visible[:limit]
+        names = await tenancy.display_names(db, ctx, {record.created_by for record in page})
+        items = [self._media_item(record, names.get(record.created_by)) for record in page]
+        next_cursor = page[-1].asset.created_at if len(visible) > limit else None
+        return MediaPage(items=items, next_cursor=next_cursor)
+
     def placeholder_file(self, asset_id: UUID) -> bytes | None:
         # Image bytes behind download_url. Generic content only: no tenant or creative data.
         record = self._finished_job_for_asset(asset_id)
@@ -292,7 +332,7 @@ class DemoStubs:
         if record is None or not self._is_done(record.started, self._timings.generation_seconds):
             raise ExportNotReadyError()
         latest = await validations.latest_summary(db, ctx, creative_id, creative.version)
-        policy = await policies.get_active_policy_summary(db, ctx)
+        policy = await policies.get_active_policy_summary(db, ctx.tenant_id)
         return ExportManifest(
             status="DRAFT",
             creative_id=creative_id,
@@ -407,8 +447,10 @@ class DemoStubs:
         )
         return _GenerationRecord(
             tenant_id=ctx.tenant_id,
+            study_id=creative.study_id,
             creative_id=creative.id,
             creative_version=version,
+            created_by=ctx.principal.sub,
             job_id=uuid4(),
             started=self._clock(),
             created_at=created_at,
@@ -464,6 +506,24 @@ class DemoStubs:
                 "download_url": f"{self._base_url}{DEMO_FILES_PATH}/{asset_id}",
                 "download_url_expires_at": datetime.now(tz=UTC) + DOWNLOAD_URL_TTL,
             }
+        )
+
+    def _media_item(self, record: _GenerationRecord, created_by_name: str | None) -> MediaItem:
+        asset = self._asset_view(record)
+        return MediaItem(
+            asset_id=asset.asset_id,
+            creative_id=record.creative_id,
+            creative_version=record.creative_version,
+            origin=asset.origin,
+            mime_type=asset.mime_type,
+            width_px=asset.width_px,
+            height_px=asset.height_px,
+            size_bytes=asset.size_bytes,
+            created_at=asset.created_at,
+            created_by=record.created_by,
+            created_by_name=created_by_name,
+            download_url=asset.download_url,
+            download_url_expires_at=asset.download_url_expires_at,
         )
 
 

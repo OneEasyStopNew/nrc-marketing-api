@@ -21,7 +21,8 @@ def main() -> None:
     # Atomic replace, so a reader never sees a half-written contract.
     fd, tmp = tempfile.mkstemp(dir=CONTRACT_PATH.parent, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        # newline="\n": on Windows text mode would write CRLF and the contract test would fail.
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(render())
         os.replace(tmp, CONTRACT_PATH)
     except BaseException:

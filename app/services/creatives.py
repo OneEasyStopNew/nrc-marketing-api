@@ -13,7 +13,7 @@ from app.core.errors import (
     StudySnapshotMissingError,
     VersionConflictError,
 )
-from app.models import Creative, CreativeVersion, StudySnapshot
+from app.models import Creative, CreativeVersion, Membership, StudySnapshot
 from app.models.enums import RecruitmentStatus
 from app.schemas.creatives import (
     CreativeCreate,
@@ -192,7 +192,16 @@ async def list_versions(
             CreativeVersion.channel,
             CreativeVersion.post_format,
             CreativeVersion.created_by,
+            Membership.display_name.label("created_by_name"),
             CreativeVersion.created_at,
+        )
+        # Outer join: an author who has since left the tenant still has their versions listed.
+        .outerjoin(
+            Membership,
+            and_(
+                Membership.tenant_id == CreativeVersion.tenant_id,
+                Membership.user_sub == CreativeVersion.created_by,
+            ),
         )
         .where(CreativeVersion.creative_id == creative_id)
         .order_by(CreativeVersion.version.desc())
