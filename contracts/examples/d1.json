@@ -55,8 +55,40 @@
       "languages": ["en"],
       "post_formats": [
         {"channel": "facebook", "post_format": "feed_image", "aspect_ratio": "1:1", "width_px": 1080, "height_px": 1080}
+      ],
+      "active_policy": {"policy_bundle_id": "a1d4c7e2-8b3f-4e6a-9c5d-2f7b1e8a4c06", "version": 1, "name": "[SYNTHETIC] Demo recruitment advertising rules", "is_synthetic": true, "rule_count": 9}
+    }
+  },
+  "policy_active": {
+    "request": "GET /v1/marketing/policies/active  (X-Tenant-Id: 7b0e6a52-...)",
+    "status": 200,
+    "schema": "PolicyBundleRead",
+    "body": {
+      "policy_bundle_id": "a1d4c7e2-8b3f-4e6a-9c5d-2f7b1e8a4c06",
+      "version": 1,
+      "name": "[SYNTHETIC] Demo recruitment advertising rules",
+      "source_ref": "synthetic:demo-policy-v1 (paraphrased public FDA guidance)",
+      "is_synthetic": true,
+      "approved_by": "synthetic-fixture",
+      "approved_at": "2026-11-04T09:00:00Z",
+      "rules": [
+        {"rule_id": "REC-01", "rule_version": 1, "title": "No safety or effectiveness claims", "requirement": "Do not state or imply that the investigational treatment is safe or effective for the condition being studied.", "gate": "policy", "severity": "critical", "mandatory": true, "applies_to": ["brief", "text", "image"], "source": {"source_id": "fda:information-sheet:recruiting-study-subjects", "clause": "Claims of safety or effectiveness", "excerpt": null}},
+        {"rule_id": "REC-02", "rule_version": 1, "title": "No superiority claims", "requirement": "Do not claim the investigational treatment is equivalent or superior to any other treatment.", "gate": "policy", "severity": "critical", "mandatory": true, "applies_to": ["brief", "text"], "source": {"source_id": "fda:information-sheet:recruiting-study-subjects", "clause": "Equivalence or superiority claims", "excerpt": null}},
+        {"rule_id": "REC-03", "rule_version": 1, "title": "Say it is investigational", "requirement": "Do not use terms such as 'new treatment', 'new medication' or 'new drug' without explaining that the treatment is investigational.", "gate": "policy", "severity": "major", "mandatory": true, "applies_to": ["brief", "text"], "source": {"source_id": "fda:information-sheet:recruiting-study-subjects", "clause": "Use of the word new", "excerpt": null}},
+        {"rule_id": "REC-04", "rule_version": 1, "title": "No promised benefit", "requirement": "Do not state or imply a certain favourable outcome or any benefit beyond what the consent document and protocol describe.", "gate": "policy", "severity": "critical", "mandatory": true, "applies_to": ["brief", "text", "image"], "source": {"source_id": "fda:information-sheet:recruiting-study-subjects", "clause": "Certainty of favourable outcome", "excerpt": null}},
+        {"rule_id": "REC-05", "rule_version": 1, "title": "No free treatment promise", "requirement": "Do not promise 'free treatment'. Say instead that taking part costs nothing, if that is true.", "gate": "policy", "severity": "major", "mandatory": true, "applies_to": ["brief", "text"], "source": {"source_id": "fda:information-sheet:recruiting-study-subjects", "clause": "Free medical treatment", "excerpt": null}},
+        {"rule_id": "REC-06", "rule_version": 1, "title": "Payment not emphasised", "requirement": "Payment may be mentioned but must not be emphasised, for example by large or bold type or by leading with the amount.", "gate": "policy", "severity": "major", "mandatory": false, "applies_to": ["text", "image"], "source": {"source_id": "fda:information-sheet:recruiting-study-subjects", "clause": "Emphasis on payment", "excerpt": null}},
+        {"rule_id": "REC-07", "rule_version": 1, "title": "Research and voluntary disclosure", "requirement": "Say that this is a research study and that taking part is voluntary, using the study's required disclosures.", "gate": "completeness", "severity": "critical", "mandatory": true, "applies_to": ["text"], "source": {"source_id": "study-snapshot", "clause": "required_disclosures", "excerpt": null}},
+        {"rule_id": "REC-08", "rule_version": 1, "title": "Approved study facts only", "requirement": "Statements about the condition, eligibility, sites and compensation must match the approved study snapshot.", "gate": "study_facts", "severity": "critical", "mandatory": true, "applies_to": ["brief", "text"], "source": {"source_id": "study-snapshot", "clause": "facts", "excerpt": null}},
+        {"rule_id": "REC-09", "rule_version": 1, "title": "No misleading medical imagery", "requirement": "Images must not show a cure, a before-and-after result or a clinician endorsing the treatment.", "gate": "media", "severity": "major", "mandatory": true, "applies_to": ["image"], "source": {"source_id": "fda:information-sheet:recruiting-study-subjects", "clause": "Certainty of favourable outcome", "excerpt": null}}
       ]
     }
+  },
+  "generation_eligibility": {
+    "request": "GET /v1/marketing/creatives/9f4b2c1e-7d6a-4e8b-a3c5-1d2e3f4a5b04/generation-eligibility",
+    "status": 200,
+    "schema": "GenerationEligibility",
+    "body": {"creative_id": "9f4b2c1e-7d6a-4e8b-a3c5-1d2e3f4a5b04", "creative_version": 1, "eligible": false, "reason": "NOT_VALIDATED", "message": "Validate the brief for this version before generating.", "policy_bundle_version": 1, "validation_run_id": null}
   },
   "creative_created": {
     "request": "POST /v1/marketing/creatives  (Idempotency-Key: 2f6c9e1a8b7d4c3e)",
@@ -121,6 +153,7 @@
           "channel": "facebook",
           "post_format": "feed_image",
           "created_by": "3c8f1a2b-4d5e-4f60-8a7b-9c0d1e2f3a05",
+          "created_by_name": "Priya Shah",
           "created_at": "2026-11-04T10:20:00Z"
         },
         {
@@ -132,6 +165,7 @@
           "channel": "facebook",
           "post_format": "feed_image",
           "created_by": "3c8f1a2b-4d5e-4f60-8a7b-9c0d1e2f3a05",
+          "created_by_name": "Priya Shah",
           "created_at": "2026-11-04T10:15:00Z"
         }
       ],
@@ -169,6 +203,18 @@
     "schema": "ErrorBody",
     "body": {"code": "STUDY_CLOSED", "message": "The study is closed, so new creatives cannot be started.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e14", "details": null, "retryable": false}
   },
+  "error_409_not_eligible": {
+    "request": "POST /creative-jobs for a version that has not passed brief validation",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {"code": "GENERATION_NOT_ELIGIBLE", "message": "This creative version has not passed brief validation yet.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e19", "details": {"reason": "NOT_VALIDATED"}, "retryable": false}
+  },
+  "error_409_no_active_policy": {
+    "request": "POST /validations in a tenant that has no policy yet",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {"code": "NO_ACTIVE_POLICY", "message": "This tenant has no active policy to validate against.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e21", "details": null, "retryable": false}
+  },
   "error_412_stale_edit": {
     "request": "PATCH /creatives/{id} with If-Match: \"1\" after someone saved version 2",
     "status": 412,
@@ -188,9 +234,15 @@
     "body": {"code": "PRECONDITION_REQUIRED", "message": "Send If-Match with the version you edited, e.g. If-Match: \"3\".", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e17", "details": null, "retryable": false}
   },
   "error_501_not_implemented": {
-    "request": "POST /validations before D2 ships",
+    "request": "POST /validations with input_kind image while DEMO_STUBS is off",
     "status": 501,
     "schema": "ErrorBody",
-    "body": {"code": "NOT_IMPLEMENTED", "message": "Validation is not implemented yet.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e18", "details": null, "retryable": false}
+    "body": {"code": "NOT_IMPLEMENTED", "message": "Image validation is not implemented yet.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e18", "details": null, "retryable": false}
+  },
+  "error_503_dependency": {
+    "request": "Any authenticated call while Cognito's signing keys cannot be fetched",
+    "status": 503,
+    "schema": "ErrorBody",
+    "body": {"code": "DEPENDENCY_UNAVAILABLE", "message": "The identity provider is unavailable.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e20", "details": null, "retryable": true}
   }
 }

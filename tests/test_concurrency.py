@@ -24,7 +24,9 @@ async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTena
         test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
     )
     async with AsyncSession(engine, expire_on_commit=False) as db:
-        seeded = await seed_tenant(db, name="Concurrency tenant", members={"racer": ["creator"]})
+        seeded = await seed_tenant(
+            db, name="Concurrency tenant", members={"racer": ["creator"]}, with_policy=False
+        )
         await db.commit()
     try:
         yield seeded

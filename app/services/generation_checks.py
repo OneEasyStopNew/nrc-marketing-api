@@ -14,10 +14,11 @@ from app.core.errors import GenerationNotEligibleError, VersionConflictError
 from app.models import StudySnapshot
 from app.models.enums import FORMAT_SPECS, PostFormat, RecruitmentStatus
 from app.services import creatives
+from app.services.eligibility import assert_generation_allowed
 
-# Seam owned by Dinesh (NRC-7): assert_generation_allowed below. While True, GENERATION_MODE=live
-# refuses to start, so no paid call can run on a brief that has not passed validation.
-VALIDATION_GATE_IS_STUB: Final = True
+# Seam owned by Dinesh (NRC-7): assert_generation_allowed is the real gate now, so live mode may
+# start once its own settings are complete.
+VALIDATION_GATE_IS_STUB: Final = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,7 @@ async def assert_generation_eligible(
         NotFoundError: no such creative visible to the caller (tenant and study access).
         VersionConflictError: creative_version is not the current one (details.current_version).
         GenerationNotEligibleError: details.reason names the failed check.
+        ValidationNotPassedError: the brief of this version has not passed validation.
     """
     creative = await creatives.get_creative(db, ctx, creative_id)
     if creative.version != creative_version:
@@ -66,20 +68,6 @@ async def assert_generation_eligible(
     return EligibleCreative(
         creative.study_snapshot_id, creative.study_snapshot_version, creative.post_format
     )
-
-
-async def assert_generation_allowed(
-    session: AsyncSession, tenant_id: UUID, creative_id: UUID, creative_version: int
-) -> None:
-    """STUB with the exact signature of Dinesh's validation gate (NRC-7). Allows everything.
-
-    His version raises ValidationNotPassedError (409 VALIDATION_NOT_PASSED, not retryable,
-    details with the run id and status) unless the latest validation run for this exact version
-    passed. When NRC-7 lands, replace this stub with
-    `from app.services.eligibility import assert_generation_allowed` and set
-    VALIDATION_GATE_IS_STUB to False in the same commit.
-    """
-    return None
 
 
 def _not_eligible(reason: str) -> NoReturn:

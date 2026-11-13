@@ -27,6 +27,7 @@ from app.services.jobs import (
     transition,
 )
 from app.services.providers.base import (
+    HIGGSFIELD_NAME,
     TERMINAL_PROVIDER_STATUSES,
     ProviderConfigError,
     ProviderJobStatus,
@@ -37,7 +38,11 @@ from app.services.providers.base import (
     ProviderRateLimitedError,
     ProviderUnavailableError,
 )
-from app.services.providers.higgsfield import SUPPORTED_ASPECT_RATIOS, higgsfield_credentials
+from app.services.providers.higgsfield import (
+    SUPPORTED_ASPECT_RATIOS,
+    HiggsfieldProvider,
+    higgsfield_credentials,
+)
 from app.services.providers.simulator import SimulatedImageProvider, SimulatorScenario
 from app.workers import connector
 from app.workers.connector import (
@@ -1050,18 +1055,25 @@ def test_live_mode_without_keys_refuses_to_start() -> None:
         build_providers(settings)
 
     assert "HIGGSFIELD_MODEL, HIGGSFIELD_OUTPUT_HOSTS" in str(refused.value)
-    assert "validation-PASS gate" in str(refused.value)
 
 
-def test_live_mode_with_stub_validation_gate_refuses_to_start() -> None:
+async def test_live_mode_with_complete_settings_starts_now_the_gate_is_real() -> None:
+    # NRC-7 replaced the stub gate (VALIDATION_GATE_IS_STUB is False), so complete live settings
+    # build the Higgsfield provider instead of being refused. Nothing is sent to Higgsfield.
     settings = _live(
         higgsfield_api_key=SecretStr("test-id:test-secret"),
         higgsfield_model=PROBED_MODEL,
         higgsfield_output_hosts=("images.example.test",),
     )
 
-    with pytest.raises(WorkerConfigError, match=r"refused: the validation-PASS gate is still"):
-        build_providers(settings)
+    providers = build_providers(settings)
+    provider = providers[HIGGSFIELD_NAME]
+    try:
+        assert list(providers) == [HIGGSFIELD_NAME]
+        assert isinstance(provider, HiggsfieldProvider)
+    finally:
+        if isinstance(provider, HiggsfieldProvider):
+            await provider.aclose()
 
 
 def test_live_mode_with_an_unprobed_model_refuses_to_start() -> None:

@@ -25,6 +25,8 @@ class Membership(Base):
     tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), primary_key=True)
     user_sub: Mapped[str] = mapped_column(String(128), primary_key=True, index=True)
     roles: Mapped[list[str]] = mapped_column(ARRAY(String(32)))
+    # Shown instead of the Cognito sub wherever the UI names who did something.
+    display_name: Mapped[str | None] = mapped_column(String(200))
     is_active: Mapped[bool] = mapped_column(server_default=true())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

@@ -1,4 +1,4 @@
-# Validation contract (implemented in D2 for text and D4 for images).
+# Validation contract: briefs and captions are checked by rules (NRC-7); images come in D4.
 
 from datetime import datetime
 from enum import StrEnum
@@ -7,22 +7,12 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
+# Outcome and ValidationInputKind live with the models because validation runs store them;
+# they are re-exported here for the API schemas.
 from app.models.enums import ExecutionState
+from app.models.enums import Outcome as Outcome
+from app.models.enums import ValidationInputKind as ValidationInputKind
 from app.schemas.common import ApiModel, RequestModel
-
-
-class ValidationInputKind(StrEnum):
-    BRIEF = "brief"
-    TEXT = "text"
-    IMAGE = "image"
-
-
-class Outcome(StrEnum):
-    """Overall result. PASS is not approval and does not make content ready to publish."""
-
-    PASS = "PASS"  # noqa: S105  validation outcome, not a credential
-    FAIL = "FAIL"
-    NEEDS_REVIEW = "NEEDS_REVIEW"
 
 
 class RuleResultValue(StrEnum):
@@ -138,7 +128,7 @@ class ValidationRunRead(ValidationRunSummary):
     input_hash: str
     asset_id: UUID | None
     study_snapshot_version: int
-    policy_bundle_version: str | None
+    policy_bundle_version: int | None
     gates: list[GateResult]
     rule_results: list[RuleResult]
     findings: list[Finding]

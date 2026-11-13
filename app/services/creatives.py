@@ -13,7 +13,7 @@ from app.core.errors import (
     StudySnapshotMissingError,
     VersionConflictError,
 )
-from app.models import Asset, Creative, CreativeVersion, StudySnapshot
+from app.models import Asset, Creative, CreativeVersion, Membership, StudySnapshot
 from app.models.enums import RecruitmentStatus
 from app.schemas.creatives import (
     CreativeCreate,
@@ -105,7 +105,7 @@ async def get_creative(db: AsyncSession, ctx: TenantContext, creative_id: UUID) 
             ),
         )
         .join(StudySnapshot, StudySnapshot.id == CreativeVersion.study_snapshot_id)
-        .where(*_visible(ctx), Creative.id == creative_id)
+        .where(*visible_to(ctx), Creative.id == creative_id)
     )
     row = (await db.execute(current_view)).one_or_none()
     if row is None:
@@ -129,7 +129,9 @@ async def update_creative(
     new_version = await db.scalar(
         update(Creative)
         .where(
-            *_visible(ctx), Creative.id == creative_id, Creative.current_version == expected_version
+            *visible_to(ctx),
+            Creative.id == creative_id,
+            Creative.current_version == expected_version,
         )
         .values(current_version=Creative.current_version + 1, updated_at=func.now())
         .returning(Creative.current_version)
@@ -137,7 +139,7 @@ async def update_creative(
     )
     if new_version is None:
         current = await db.scalar(
-            select(Creative.current_version).where(*_visible(ctx), Creative.id == creative_id)
+            select(Creative.current_version).where(*visible_to(ctx), Creative.id == creative_id)
         )
         if current is None:
             raise NotFoundError("Creative not found.")
@@ -175,7 +177,9 @@ async def list_versions(
     db: AsyncSession, ctx: TenantContext, creative_id: UUID, *, before: int | None, limit: int
 ) -> CreativeVersionPage:
     # Newest first. Pass the returned next_cursor as `before` to page back through history.
-    exists = await db.scalar(select(Creative.id).where(*_visible(ctx), Creative.id == creative_id))
+    exists = await db.scalar(
+        select(Creative.id).where(*visible_to(ctx), Creative.id == creative_id)
+    )
     if exists is None:
         raise NotFoundError("Creative not found.")
 
@@ -189,7 +193,16 @@ async def list_versions(
             CreativeVersion.channel,
             CreativeVersion.post_format,
             CreativeVersion.created_by,
+            Membership.display_name.label("created_by_name"),
             CreativeVersion.created_at,
+        )
+        # Outer join: an author who has since left the tenant still has their versions listed.
+        .outerjoin(
+            Membership,
+            and_(
+                Membership.tenant_id == CreativeVersion.tenant_id,
+                Membership.user_sub == CreativeVersion.created_by,
+            ),
         )
         .where(CreativeVersion.creative_id == creative_id)
         .order_by(CreativeVersion.version.desc())
@@ -220,7 +233,7 @@ def _current_asset_id() -> ScalarSelect[UUID]:
     )
 
 
-def _visible(ctx: TenantContext) -> tuple[ColumnElement[bool], ...]:
+def visible_to(ctx: TenantContext) -> tuple[ColumnElement[bool], ...]:
     # RLS already hides other tenants; filtering here too keeps the query correct without it.
     return (Creative.tenant_id == ctx.tenant_id, Creative.study_id.in_(ctx.study_ids))
 

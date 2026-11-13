@@ -14,9 +14,11 @@ from app.core.config import Settings, get_settings
 from app.core.errors import (
     AuthenticationError,
     DependencyUnavailableError,
+    FeatureNotAvailableError,
     PermissionDeniedError,
 )
 from app.services import tenancy
+from app.services.demo_stubs import DemoStubs
 from app.services.storage import ObjectStorage
 
 
@@ -31,16 +33,41 @@ async def get_signing_keys(request: Request) -> SigningKeyProvider:
     return keys
 
 
-async def get_storage(request: Request) -> ObjectStorage:
+async def get_demo_stubs(request: Request) -> DemoStubs | None:
+    # None unless DEMO_STUBS=true: the stubbed endpoints then answer 501 as before.
+    stubs: DemoStubs | None = request.app.state.demo_stubs
+    return stubs
+
+
+async def get_optional_storage(request: Request) -> ObjectStorage | None:
+    # None without a bucket. For routes that the demo stubs can answer without storage.
     storage: ObjectStorage | None = request.app.state.storage
+    return storage
+
+
+async def get_storage(request: Request) -> ObjectStorage:
+    return require_storage(await get_optional_storage(request))
+
+
+DbSession = Annotated[AsyncSession, Depends(get_db)]
+DemoStubsDep = Annotated[DemoStubs | None, Depends(get_demo_stubs)]
+StorageDep = Annotated[ObjectStorage, Depends(get_storage)]
+OptionalStorageDep = Annotated[ObjectStorage | None, Depends(get_optional_storage)]
+SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def require_storage(storage: ObjectStorage | None) -> ObjectStorage:
     if storage is None:
         raise DependencyUnavailableError("Image storage is not configured.")
     return storage
 
 
-DbSession = Annotated[AsyncSession, Depends(get_db)]
-StorageDep = Annotated[ObjectStorage, Depends(get_storage)]
-SettingsDep = Annotated[Settings, Depends(get_settings)]
+def require_stubs(stubs: DemoStubs | None, feature: str) -> DemoStubs:
+    # For endpoints that only the demo stubs implement so far: 501 when DEMO_STUBS is off.
+    if stubs is None:
+        raise FeatureNotAvailableError(f"{feature} is not implemented yet.")
+    return stubs
+
 
 _bearer = HTTPBearer(auto_error=False, description="Cognito access token.")
 

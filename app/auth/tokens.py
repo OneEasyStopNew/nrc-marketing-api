@@ -5,7 +5,8 @@ import logging
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, Literal, Protocol
+from pathlib import Path
+from typing import Final, Literal, Protocol, Self
 
 import httpx
 import jwt
@@ -80,6 +81,31 @@ class JwksClient:
             logger.warning("could not load signing keys: %s", type(err).__name__)
             raise DependencyUnavailableError("The identity provider is unavailable.") from err
         return {key.key_id: key for key in jwk_set.keys if key.key_id is not None}
+
+
+class LocalJwks:
+    """Signing keys read from a local JWKS file, for development before Cognito exists.
+
+    Only the key source changes: tokens are still checked for issuer, client, scope and expiry.
+    The matching private key must never leave the developer's machine.
+    """
+
+    def __init__(self, keys: Mapping[str, jwt.PyJWK]) -> None:
+        self._keys = keys
+
+    @classmethod
+    def from_file(cls, path: Path) -> Self:
+        try:
+            jwk_set = jwt.PyJWKSet.from_json(path.read_text(encoding="utf-8"))
+        except (OSError, jwt.PyJWTError) as err:
+            raise RuntimeError(f"cannot load DEV_JWKS_FILE {str(path)!r}: {err}") from err
+        return cls({key.key_id: key for key in jwk_set.keys if key.key_id is not None})
+
+    async def get_signing_key(self, kid: str) -> jwt.PyJWK:
+        key = self._keys.get(kid)
+        if key is None:
+            raise AuthenticationError("Access token was signed with an unknown key.")
+        return key
 
 
 async def verify_access_token(

@@ -10,7 +10,7 @@ import dataclasses
 import os
 import time
 import warnings
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -52,6 +52,7 @@ from app.models import (
     Job,
     Membership,
     MembershipStudy,
+    PolicyBundle,
     Study,
     StudySnapshot,
     Tenant,
@@ -67,7 +68,7 @@ from app.services.providers.base import (
     SubmitResult,
 )
 from app.services.providers.simulator import SimulatedImageProvider
-from scripts.seed_demo import SYNTHETIC_FACTS
+from scripts.seed_demo import DEMO_POLICY_NAME, SYNTHETIC_FACTS, demo_policy_rules
 
 ROOT = Path(__file__).resolve().parents[1]
 REGION = "ap-south-1"
@@ -109,6 +110,9 @@ def app_environment(test_env: IntegrationEnv) -> Iterator[None]:
         patch.setenv("COGNITO_CLIENT_IDS", CLIENT_ID)
         patch.setenv("REQUIRED_SCOPE", SCOPE)
         patch.setenv("CORS_ORIGINS", "")
+        # A developer's .env may switch these on; tests always start from production behaviour.
+        patch.setenv("DEMO_STUBS", "false")
+        patch.setenv("DEV_JWKS_FILE", "")
         # Local SeaweedFS; these credentials only open that container, not AWS.
         patch.setenv("AWS_S3_BUCKET", BUCKET)
         patch.setenv("AWS_ENDPOINT_URL_S3", ENDPOINT)
@@ -181,18 +185,29 @@ class SeededTenant:
     study_id: UUID
     closed_study_id: UUID
     snapshot_id: UUID
+    policy_bundle_id: UUID | None
+
+
+CREATOR_A_NAME = "Priya Shah"
 
 
 async def seed_tenant(
-    db: AsyncSession, *, name: str, members: dict[str, list[str]]
+    db: AsyncSession,
+    *,
+    name: str,
+    members: dict[str, list[str]],
+    with_policy: bool,
+    display_names: Mapping[str, str] | None = None,
 ) -> SeededTenant:
     # Tenant with one recruiting and one closed synthetic study; every member gets both.
     tenant_id, study_id, closed_study_id, snapshot_id = uuid4(), uuid4(), uuid4(), uuid4()
     # Models have no ORM relationships, so each parent level is flushed before its children.
     db.add(Tenant(id=tenant_id, name=name))
     await db.flush()
+    names = display_names or {}
     db.add_all(
-        Membership(tenant_id=tenant_id, user_sub=sub, roles=roles) for sub, roles in members.items()
+        Membership(tenant_id=tenant_id, user_sub=sub, roles=roles, display_name=names.get(sub))
+        for sub, roles in members.items()
     )
     db.add_all(
         [
@@ -223,13 +238,29 @@ async def seed_tenant(
         db.add_all(
             MembershipStudy(tenant_id=tenant_id, user_sub=sub, study_id=study) for sub in members
         )
+    policy_bundle_id = uuid4() if with_policy else None
+    if policy_bundle_id is not None:
+        db.add(
+            PolicyBundle(
+                id=policy_bundle_id,
+                tenant_id=tenant_id,
+                version=1,
+                name=DEMO_POLICY_NAME,
+                source_ref="synthetic:test-fixture",
+                rules=demo_policy_rules(),
+                is_synthetic=True,
+                approved_by="synthetic-fixture",
+                approved_at=datetime(2026, 11, 1, tzinfo=UTC),
+            )
+        )
     await db.flush()
-    return SeededTenant(tenant_id, study_id, closed_study_id, snapshot_id)
+    return SeededTenant(tenant_id, study_id, closed_study_id, snapshot_id, policy_bundle_id)
 
 
 @dataclass(frozen=True, slots=True)
 class World:
-    # Two tenants. creator-a and reviewer-a belong to A; creator-b to B.
+    # Two tenants. creator-a and reviewer-a belong to A; creator-b to B. Only A has a policy.
+    # Only creator-a has a display name.
 
     a: SeededTenant
     b: SeededTenant
@@ -302,9 +333,15 @@ def sessions(connection: AsyncConnection) -> Sessions:
 async def world(connection: AsyncConnection) -> World:
     async with _session(connection) as seed:
         a = await seed_tenant(
-            seed, name="Tenant A", members={"creator-a": ["creator"], "reviewer-a": ["reviewer"]}
+            seed,
+            name="Tenant A",
+            members={"creator-a": ["creator"], "reviewer-a": ["reviewer"]},
+            with_policy=True,
+            display_names={"creator-a": CREATOR_A_NAME},
         )
-        b = await seed_tenant(seed, name="Tenant B", members={"creator-b": ["creator"]})
+        b = await seed_tenant(
+            seed, name="Tenant B", members={"creator-b": ["creator"]}, with_policy=False
+        )
         await seed.commit()
     # From here on the connection behaves like the API's role: RLS applies, no owner rights.
     await as_role(connection, APP_ROLE)
@@ -312,8 +349,17 @@ async def world(connection: AsyncConnection) -> World:
 
 
 @pytest.fixture
+def app_overrides() -> dict[Callable[..., object], Callable[..., object]]:
+    # Extra dependency overrides for the app under test; test modules redefine this fixture.
+    return {}
+
+
+@pytest.fixture
 async def client(
-    connection: AsyncConnection, world: World, signing_key: RSAPrivateKey
+    connection: AsyncConnection,
+    world: World,
+    signing_key: RSAPrivateKey,
+    app_overrides: dict[Callable[..., object], Callable[..., object]],
 ) -> AsyncIterator[httpx.AsyncClient]:
     async def request_session() -> AsyncIterator[AsyncSession]:
         # One session per request, like production: uncommitted work is rolled back on close.
@@ -323,6 +369,7 @@ async def client(
     app = create_app()
     app.dependency_overrides[get_db] = request_session
     app.dependency_overrides[get_signing_keys] = lambda: StaticKeys(signing_key)
+    app.dependency_overrides.update(app_overrides)
     try:
         async with (
             LifespanManager(app),
@@ -358,7 +405,9 @@ async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTena
         test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
     )
     async with AsyncSession(engine, expire_on_commit=False) as db:
-        seeded = await seed_tenant(db, name="Job race tenant", members={"creator-a": ["creator"]})
+        seeded = await seed_tenant(
+            db, name="Job race tenant", members={"creator-a": ["creator"]}, with_policy=True
+        )
         await db.commit()
     try:
         yield seeded
@@ -385,13 +434,20 @@ async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTena
 JOBS = "/v1/marketing/creative-jobs"
 
 
-async def _creative(client: httpx.AsyncClient, auth: AuthHeaders, tenant: SeededTenant) -> str:
+async def _creative(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    tenant: SeededTenant,
+    *,
+    prompt: str = "Invite adults with high blood pressure to learn about the study.",
+) -> str:
+    # Creates a draft and validates its brief: generation needs a stored run (NRC-7 gate).
     response = await client.post(
         "/v1/marketing/creatives",
         headers=auth("creator-a", tenant.tenant_id, **{"Idempotency-Key": uuid4().hex}),
         json={
             "study_id": str(tenant.study_id),
-            "prompt": "Invite adults with high blood pressure to learn about the study.",
+            "prompt": prompt,
             "language": "en",
             "channel": "facebook",
             "post_format": "feed_image",
@@ -399,6 +455,12 @@ async def _creative(client: httpx.AsyncClient, auth: AuthHeaders, tenant: Seeded
     )
     assert response.status_code == 201, response.text
     creative_id: str = response.json()["id"]
+    validation = await client.post(
+        "/v1/marketing/validations",
+        headers=auth("creator-a", tenant.tenant_id, **{"Idempotency-Key": uuid4().hex}),
+        json={"creative_id": creative_id, "creative_version": 1, "input_kind": "brief"},
+    )
+    assert validation.status_code == 202, validation.text
     return creative_id
 
 

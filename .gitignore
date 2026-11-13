@@ -1,4 +1,5 @@
 # Secrets and local config
+.dev-keys/
 .env
 .env.*
 !.env.example

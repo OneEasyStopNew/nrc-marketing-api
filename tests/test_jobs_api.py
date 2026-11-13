@@ -2,14 +2,15 @@
 
 import asyncio
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from asgi_lifespan import LifespanManager
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
-from sqlalchemy import text
+from sqlalchemy import insert, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -17,7 +18,9 @@ from app.api.deps import get_signing_keys
 from app.core.config import get_settings
 from app.core.errors import ValidationNotPassedError
 from app.main import create_app
+from app.models import PolicyBundle
 from app.services import generation_checks
+from scripts.seed_demo import demo_policy_rules
 from tests.conftest import (
     JOBS,
     AuthHeaders,
@@ -135,6 +138,53 @@ async def test_closed_study_is_not_eligible(
     assert response.status_code == 409
     assert _error(response)["code"] == "GENERATION_NOT_ELIGIBLE"
     assert _error(response)["details"] == {"reason": "STUDY_CLOSED"}
+
+
+async def test_brief_that_failed_validation_is_not_eligible(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders, connection: AsyncConnection
+) -> None:
+    creative_id = await _creative(
+        client, auth, world.a, prompt="Guaranteed results! Try this new drug for free treatment."
+    )
+
+    response = await _post_job(client, auth, world, creative_id)
+
+    assert response.status_code == 409
+    body = _error(response)
+    assert (body["code"], body["retryable"]) == ("VALIDATION_NOT_PASSED", False)
+    assert body["details"]["status"] == "VALIDATION_FAILED"
+    assert body["details"]["validation_run_id"] is not None
+    assert await _count(connection, world.a.tenant_id, "jobs") == 0
+
+
+async def test_pass_under_an_older_policy_is_not_eligible(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders, connection: AsyncConnection
+) -> None:
+    creative_id = await _creative(client, auth, world.a)  # passes against policy v1
+    # A new policy version is approved after the brief passed: it must validate again.
+    await connection.execute(text("RESET ROLE"))
+    await connection.execute(
+        insert(PolicyBundle).values(
+            id=uuid4(),
+            tenant_id=world.a.tenant_id,
+            version=2,
+            name="[SYNTHETIC] Policy v2",
+            source_ref="synthetic:test-fixture",
+            rules=demo_policy_rules(),
+            is_synthetic=True,
+            approved_by="synthetic-fixture",
+            approved_at=datetime(2026, 11, 2, tzinfo=UTC),
+        )
+    )
+    await connection.execute(text("SET LOCAL ROLE marketing_app"))
+
+    response = await _post_job(client, auth, world, creative_id)
+
+    assert response.status_code == 409
+    body = _error(response)
+    assert body["code"] == "VALIDATION_NOT_PASSED"
+    assert body["details"]["status"] == "NOT_VALIDATED"
+    assert await _count(connection, world.a.tenant_id, "jobs") == 0
 
 
 async def test_reviewer_cannot_start_generation(

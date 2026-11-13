@@ -34,6 +34,31 @@ class AssetRead(ApiModel):
     download_url_expires_at: datetime | None
 
 
+class MediaItem(ApiModel):
+    """A finished generated image the caller can see. Uploads are not supported yet."""
+
+    asset_id: UUID
+    creative_id: UUID
+    creative_version: int
+    origin: AssetOrigin
+    mime_type: str
+    width_px: int
+    height_px: int
+    size_bytes: int
+    created_at: datetime
+    created_by: str
+    created_by_name: str | None = Field(
+        description="Display name of whoever started the generation; null when none is set."
+    )
+    download_url: str | None = Field(description="Short-lived; do not store or log it.")
+    download_url_expires_at: datetime | None
+
+
+class MediaPage(ApiModel):
+    items: list[MediaItem]
+    next_cursor: datetime | None = Field(description="Pass as cursor for the next (older) page.")
+
+
 class ExportManifest(ApiModel):
     """A review draft. It carries no approval and causes no publication."""
 
@@ -43,6 +68,6 @@ class ExportManifest(ApiModel):
     caption: str | None
     image: AssetRead
     study_snapshot_version: int
-    policy_bundle_version: str | None
+    policy_bundle_version: int | None
     latest_validation: ValidationRunSummary | None
     exported_at: datetime

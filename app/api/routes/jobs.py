@@ -1,10 +1,19 @@
 # Generation jobs: accept a durable job, then poll its persisted state.
+# With DEMO_STUBS=true the demo stubs answer instead, so the stubbed assets, image checks and
+# export (which only know stub jobs) keep working until storage lands (NRC-3).
 
 from uuid import UUID
 
 from fastapi import APIRouter, Request, Response, status
 
-from app.api.deps import CreativeReader, DbSession, GenerationRunner, IdempotencyKey, SettingsDep
+from app.api.deps import (
+    CreativeReader,
+    DbSession,
+    DemoStubsDep,
+    GenerationRunner,
+    IdempotencyKey,
+    SettingsDep,
+)
 from app.schemas.common import ErrorBody
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobRead
 from app.services import jobs
@@ -38,10 +47,16 @@ async def create_creative_job(
     db: DbSession,
     settings: SettingsDep,
     idempotency_key: IdempotencyKey,
+    stubs: DemoStubsDep,
     request: Request,
     response: Response,
 ) -> JobAccepted:
-    accepted, replayed = await jobs.accept_creative_job(db, ctx, body, idempotency_key, settings)
+    if stubs is not None:
+        accepted, replayed = await stubs.start_generation(db, ctx, body, idempotency_key)
+    else:
+        accepted, replayed = await jobs.accept_creative_job(
+            db, ctx, body, idempotency_key, settings
+        )
     # The poll route's own path, so the API prefix has one source (app.main.API_PREFIX).
     response.headers["Location"] = request.app.url_path_for("get_job", job_id=str(accepted.job_id))
     if replayed:
@@ -54,5 +69,7 @@ async def create_creative_job(
     summary="Persisted job state; polling never starts another generation (D3)",
     responses={404: {"model": ErrorBody}},
 )
-async def get_job(job_id: UUID, ctx: CreativeReader, db: DbSession) -> JobRead:
+async def get_job(job_id: UUID, ctx: CreativeReader, db: DbSession, stubs: DemoStubsDep) -> JobRead:
+    if stubs is not None:
+        return await stubs.get_job(db, ctx, job_id)
     return await jobs.get_job(db, ctx, job_id)

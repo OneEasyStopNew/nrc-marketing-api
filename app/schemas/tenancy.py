@@ -8,6 +8,7 @@ from pydantic import Field
 from app.auth.access import Capability, Role
 from app.models.enums import Channel, Language, PostFormat, RecruitmentStatus
 from app.schemas.common import ApiModel
+from app.schemas.policies import PolicySummary
 
 
 class TenantMembershipRead(ApiModel):
@@ -68,3 +69,4 @@ class ContextRead(ApiModel):
     studies: list[StudySnapshotRead]
     languages: list[Language]
     post_formats: list[PostFormatOption]
+    active_policy: PolicySummary | None = Field(description="Null until a policy is loaded.")

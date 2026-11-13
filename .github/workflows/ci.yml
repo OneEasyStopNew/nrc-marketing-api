@@ -94,6 +94,21 @@ jobs:
       - name: Tests
         run: uv run pytest
 
+  contract-types:
+    name: Frontend types compile from the contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same generator the README gives the frontend; exact versions, nothing installed in the repo.
+      - name: Generate TypeScript types and compile them
+        run: |
+          npx --yes openapi-typescript@7.4.4 contracts/openapi.json -o "$RUNNER_TEMP/schema.d.ts"
+          npx --yes -p typescript@5.6.3 tsc --noEmit --strict "$RUNNER_TEMP/schema.d.ts"
+
   audit:
     name: Dependency vulnerability scan
     runs-on: ubuntu-latest

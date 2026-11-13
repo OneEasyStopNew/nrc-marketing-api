@@ -41,6 +41,20 @@ class ExecutionState(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class ValidationInputKind(StrEnum):
+    BRIEF = "brief"
+    TEXT = "text"
+    IMAGE = "image"
+
+
+class Outcome(StrEnum):
+    """Overall result. PASS is not approval and does not make content ready to publish."""
+
+    PASS = "PASS"  # noqa: S105  validation outcome, not a credential
+    FAIL = "FAIL"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+
+
 class JobStage(StrEnum):
     """Where a job is inside its execution state. Shown in the UI, so values are part of the API."""
 

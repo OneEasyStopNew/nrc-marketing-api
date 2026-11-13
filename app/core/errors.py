@@ -66,6 +66,16 @@ class ValidationNotPassedError(ConflictError):
     default_message = "This creative version has not passed validation."
 
 
+class NoActivePolicyError(ConflictError):
+    code = "NO_ACTIVE_POLICY"
+    default_message = "This tenant has no active policy to validate against."
+
+
+class ExportNotReadyError(ConflictError):
+    code = "EXPORT_NOT_READY"
+    default_message = "Generate an image for the current version before exporting."
+
+
 class GenerationLimitError(AppError):
     # details.reason is ACTIVE_JOB_LIMIT or CREDIT_CEILING.
     code = "GENERATION_LIMIT_REACHED"

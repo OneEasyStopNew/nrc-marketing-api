@@ -2,11 +2,15 @@
 
 from decimal import Decimal
 from functools import lru_cache
-from typing import Annotated, Literal
+from pathlib import Path
+from typing import Annotated, Final, Literal, Self
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+AppEnv = Literal["local", "demo", "staging", "production"]
+# Environments where simulated data and locally signed tokens are allowed.
+NON_PRODUCTION_ENVS: Final[frozenset[str]] = frozenset({"local", "demo"})
 # lease_outbox_events() clamps its lease to the same range in SQL; keep the two in sync.
 LEASE_MIN_SECONDS = 5
 LEASE_MAX_SECONDS = 600
@@ -21,6 +25,8 @@ class Settings(BaseSettings):
         env_file=(".env", ".env.local"), env_file_encoding="utf-8", extra="ignore", frozen=True
     )
 
+    # Defaults to the strictest value: a deployment that forgets it gets no dev shortcuts.
+    app_env: AppEnv = "production"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     enable_docs: bool = False
     max_request_body_bytes: int = Field(default=1_048_576, ge=1024)
@@ -38,6 +44,15 @@ class Settings(BaseSettings):
     http_timeout_seconds: float = Field(default=5, gt=0, le=30)
 
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
+
+    # Simulated validation, generation, asset and export responses so the frontend can integrate
+    # before D2-D5 ship. Local and demo environments only; never in staging or production.
+    demo_stubs: bool = False
+    # Absolute base URL the frontend reaches this API on, used for placeholder image links.
+    demo_public_base_url: HttpUrl = HttpUrl("http://127.0.0.1:8000")
+    # Local JWKS file (from `python -m scripts.dev_token init`) used instead of Cognito's keys.
+    # Development only, until Cognito exists. Never set in staging or production.
+    dev_jwks_file: Path | None = None
 
     # Image generation (NRC-6, NRC-10). Live mode never falls back to the simulator.
     generation_mode: Literal["simulator", "live"] = "simulator"
@@ -114,6 +129,30 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return tuple(item.strip() for item in value.split(",") if item.strip())
         return value
+
+    @field_validator("dev_jwks_file", mode="before")
+    @classmethod
+    def _blank_means_unset(cls, value: object) -> object:
+        # `DEV_JWKS_FILE=` (as in .env.example) means "use Cognito", not the current directory.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _shortcuts_only_outside_production(self) -> Self:
+        if self.app_env in NON_PRODUCTION_ENVS:
+            return self
+        enabled = [
+            name
+            for name, on in (("DEMO_STUBS", self.demo_stubs), ("DEV_JWKS_FILE", self.dev_jwks_file))
+            if on
+        ]
+        if enabled:
+            raise ValueError(
+                f"{', '.join(enabled)} cannot be used when APP_ENV={self.app_env!r}; "
+                "set APP_ENV=local (or demo) for development"
+            )
+        return self
 
     @property
     def cognito_issuer(self) -> str:

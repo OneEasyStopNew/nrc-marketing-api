@@ -75,6 +75,9 @@ class CreativeVersionRead(ApiModel):
     channel: Channel
     post_format: PostFormat
     created_by: str
+    created_by_name: str | None = Field(
+        description="The author's display name in this tenant; null when none is set."
+    )
     created_at: datetime
 
 

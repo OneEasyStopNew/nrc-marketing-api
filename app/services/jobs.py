@@ -54,7 +54,8 @@ async def accept_creative_job(
 
     Raises:
         IdempotencyKeyReusedError: the key was used before with a different payload.
-        NotFoundError / VersionConflictError / GenerationNotEligibleError: see generation_checks.
+        NotFoundError, VersionConflictError, GenerationNotEligibleError and
+            ValidationNotPassedError: see generation_checks.
         GenerationLimitError: too many active jobs, or the daily credit ceiling would be passed.
     """
     fingerprint = idempotency.request_hash(ctx.principal.sub, data)
