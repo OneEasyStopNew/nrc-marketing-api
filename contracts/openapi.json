@@ -1451,7 +1451,7 @@
           "assets"
         ],
         "summary": "Generated images in this tenant, newest first (read-only)",
-        "description": "Only finished images from studies the caller can use. Uploads are not supported yet. download_url is short-lived: list again, or GET /assets/{asset_id}, for a fresh one.",
+        "description": "Only finished images from studies the caller can use. Uploads are not supported yet. download_url is short-lived: list again, or GET /assets/{asset_id}, for a fresh one. A page includes all images tied at its last timestamp, so it may exceed limit.",
         "operationId": "list_media",
         "security": [
           {
@@ -1544,8 +1544,8 @@
               }
             }
           },
-          "501": {
-            "description": "Not implemented yet (DEMO_STUBS is off).",
+          "503": {
+            "description": "Object storage is not configured or temporarily unavailable.",
             "content": {
               "application/json": {
                 "schema": {

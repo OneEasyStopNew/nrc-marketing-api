@@ -207,7 +207,11 @@ worker. Image validation, generation jobs, assets, the media list and export the
 simulated data in the real contract shapes. Brief and caption validation is always real.
 
 With `DEMO_STUBS=false`, generation jobs are the real durable jobs (NRC-6, run by the connector
-worker) and the rest answer `501` until storage and image checks ship. Both use the same gate
+worker). Asset reads and `GET /media` use stored images and require configured object storage
+(503 if unavailable); image validation and export still answer `501`. The real media list returns
+only successful generated images in the caller's tenant and permitted studies, with fresh,
+short-lived links. Pass its `next_cursor` unchanged for older images; timestamp ties stay on the
+same page, which may exceed the requested `limit`. Both generation paths use the same gate
 (`app.services.generation_checks`):
 
 - 412 `VERSION_CONFLICT`: not the current version.

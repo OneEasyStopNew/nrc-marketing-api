@@ -296,13 +296,13 @@ async def test_generation_refuses_a_brief_that_was_never_validated(
     assert response.json()["details"] == {"validation_run_id": None, "status": "NOT_VALIDATED"}
 
 
-async def test_media_library_says_not_implemented_without_demo_stubs(
+async def test_media_library_is_empty_without_generated_images(
     client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     response = await client.get("/v1/marketing/media", headers=auth("creator-a", world.a.tenant_id))
 
-    assert response.status_code == 501
-    assert response.json()["code"] == "NOT_IMPLEMENTED"
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "next_cursor": None}
 
 
 async def test_version_history_names_the_author(
