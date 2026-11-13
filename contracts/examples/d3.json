@@ -1,0 +1,92 @@
+{
+  "_note": "D3 sample responses for frontend mocks (generation jobs and assets). All data is synthetic; the download URL is a placeholder. Validated against the API schemas by tests/test_contract.py.",
+  "job_accepted": {
+    "request": "POST /v1/marketing/creative-jobs  (202, Location: /v1/marketing/jobs/{job_id})",
+    "status": 202,
+    "schema": "JobAccepted",
+    "body": {
+      "job_id": "0b7a4c1e-92d3-4f58-8a16-3c5e7d9f1a21",
+      "state": "QUEUED"
+    }
+  },
+  "job_succeeded": {
+    "request": "GET /v1/marketing/jobs/0b7a4c1e-92d3-4f58-8a16-3c5e7d9f1a21",
+    "status": 200,
+    "schema": "JobRead",
+    "body": {
+      "job_id": "0b7a4c1e-92d3-4f58-8a16-3c5e7d9f1a21",
+      "kind": "image_generation",
+      "creative_id": "4d2f8b6a-1c3e-4a75-9b08-5e7f1a3c9d02",
+      "creative_version": 1,
+      "state": "SUCCEEDED",
+      "stage": "stored",
+      "provider_request_id": "sim-5c1e9a7b-3d24-4f86-b0a1-2e8d6c4f7a93",
+      "failure_code": null,
+      "failure_message": null,
+      "result_asset_id": "9e3b5d7f-2a4c-4b61-8d93-1f6a8c0e2b44",
+      "created_at": "2026-11-09T10:00:00Z",
+      "updated_at": "2026-11-09T10:00:07Z",
+      "completed_at": "2026-11-09T10:00:07Z"
+    }
+  },
+  "job_failed": {
+    "request": "GET /v1/marketing/jobs/{job_id}",
+    "status": 200,
+    "schema": "JobRead",
+    "body": {
+      "job_id": "1c8d6e2f-a3b5-4c97-8e10-4d6f8a2c0b31",
+      "kind": "image_generation",
+      "creative_id": "4d2f8b6a-1c3e-4a75-9b08-5e7f1a3c9d02",
+      "creative_version": 1,
+      "state": "FAILED",
+      "stage": null,
+      "provider_request_id": "sim-7a2c4e6b-8d10-4f32-9a54-6c8e0a2d4f15",
+      "failure_code": "OUTPUT_UNAVAILABLE",
+      "failure_message": "The provider output is not a valid image",
+      "result_asset_id": null,
+      "created_at": "2026-11-09T10:05:00Z",
+      "updated_at": "2026-11-09T10:05:09Z",
+      "completed_at": "2026-11-09T10:05:09Z"
+    }
+  },
+  "job_unknown": {
+    "request": "GET /v1/marketing/jobs/{job_id}",
+    "status": 200,
+    "schema": "JobRead",
+    "body": {
+      "job_id": "2e9f7a3b-b4c6-4da8-9f21-5e7a9b3d1c42",
+      "kind": "image_generation",
+      "creative_id": "4d2f8b6a-1c3e-4a75-9b08-5e7f1a3c9d02",
+      "creative_version": 1,
+      "state": "UNKNOWN",
+      "stage": "reconcile",
+      "provider_request_id": null,
+      "failure_code": "PROVIDER_OUTCOME_UNKNOWN",
+      "failure_message": null,
+      "result_asset_id": null,
+      "created_at": "2026-11-09T10:10:00Z",
+      "updated_at": "2026-11-09T10:10:30Z",
+      "completed_at": null
+    }
+  },
+  "asset": {
+    "request": "GET /v1/marketing/assets/9e3b5d7f-2a4c-4b61-8d93-1f6a8c0e2b44",
+    "status": 200,
+    "schema": "AssetRead",
+    "body": {
+      "asset_id": "9e3b5d7f-2a4c-4b61-8d93-1f6a8c0e2b44",
+      "creative_id": "4d2f8b6a-1c3e-4a75-9b08-5e7f1a3c9d02",
+      "origin": "generated",
+      "mime_type": "image/png",
+      "width_px": 1080,
+      "height_px": 1080,
+      "size_bytes": 48213,
+      "checksum_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "provider": "simulator",
+      "model": "simulated-image-v1",
+      "created_at": "2026-11-09T10:00:07Z",
+      "download_url": "https://storage.example/generated-images/2026/11/sample.png?X-Amz-Signature=placeholder",
+      "download_url_expires_at": "2026-11-09T10:15:07Z"
+    }
+  }
+}

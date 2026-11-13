@@ -18,6 +18,8 @@ from app.core.logging import configure_logging
 from app.core.request_context import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.db.session import create_engine, create_sessionmaker
 from app.services.demo_stubs import DemoStubs
+from app.services.media import configure_pillow
+from app.services.storage import ObjectStorage
 
 API_PREFIX = "/v1/marketing"
 API_VERSION = "0.1.0"
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    configure_pillow(settings)
     engine = create_engine(settings)
     try:
         async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as http:
@@ -43,6 +46,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.warning("DEV_JWKS_FILE is set: accepting locally signed dev tokens")
                 signing_keys = LocalJwks.from_file(settings.dev_jwks_file)
             app.state.signing_keys = signing_keys
+            # Without a bucket the asset endpoint answers 503; nothing else needs storage.
+            app.state.storage = ObjectStorage(settings) if settings.aws_s3_bucket else None
             yield
     finally:
         await engine.dispose()

@@ -11,9 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.auth.access import Capability, TenantContext
 from app.auth.tokens import Principal, SigningKeyProvider, verify_access_token
 from app.core.config import Settings, get_settings
-from app.core.errors import AuthenticationError, FeatureNotAvailableError, PermissionDeniedError
+from app.core.errors import (
+    AuthenticationError,
+    DependencyUnavailableError,
+    FeatureNotAvailableError,
+    PermissionDeniedError,
+)
 from app.services import tenancy
 from app.services.demo_stubs import DemoStubs
+from app.services.storage import ObjectStorage
 
 
 async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
@@ -33,9 +39,27 @@ async def get_demo_stubs(request: Request) -> DemoStubs | None:
     return stubs
 
 
+async def get_optional_storage(request: Request) -> ObjectStorage | None:
+    # None without a bucket. For routes that the demo stubs can answer without storage.
+    storage: ObjectStorage | None = request.app.state.storage
+    return storage
+
+
+async def get_storage(request: Request) -> ObjectStorage:
+    return require_storage(await get_optional_storage(request))
+
+
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 DemoStubsDep = Annotated[DemoStubs | None, Depends(get_demo_stubs)]
+StorageDep = Annotated[ObjectStorage, Depends(get_storage)]
+OptionalStorageDep = Annotated[ObjectStorage | None, Depends(get_optional_storage)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def require_storage(storage: ObjectStorage | None) -> ObjectStorage:
+    if storage is None:
+        raise DependencyUnavailableError("Image storage is not configured.")
+    return storage
 
 
 def require_stubs(stubs: DemoStubs | None, feature: str) -> DemoStubs:

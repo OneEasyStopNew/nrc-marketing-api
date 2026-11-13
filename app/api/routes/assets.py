@@ -1,5 +1,5 @@
-# Stored assets and the media library. Implemented with generated-image storage (NRC-3); until
-# then they answer from the demo stubs when DEMO_STUBS=true, else 501.
+# Stored assets (metadata plus a short-lived download URL) and the media library.
+# With DEMO_STUBS=true the demo stubs answer instead: their images live in memory, not in storage.
 
 from typing import Annotated, Any
 from uuid import UUID
@@ -7,9 +7,18 @@ from uuid import UUID
 from fastapi import APIRouter, Query
 from pydantic import AwareDatetime
 
-from app.api.deps import CreativeReader, DbSession, DemoStubsDep, require_stubs
+from app.api.deps import (
+    CreativeReader,
+    DbSession,
+    DemoStubsDep,
+    OptionalStorageDep,
+    SettingsDep,
+    require_storage,
+    require_stubs,
+)
 from app.schemas.assets import AssetRead, MediaPage
 from app.schemas.common import ErrorBody
+from app.services import assets
 
 router = APIRouter(tags=["assets"])
 
@@ -21,15 +30,26 @@ _NOT_BUILT: dict[int | str, dict[str, Any]] = {
 @router.get(
     "/assets/{asset_id}",
     summary="Asset metadata and a short-lived download URL (D3)",
+    description="The URL is not stored or logged; ask again when it expires.",
     responses={
-        404: {"model": ErrorBody, "description": "Not found, or not visible to the caller."},
-        **_NOT_BUILT,
+        404: {"model": ErrorBody, "description": "Asset not found or not permitted."},
+        503: {
+            "model": ErrorBody,
+            "description": "Object storage is not configured or temporarily unavailable.",
+        },
     },
 )
 async def get_asset(
-    asset_id: UUID, ctx: CreativeReader, db: DbSession, stubs: DemoStubsDep
+    asset_id: UUID,
+    ctx: CreativeReader,
+    db: DbSession,
+    stubs: DemoStubsDep,
+    storage: OptionalStorageDep,
+    settings: SettingsDep,
 ) -> AssetRead:
-    return await require_stubs(stubs, "Assets").get_asset(db, ctx, asset_id)
+    if stubs is not None:
+        return await stubs.get_asset(db, ctx, asset_id)
+    return await assets.get_asset(db, ctx, asset_id, require_storage(storage), settings)
 
 
 @router.get(

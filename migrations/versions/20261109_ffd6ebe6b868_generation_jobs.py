@@ -5,11 +5,19 @@ The connector worker is the only cross-tenant reader: it leases due outbox rows 
 lease_outbox_events(), a SECURITY DEFINER function that returns ids only, and then binds the
 tenant of each event, so every other read and write stays under RLS.
 
+The lease takes only the event types the worker has handlers for; others (asset.generated until
+the NRC-7 validation handler subscribes) are never leased, so never retried or given up. The due
+index leads with event_type so those are skipped rather than scanned. outbox_events.attempts
+counts every lease, including each poll of a long provider job; failed_attempts counts failures
+only: the lease function adds one when it takes over an event whose previous lease expired
+unfinished (the worker crashed, hung or raised), and the worker adds one for an event it has no
+handler for. Provider idempotency keys are text ("nrc-job-<job_id>").
+
 Deployment requirements for the lease function:
 - Its owner (the role running this migration) must also own outbox_events.
 - marketing_app must NOT be a member of that owner role, or it would inherit the owner's
   outbox_lease policy and see every tenant's events.
-- The API and the worker currently share marketing_app; a separate worker role is a follow-up.
+- 3fb9adf5dfbe moves EXECUTE from marketing_app to the worker's own role, marketing_worker.
 
 Revision ID: ffd6ebe6b868
 Revises: de579cd5c63a
@@ -30,13 +38,17 @@ depends_on: str | Sequence[str] | None = None
 APP_ROLE = "marketing_app"
 TABLES = ("jobs", "outbox_events", "credit_reservations")
 CURRENT_TENANT = "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
-LEASE_FUNCTION = "lease_outbox_events(text, integer, integer)"
+LEASE_FUNCTION = "lease_outbox_events(text, integer, integer, text[])"
+DUE = sa.text("processed_at IS NULL")
 
 # Runs as the migration owner. FORCE RLS applies to the owner too, so the outbox_lease policy
 # lets only this role (the function's owner) see every tenant's outbox rows. batch is clamped
-# to 1..50 and lease_seconds to 5..600, whatever the caller passes.
+# to 1..50 and lease_seconds to 5..600, whatever the caller passes. A finished lease is always
+# cleared (leased_until NULL), so a set one here means it expired unfinished.
 CREATE_LEASE_FUNCTION = """
-CREATE FUNCTION lease_outbox_events(owner text, batch integer, lease_seconds integer)
+CREATE FUNCTION lease_outbox_events(
+    owner text, batch integer, lease_seconds integer, event_types text[]
+)
 RETURNS TABLE (event_id uuid, tenant_id uuid, job_id uuid, event_type text)
 LANGUAGE sql VOLATILE SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
@@ -46,6 +58,7 @@ AS $$
         WHERE o.processed_at IS NULL
           AND o.available_at <= clock_timestamp()
           AND (o.leased_until IS NULL OR o.leased_until <= clock_timestamp())
+          AND o.event_type = ANY(event_types)
         ORDER BY o.available_at
         LIMIT LEAST(GREATEST(batch, 1), 50)
         FOR UPDATE SKIP LOCKED
@@ -54,7 +67,9 @@ AS $$
     SET leased_until = clock_timestamp()
             + make_interval(secs => LEAST(GREATEST(lease_seconds, 5), 600)),
         lease_owner = owner,
-        attempts = o.attempts + 1
+        attempts = o.attempts + 1,
+        failed_attempts = o.failed_attempts
+            + CASE WHEN o.leased_until IS NULL THEN 0 ELSE 1 END
     FROM due
     WHERE o.id = due.id
     RETURNING o.id, o.tenant_id, o.job_id, o.event_type::text
@@ -97,7 +112,7 @@ def upgrade() -> None:
         sa.Column("deadline_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("provider", sa.String(length=32), nullable=True),
         sa.Column("model", sa.String(length=100), nullable=True),
-        sa.Column("provider_idempotency_key", sa.Uuid(), nullable=True),
+        sa.Column("provider_idempotency_key", sa.String(length=255), nullable=True),
         sa.Column("provider_request_id", sa.String(length=200), nullable=True),
         sa.Column("provider_cost_estimate_usd_micros", sa.BigInteger(), nullable=True),
         sa.Column("failure_code", sa.String(length=64), nullable=True),
@@ -193,6 +208,7 @@ def upgrade() -> None:
         sa.Column("leased_until", sa.DateTime(timezone=True), nullable=True),
         sa.Column("lease_owner", sa.String(length=128), nullable=True),
         sa.Column("attempts", sa.Integer(), nullable=False),
+        sa.Column("failed_attempts", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.Column("processed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_error_code", sa.String(length=64), nullable=True),
         sa.Column(
@@ -211,9 +227,9 @@ def upgrade() -> None:
     op.create_index(
         "ix_outbox_events_due",
         "outbox_events",
-        ["available_at"],
+        ["event_type", "available_at"],
         unique=False,
-        postgresql_where=sa.text("processed_at IS NULL"),
+        postgresql_where=DUE,
     )
 
     # Table names and privileges are the constants above, never user input.
@@ -236,11 +252,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Dropping a table also drops its policies and grants.
     op.execute(f"DROP FUNCTION {LEASE_FUNCTION}")
-    op.drop_index(
-        "ix_outbox_events_due",
-        table_name="outbox_events",
-        postgresql_where=sa.text("processed_at IS NULL"),
-    )
+    op.drop_index("ix_outbox_events_due", table_name="outbox_events", postgresql_where=DUE)
     op.drop_table("outbox_events")
     op.drop_index("ix_credit_reservations_tenant_id_created_at", table_name="credit_reservations")
     op.drop_table("credit_reservations")

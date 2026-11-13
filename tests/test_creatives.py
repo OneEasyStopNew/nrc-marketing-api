@@ -1,12 +1,17 @@
 # Creative drafts: creation, idempotency, versioned edits and isolation.
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from sqlalchemy.ext.asyncio import AsyncConnection
 
-from tests.conftest import CREATOR_A_NAME, AuthHeaders, World
+from app.db.session import bind_tenant
+from app.models import Asset, Job
+from app.models.enums import ExecutionState
+from tests.conftest import CREATOR_A_NAME, AuthHeaders, SeededTenant, World, _session
 
 CREATIVES = "/v1/marketing/creatives"
 
@@ -322,3 +327,117 @@ async def test_version_history_names_the_author(
     assert named_versions.json()["items"][0]["created_by_name"] == CREATOR_A_NAME
     assert unnamed_versions.json()["items"][0]["created_by"] == "creator-b"
     assert unnamed_versions.json()["items"][0]["created_by_name"] is None
+
+
+async def _create_for(
+    client: httpx.AsyncClient, auth: AuthHeaders, tenant: SeededTenant, sub: str
+) -> dict[str, Any]:
+    response = await client.post(
+        CREATIVES,
+        headers=auth(sub, tenant.tenant_id, **{"Idempotency-Key": uuid4().hex}),
+        json=_draft(tenant.study_id),
+    )
+    assert response.status_code == 201, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+async def _store_asset(
+    connection: AsyncConnection,
+    tenant: SeededTenant,
+    creative_id: str,
+    version: int,
+    created_at: datetime,
+) -> str:
+    # A succeeded job and its asset row, as the worker leaves them (no object storage needed).
+    async with _session(connection) as db:
+        await bind_tenant(db, tenant.tenant_id)
+        job = Job(
+            tenant_id=tenant.tenant_id,
+            kind="image_generation",
+            creative_id=UUID(creative_id),
+            creative_version=version,
+            study_snapshot_id=tenant.snapshot_id,
+            study_snapshot_version=1,
+            state=ExecutionState.SUCCEEDED,
+            max_attempts=1,
+            deadline_at=created_at + timedelta(minutes=10),
+            created_by="creator",
+        )
+        db.add(job)
+        await db.flush()
+        asset = Asset(
+            tenant_id=tenant.tenant_id,
+            creative_id=UUID(creative_id),
+            creative_version=version,
+            job_id=job.id,
+            origin="generated",
+            bucket="fake",
+            s3_key=f"fake/{uuid4()}.png",
+            mime_type="image/png",
+            width_px=1,
+            height_px=1,
+            size_bytes=1,
+            checksum_sha256="0" * 64,
+            created_by="creator",
+            created_at=created_at,
+        )
+        db.add(asset)
+        await db.commit()
+    return str(asset.id)
+
+
+async def test_asset_id_is_the_current_versions_image_and_clears_after_an_edit(
+    client: httpx.AsyncClient, connection: AsyncConnection, world: World, auth: AuthHeaders
+) -> None:
+    created = await _create(client, auth, world)
+    url = f"{CREATIVES}/{created['id']}"
+    assert created["asset_id"] is None
+    asset_id = await _store_asset(connection, world.a, created["id"], 1, datetime.now(UTC))
+
+    current = await client.get(url, headers=auth("creator-a", world.a.tenant_id))
+    edited = await client.patch(
+        url,
+        headers=auth("creator-a", world.a.tenant_id, **{"If-Match": '"1"'}),
+        json={"current_prompt": "Revised prompt."},
+    )
+    after_edit = await client.get(url, headers=auth("creator-a", world.a.tenant_id))
+
+    assert current.json()["asset_id"] == asset_id
+    assert edited.status_code == 200
+    assert edited.json()["asset_id"] is None
+    assert after_edit.json()["asset_id"] is None
+
+
+async def test_asset_id_is_the_newest_image_of_the_version(
+    client: httpx.AsyncClient, connection: AsyncConnection, world: World, auth: AuthHeaders
+) -> None:
+    created = await _create(client, auth, world)
+    now = datetime.now(UTC)
+    # Stored newest first, so insertion order cannot be what picks the winner.
+    newest = await _store_asset(connection, world.a, created["id"], 1, now)
+    await _store_asset(connection, world.a, created["id"], 1, now - timedelta(minutes=5))
+
+    response = await client.get(
+        f"{CREATIVES}/{created['id']}", headers=auth("creator-a", world.a.tenant_id)
+    )
+
+    assert response.json()["asset_id"] == newest
+
+
+async def test_asset_id_never_shows_another_tenants_image(
+    client: httpx.AsyncClient, connection: AsyncConnection, world: World, auth: AuthHeaders
+) -> None:
+    mine = await _create(client, auth, world)
+    theirs = await _create_for(client, auth, world.b, "creator-b")
+    their_asset = await _store_asset(connection, world.b, theirs["id"], 1, datetime.now(UTC))
+
+    my_view = await client.get(
+        f"{CREATIVES}/{mine['id']}", headers=auth("creator-a", world.a.tenant_id)
+    )
+    their_view = await client.get(
+        f"{CREATIVES}/{theirs['id']}", headers=auth("creator-b", world.b.tenant_id)
+    )
+
+    assert my_view.json()["asset_id"] is None
+    assert their_view.json()["asset_id"] == their_asset

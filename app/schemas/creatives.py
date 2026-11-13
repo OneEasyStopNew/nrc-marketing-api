@@ -55,7 +55,11 @@ class CreativeRead(ApiModel):
     post_format: PostFormat
     study_snapshot_id: UUID
     study_snapshot_version: int
-    asset_id: UUID | None = Field(default=None, description="Generated image, once D3 ships.")
+    asset_id: UUID | None = Field(
+        default=None,
+        description="Newest generated image for the current version; null until one is stored "
+        "and again after an edit creates a new version.",
+    )
     created_by: str
     created_at: datetime
     updated_at: datetime

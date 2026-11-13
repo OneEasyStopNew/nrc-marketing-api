@@ -1350,6 +1350,7 @@
           "assets"
         ],
         "summary": "Asset metadata and a short-lived download URL (D3)",
+        "description": "The URL is not stored or logged; ask again when it expires.",
         "operationId": "get_asset",
         "security": [
           {
@@ -1422,7 +1423,7 @@
             }
           },
           "404": {
-            "description": "Not found, or not visible to the caller.",
+            "description": "Asset not found or not permitted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1431,8 +1432,8 @@
               }
             }
           },
-          "501": {
-            "description": "Not implemented yet (DEMO_STUBS is off).",
+          "503": {
+            "description": "Object storage is not configured or temporarily unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1927,7 +1928,7 @@
               }
             ],
             "title": "Asset Id",
-            "description": "Generated image, once D3 ships."
+            "description": "Newest generated image for the current version; null until one is stored and again after an edit creates a new version."
           },
           "created_by": {
             "type": "string",
@@ -2615,6 +2616,7 @@
           "reconcile",
           "waiting_provider",
           "output_ready",
+          "fetching_output",
           "stored"
         ],
         "title": "JobStage",

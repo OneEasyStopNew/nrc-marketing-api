@@ -2,6 +2,7 @@
 
 from uuid import UUID
 
+from pydantic import SecretStr
 from sqlalchemy import Connection, event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -38,9 +39,10 @@ async def bind_tenant(db: AsyncSession, tenant_id: UUID) -> None:
     await db.execute(_SET_TENANT, {"tenant_id": str(tenant_id)})
 
 
-def create_engine(settings: Settings) -> AsyncEngine:
+def create_engine(settings: Settings, url: SecretStr | None = None) -> AsyncEngine:
+    # url: another role's connection (the worker's); the pool settings stay the same.
     return create_async_engine(
-        settings.database_url.get_secret_value(),
+        (url or settings.database_url).get_secret_value(),
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
         pool_pre_ping=True,

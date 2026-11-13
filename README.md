@@ -47,6 +47,102 @@ reactivates the membership. Admin is not a super-role; it only manages membershi
 Add `--display-name "<sub>=Priya Shah"` (once per member) to show a name instead of the sub in
 version history and the media library. Re-running without it keeps the name already set.
 
+### Local object storage (SeaweedFS)
+
+`docker compose up -d --wait` also starts SeaweedFS, an S3-compatible server on
+`http://127.0.0.1:8333`. It replaces MinIO. Generated images are stored there locally and in a private
+S3 bucket on servers.
+
+1. Add a profile to `~/.aws/config`:
+
+   ```ini
+   [profile nrc-local]
+   region = us-east-1
+   ```
+
+2. Add its credentials to `~/.aws/credentials`. These values only open the local container (see
+   `docker/seaweedfs-s3.json`); they are not AWS keys.
+
+   ```ini
+   [nrc-local]
+   aws_access_key_id = localdev
+   aws_secret_access_key = localdev-password
+   ```
+
+3. In `.env` set `AWS_PROFILE=nrc-local`, `AWS_S3_BUCKET=nrc-local-media`,
+   `AWS_ENDPOINT_URL_S3=http://127.0.0.1:8333` and `S3_FORCE_PATH_STYLE=true`.
+4. Create the bucket (versioning on). The script refuses to run unless `AWS_ENDPOINT_URL_S3` is set,
+   so it can never touch real AWS:
+
+   ```powershell
+   uv run python -m scripts.create_local_bucket
+   ```
+
+The storage tests use the bucket `nrc-test-media` and skip themselves when SeaweedFS is not running.
+
+### Run the generation worker locally
+
+Image generation runs in a separate worker process, never inside a request. With Postgres and
+SeaweedFS up (see above), in a second terminal:
+
+```powershell
+uv run python -m app.workers.connector
+```
+
+`GENERATION_MODE` defaults to `simulator`: no provider account is needed and every image is stamped
+SIMULATED. End to end you will see:
+
+1. `POST /creative-jobs` returns `202` with a `job_id` (state `QUEUED`).
+2. The worker leases the job, "submits" it to the simulated provider and polls it.
+3. It checks the 1080x1080 PNG, stores it in the bucket and adds an `assets` row; the job becomes
+   `SUCCEEDED` with a `result_asset_id`.
+4. `GET /jobs/{id}` shows that state; `GET /assets/{asset_id}` returns the metadata and a 15-minute
+   download URL.
+
+Without `AWS_S3_BUCKET` the simulator worker still runs, but finished jobs stop at stage
+`output_ready`. `GENERATION_MODE=live` refuses to start without storage.
+
+The worker connects as `marketing_worker` through `WORKER_DATABASE_URL` and refuses to start
+without it. A job it gives up on while the provider may still have it stays `UNKNOWN` with its
+credits held; `uv run python -m scripts.list_unknown_jobs` lists those (ids only, read-only) for an
+operator to settle.
+
+### Higgsfield (live)
+
+Live mode (`GENERATION_MODE=live`) stays off: the worker refuses to start until the validation-PASS
+gate (NRC-7) exists, as well as without a key, `HIGGSFIELD_MODEL`, `HIGGSFIELD_OUTPUT_HOSTS` or
+storage.
+
+- **Key.** Locally, put it in `.env.local` (git-ignored) as `HIGGSFIELD_API_KEY=<key-id>:<key-secret>`,
+  never in `.env`. On staging the worker reads it at startup from Secrets Manager
+  (`HIGGSFIELD_SECRET_ID=nrc/stg/higgsfield`, JSON entry `HIGGSFIELD_API_KEY`)
+  through its IAM role and keeps it in memory only.
+- **Connectivity check.** `scripts/higgsfield_smoke.py` runs outside the API. `--help` lists the
+  candidate model ids and their smallest documented settings, with the doc source.
+
+  ```powershell
+  # Free: calls only /estimate and prints model + USD.
+  uv run python -m scripts.higgsfield_smoke estimate --models higgsfield-ai/soul/standard,higgsfield-ai/soul/v2/standard
+  # Real money, one image: refuses without --confirm-spend, above GENERATION_MAX_COST_USD_PER_IMAGE,
+  # or unless AWS_ENDPOINT_URL_S3 points at local SeaweedFS. Prints ids, checksum, size and S3 key.
+  uv run python -m scripts.higgsfield_smoke generate --model higgsfield-ai/soul/v2/standard --confirm-spend
+  ```
+
+- **Cost guard.** Before the first submit the worker prices the image with `/estimate`. Above
+  `GENERATION_MAX_COST_USD_PER_IMAGE` the job fails `COST_ABOVE_LIMIT`. It then reserves the estimate
+  against `GENERATION_GLOBAL_BUDGET_USD` (default 40, across all tenants, table `provider_spend`) in
+  the same transaction that marks it submitting; past the budget it fails `BUDGET_EXHAUSTED` and
+  nothing is sent. Failed, rejected and canceled requests give the amount back, completed ones commit
+  it (the actual cost if Higgsfield ever reports one, else the estimate), and `UNKNOWN` jobs keep it
+  until reconciled.
+- **Output host not allowed.** Images are downloaded only from `HIGGSFIELD_OUTPUT_HOSTS`. If
+  Higgsfield answers with another host, the worker logs `provider output host not allowed ...
+  host=<host>` at ERROR (host only, never the URL) and keeps the job waiting, retrying with
+  backoff. To recover, add that host to `HIGGSFIELD_OUTPUT_HOSTS` and restart the worker before
+  the output expires; after expiry the job fails `OUTPUT_EXPIRED` (billed). Without an
+  `expires_at` from Higgsfield, expiry is `PROVIDER_OUTPUT_RETENTION_FALLBACK_SECONDS` (7 days)
+  after the worker first saw the output completed.
+
 ## Checks
 
 CI (`.github/workflows/ci.yml`) runs the same checks on every push and pull request, plus a
@@ -62,7 +158,7 @@ uv run pytest            # uses the marketing_test database; each test is rolled
 
 - `contracts/openapi.json` is the spec. Regenerate it with `uv run python -m scripts.export_openapi`.
   A test fails if it is stale. Operation IDs are the handler names (for example `create_creative`).
-- `contracts/examples/d1.json` holds sample responses for mocks. They are validated against the
+- `contracts/examples/` (`d1.json`, `d3.json`) holds sample responses for mocks. They are validated against the
   schemas.
 - Generate the TypeScript types with `npx openapi-typescript@7.4.4 contracts/openapi.json -o schema.d.ts`.
   CI checks that they compile.
@@ -152,6 +248,12 @@ machine that ran `init`.
 
 - A Postgres login role `marketing_app` that does not own the tables and has no `BYPASSRLS`. The API's
   `DATABASE_URL` uses it. Migrations run as the owner through `MIGRATION_DATABASE_URL`.
+- A second login role `marketing_worker`, created the same way (not an owner, no `BYPASSRLS`, not a
+  member of the owner role), before `alembic upgrade head`, which grants it the worker's tables. The
+  connector worker's `WORKER_DATABASE_URL` uses it and the worker refuses to start without it.
+- Deploy order for migration `3fb9adf5dfbe`: create `marketing_worker` and switch every worker to
+  `WORKER_DATABASE_URL` BEFORE it runs. It revokes the lease function and `provider_spend` from
+  `marketing_app`, so a worker still on `DATABASE_URL` stops leasing.
 - Cognito: `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_IDS` and a resource-server
   scope matching `REQUIRED_SCOPE`.
 - `APP_ENV=staging` (or `production`), `ENABLE_DOCS=false`, `CORS_ORIGINS` set to the frontend origin, and `FORWARDED_ALLOW_IPS` set to the
@@ -161,6 +263,7 @@ machine that ran `init`.
 ## Not done yet
 
 A review of meaning (AI checks and GraphRAG over the policy sources) for briefs and captions,
-Higgsfield generation and assets (D3), image checks (D4), export (D5), and the
-staging deployment (D6). Cleanup of old idempotency keys, the study import from the approved demo
-study and the approved policy rules are still to do. The seeded study and policy are synthetic.
+image checks (D4), export (D5), and the staging deployment (D6). Live Higgsfield generation
+through the app (D3) is wired to the validation gate and needs the live settings. Cleanup of
+old idempotency keys, the study import from the approved demo study and the approved policy
+rules are still to do. The seeded study and policy are synthetic.

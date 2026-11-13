@@ -32,21 +32,49 @@ jobs:
         run: |
           owner="$(openssl rand -hex 24)"
           app="$(openssl rand -hex 24)"
+          worker="$(openssl rand -hex 24)"
           echo "::add-mask::$owner"
           echo "::add-mask::$app"
+          echo "::add-mask::$worker"
           {
             echo "POSTGRES_PASSWORD=$owner"
             echo "APP_DB_PASSWORD=$app"
+            echo "WORKER_DB_PASSWORD=$worker"
             echo "MIGRATION_DATABASE_URL=postgresql+asyncpg://postgres:$owner@127.0.0.1:5432/marketing"
             echo "TEST_DATABASE_URL=postgresql+asyncpg://marketing_app:$app@127.0.0.1:5432/marketing_test"
+            echo "TEST_WORKER_DATABASE_URL=postgresql+asyncpg://marketing_worker:$worker@127.0.0.1:5432/marketing_test"
             echo "TEST_MIGRATION_DATABASE_URL=postgresql+asyncpg://postgres:$owner@127.0.0.1:5432/marketing_test"
           } >> "$GITHUB_ENV"
 
-      - name: Start Postgres
+      - name: Start Postgres and SeaweedFS
         run: docker compose up -d --wait
+
+      - name: Wait for the SeaweedFS S3 port
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:8333; then exit 0; fi
+            sleep 2
+          done
+          echo "SeaweedFS S3 did not come up on port 8333" >&2
+          exit 1
+
+      # Local-only dummy values from docker/seaweedfs-s3.json; they open only the CI container.
+      - name: Configure test media storage
+        run: |
+          {
+            echo "AWS_ACCESS_KEY_ID=localdev"
+            echo "AWS_SECRET_ACCESS_KEY=localdev-password"
+            echo "AWS_REGION=us-east-1"
+            echo "AWS_S3_BUCKET=nrc-test-media"
+            echo "AWS_ENDPOINT_URL_S3=http://127.0.0.1:8333"
+            echo "S3_FORCE_PATH_STYLE=true"
+          } >> "$GITHUB_ENV"
 
       - name: Install dependencies from the lockfile
         run: uv sync --locked
+
+      - name: Create the versioned test bucket
+        run: uv run python -m scripts.create_local_bucket
 
       - name: Format
         run: uv run ruff format --check .
