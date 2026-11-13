@@ -23,3 +23,8 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Claude Code: shared files (CLAUDE.md, .claude/rules/) are committed; personal ones are not
+.claude/worktrees/
+.claude/settings.local.json
+CLAUDE.local.md
