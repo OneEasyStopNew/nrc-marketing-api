@@ -146,7 +146,7 @@ async def test_context_includes_active_policy_summary(
     assert response.json()["active_policy"] == {
         "policy_bundle_id": str(world.a.policy_bundle_id),
         "version": 1,
-        "name": "[SYNTHETIC] Demo recruitment advertising rules",
+        "name": "[SYNTHETIC] Staging recruitment advertising rules",
         "is_synthetic": True,
         "rule_count": len(DEMO_POLICY_RULES),
     }
