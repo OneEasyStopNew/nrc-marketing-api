@@ -1,7 +1,7 @@
-"""Create a synthetic demo tenant, study and policy, and grant Cognito users access to them.
+"""Create a synthetic staging tenant, study and policy, and grant Cognito users access to them.
 
 Usage (runs as the database owner, MIGRATION_DATABASE_URL):
-    uv run python -m scripts.seed_demo --tenant-name "NRC Demo" \
+    uv run python -m scripts.seed_demo --tenant-name "NRC Staging" \
         --member <cognito-sub>=creator --member <cognito-sub>=reviewer
 
 Everything created is labelled SYNTHETIC. Replace the study with the approved demo study, and
@@ -31,19 +31,19 @@ SYNTHETIC_FACTS = {
     "eligibility_summary": "Adults aged 18 to 75 who have been told they have high blood pressure.",
     "min_age": 18,
     "max_age": 75,
-    "sites": ["Synthetic Demo Site"],
+    "sites": ["Synthetic Staging Site"],
     "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
     "required_disclosures": ["This is a research study. Taking part is voluntary."],
     "compensation_statement": None,
-    "contact_url": "https://example.org/synthetic-demo-study",
+    "contact_url": "https://example.org/synthetic-staging-study",
 }
 
 
 # Demo rules paraphrased from public FDA guidance on recruitment advertising ("Recruiting Study
 # Subjects", FDA information sheet). They are not the client's approved policy.
 _FDA_SOURCE = "fda:information-sheet:recruiting-study-subjects"
-DEMO_POLICY_NAME = "[SYNTHETIC] Demo recruitment advertising rules"
-DEMO_POLICY_SOURCE_REF = "synthetic:demo-policy-v1 (paraphrased public FDA guidance)"
+DEMO_POLICY_NAME = "[SYNTHETIC] Staging recruitment advertising rules"
+DEMO_POLICY_SOURCE_REF = "synthetic:staging-policy-v1 (paraphrased public FDA guidance)"
 DEMO_POLICY_RULES: tuple[dict[str, object], ...] = (
     {
         "rule_id": "REC-01",
@@ -185,7 +185,7 @@ async def seed(tenant_name: str, members: list[tuple[str, list[str]]]) -> dict[s
             db.add(Tenant(id=tenant_id, name=tenant_name))
             await db.flush()
             db.add_all(Membership(tenant_id=tenant_id, user_sub=s, roles=r) for s, r in members)
-            db.add(Study(id=study_id, tenant_id=tenant_id, title="[SYNTHETIC] Demo study"))
+            db.add(Study(id=study_id, tenant_id=tenant_id, title="[SYNTHETIC] Staging study"))
             db.add(
                 PolicyBundle(
                     id=policy_id,
@@ -209,7 +209,7 @@ async def seed(tenant_name: str, members: list[tuple[str, list[str]]]) -> dict[s
                     recruitment_status=RecruitmentStatus.RECRUITING,
                     language=Language.EN,
                     facts=SYNTHETIC_FACTS,
-                    source_ref="synthetic:demo-seed-v1",
+                    source_ref="synthetic:staging-seed-v1",
                     approved_by="synthetic-fixture",
                     approved_at=now,
                     is_synthetic=True,

@@ -17,7 +17,7 @@ Copy-Item .env.example .env        # then set the two passwords and the URLs tha
 docker compose up -d --wait        # Postgres + pgvector on 127.0.0.1:5432
 uv sync
 uv run alembic upgrade head
-uv run python -m scripts.seed_demo --tenant-name "NRC Demo" --member <cognito-sub>=creator
+uv run python -m scripts.seed_demo --tenant-name "NRC Staging" --member <cognito-sub>=creator
 uv run uvicorn app.main:create_app --factory --port 8000
 ```
 
@@ -236,7 +236,7 @@ scope, expiry and tenant membership; only the signing key changes.
 ```powershell
 uv run python -m scripts.dev_token init                      # once; writes .dev-keys/ (git-ignored)
 # add DEV_JWKS_FILE=<printed path> to .env, then restart the API
-uv run python -m scripts.seed_demo --tenant-name "NRC Demo" --member dev-praneeth=creator
+uv run python -m scripts.seed_demo --tenant-name "NRC Staging" --member dev-praneeth=creator
 uv run python -m scripts.dev_token issue --sub dev-praneeth  # prints a token valid for 12 hours
 ```
 
