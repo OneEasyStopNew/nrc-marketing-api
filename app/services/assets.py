@@ -13,8 +13,9 @@ from app.auth.access import TenantContext
 from app.core.config import Settings
 from app.core.errors import DependencyUnavailableError, NotFoundError
 from app.models import Asset, Creative, Job, OutboxEvent
-from app.schemas.assets import AssetOrigin, AssetRead
-from app.services import media
+from app.models.enums import ExecutionState
+from app.schemas.assets import AssetOrigin, AssetRead, MediaItem, MediaPage
+from app.services import media, tenancy
 from app.services.jobs import JobContentMissingError, job_content
 from app.services.media import MediaRejectedError
 from app.services.providers.base import FetchedImage, ProviderError, ProviderOutputError
@@ -210,3 +211,83 @@ async def get_asset(
         download_url=url,
         download_url_expires_at=expires_at,
     )
+
+
+async def list_media(
+    db: AsyncSession,
+    ctx: TenantContext,
+    storage: ObjectStorage,
+    settings: Settings,
+    *,
+    before: datetime | None,
+    limit: int,
+) -> MediaPage:
+    """List completed stored images with the same tenant/study boundary as get_asset.
+
+    Keep the existing timestamp cursor contract. Include timestamp ties at the page boundary
+    rather than silently dropping them on the next page (which uses a strict `<` cursor).
+    """
+    query = (
+        select(Asset)
+        .join(
+            Creative,
+            (Creative.tenant_id == Asset.tenant_id) & (Creative.id == Asset.creative_id),
+        )
+        .join(Job, (Job.tenant_id == Asset.tenant_id) & (Job.id == Asset.job_id))
+        .where(
+            Asset.tenant_id == ctx.tenant_id,
+            Creative.study_id.in_(ctx.study_ids),
+            Asset.origin == AssetOrigin.GENERATED.value,
+            Asset.mime_type.in_(("image/png", "image/jpeg")),
+            Job.state == ExecutionState.SUCCEEDED,
+            Job.result_asset_id == Asset.id,
+        )
+        .order_by(Asset.created_at.desc())
+    )
+    if before is not None:
+        query = query.where(Asset.created_at < before)
+    # WITH TIES applies only to created_at; sort equal timestamps by id below for a stable
+    # display order. Check for older rows separately: even limit+1 could land inside a tie.
+    rows = (await db.scalars(query.fetch(limit, with_ties=True))).all()
+    page = sorted(
+        rows,
+        key=lambda row: (row.created_at, row.id),
+        reverse=True,
+    )
+    next_cursor = None
+    if page:
+        boundary = page[-1].created_at
+        older = await db.scalar(
+            query.with_only_columns(Asset.id).where(Asset.created_at < boundary).limit(1)
+        )
+        if older is not None:
+            next_cursor = boundary
+    names = await tenancy.display_names(db, ctx, {row.created_by for row in page})
+    ttl = settings.asset_url_ttl_seconds
+    items: list[MediaItem] = []
+    for asset in page:
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl)
+        try:
+            url = await storage.presigned_get(
+                asset.s3_key, version_id=asset.s3_version_id, expires_in=ttl
+            )
+        except StorageError:
+            raise DependencyUnavailableError("Image storage is temporarily unavailable.") from None
+        items.append(
+            MediaItem(
+                asset_id=asset.id,
+                creative_id=asset.creative_id,
+                creative_version=asset.creative_version,
+                origin=AssetOrigin(asset.origin),
+                mime_type=asset.mime_type,
+                width_px=asset.width_px,
+                height_px=asset.height_px,
+                size_bytes=asset.size_bytes,
+                created_at=asset.created_at,
+                created_by=asset.created_by,
+                created_by_name=names.get(asset.created_by),
+                download_url=url,
+                download_url_expires_at=expires_at,
+            )
+        )
+    return MediaPage(items=items, next_cursor=next_cursor)
