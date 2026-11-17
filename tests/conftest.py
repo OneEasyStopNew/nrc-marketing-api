@@ -57,7 +57,7 @@ from app.models import (
     StudySnapshot,
     Tenant,
 )
-from app.models.enums import Language, RecruitmentStatus
+from app.models.enums import BundleLifecycleState, Language, RecruitmentStatus
 from app.models.jobs import ReservationState
 from app.services.providers.base import (
     FetchedImage,
@@ -251,6 +251,7 @@ async def seed_tenant(
                 is_synthetic=True,
                 approved_by="synthetic-fixture",
                 approved_at=datetime(2026, 11, 1, tzinfo=UTC),
+                lifecycle_state=BundleLifecycleState.ACTIVE,
             )
         )
     await db.flush()

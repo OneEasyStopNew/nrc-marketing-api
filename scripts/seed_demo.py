@@ -22,7 +22,7 @@ from app.auth.access import Role
 from app.core.config import OwnerDatabaseSettings
 from app.db.session import TenantSession, bind_tenant
 from app.models import Membership, MembershipStudy, PolicyBundle, Study, StudySnapshot, Tenant
-from app.models.enums import Language, RecruitmentStatus
+from app.models.enums import BundleLifecycleState, Language, RecruitmentStatus
 from app.schemas.policies import PolicyRule
 
 _SUB = re.compile(r"[A-Za-z0-9-]{1,128}")
@@ -197,6 +197,10 @@ async def seed(tenant_name: str, members: list[tuple[str, list[str]]]) -> dict[s
                     is_synthetic=True,
                     approved_by="synthetic-fixture",
                     approved_at=now,
+                    # Bundles default to DRAFT; the demo policy is the one validation uses.
+                    lifecycle_state=BundleLifecycleState.ACTIVE,
+                    activated_at=now,
+                    activated_by="synthetic-fixture",
                 )
             )
             await db.flush()

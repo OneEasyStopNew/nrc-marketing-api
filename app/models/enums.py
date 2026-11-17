@@ -19,6 +19,12 @@ class Language(StrEnum):
     EN = "en"
 
 
+class PolicyLanguage(StrEnum):
+    # Policy text may be Spanish before the public Language enum accepts it (F33).
+    EN = "en"
+    ES = "es"
+
+
 class Channel(StrEnum):
     FACEBOOK = "facebook"
 
@@ -53,6 +59,62 @@ class Outcome(StrEnum):
     PASS = "PASS"  # noqa: S105  validation outcome, not a credential
     FAIL = "FAIL"
     NEEDS_REVIEW = "NEEDS_REVIEW"
+
+
+class Gate(StrEnum):
+    COMPLETENESS = "completeness"
+    STUDY_FACTS = "study_facts"
+    POLICY = "policy"
+    MEDIA = "media"
+
+
+class Severity(StrEnum):
+    CRITICAL = "critical"
+    MAJOR = "major"
+    MINOR = "minor"
+
+
+class BundleLifecycleState(StrEnum):
+    """Where a policy bundle is in its NRC-4 lifecycle. Only ACTIVE bundles validate content."""
+
+    DRAFT = "DRAFT"
+    REVIEW = "REVIEW"
+    APPROVED = "APPROVED"
+    BUILDING = "BUILDING"
+    READY = "READY"
+    ACTIVE = "ACTIVE"
+    REJECTED = "REJECTED"
+    RETIRED = "RETIRED"
+
+
+class PolicyNodeType(StrEnum):
+    RULE = "RULE"
+    CLAUSE = "CLAUSE"
+    DISCLOSURE = "DISCLOSURE"
+    EXCEPTION = "EXCEPTION"
+    INTERPRETATION = "INTERPRETATION"
+    EXAMPLE = "EXAMPLE"
+
+
+class PolicyEdgeType(StrEnum):
+    SUPPORTED_BY = "supported_by"
+    REQUIRES_DISCLOSURE = "requires_disclosure"
+    EXCEPT_WHEN = "except_when"
+    SUPERSEDES = "supersedes"
+    APPLIES_TO = "applies_to"
+
+
+class CheckType(StrEnum):
+    """What makes the final decision for a rule: code alone, or the model after a phrase check."""
+
+    DETERMINISTIC = "deterministic"
+    SEMANTIC = "semantic"
+
+
+class IndexBuildState(StrEnum):
+    BUILDING = "BUILDING"
+    READY = "READY"
+    FAILED = "FAILED"
 
 
 class JobStage(StrEnum):
