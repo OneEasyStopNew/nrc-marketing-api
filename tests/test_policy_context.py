@@ -21,6 +21,7 @@ from app.models.enums import (
     PolicyLanguage,
     PolicyNodeType,
     RecruitmentStatus,
+    RetrievalMode,
     ValidationInputKind,
 )
 from app.services.policy_context import (
@@ -32,7 +33,7 @@ from app.services.policy_context import (
     MissingContextCode,
     StoredManifest,
 )
-from app.services.policy_context.manifest import RetrievalMode, Statement
+from app.services.policy_context.manifest import Statement
 from app.services.policy_index import build_policy_index
 from app.services.providers.embeddings import (
     EmbeddingProvider,

@@ -104,6 +104,39 @@ class PolicyEdgeType(StrEnum):
     APPLIES_TO = "applies_to"
 
 
+# Policy context retrieval (NRC-5): stored in manifests and shown by the evidence API.
+
+
+class RetrievalMode(StrEnum):
+    # No statements: rule selection and the graph walk only.
+    GRAPH_ONLY = "graph_only"
+    # Statements searched with full-text only: no embedder (e.g. inside an API request, where
+    # provider calls aren't allowed).
+    LEXICAL_ONLY = "lexical_only"
+    # Full-text and vector search, fused.
+    FULL = "full"
+
+
+class Applicability(StrEnum):
+    TRUE = "true"
+    FALSE = "false"
+    # A condition restricts a dimension the request doesn't know (e.g. no audience yet).
+    UNRESOLVED = "unresolved"
+
+
+class MissingContextCode(StrEnum):
+    """Why a manifest is incomplete. A caller must never treat any of these as a PASS."""
+
+    APPLICABILITY_UNRESOLVED = "APPLICABILITY_UNRESOLVED"
+    TRAVERSAL_TRUNCATED = "TRAVERSAL_TRUNCATED"
+    CONFLICT = "CONFLICT"
+    SOURCE_MISSING = "SOURCE_MISSING"
+    # Statements were searched with full-text only (no embedder).
+    SEMANTIC_SEARCH_SKIPPED = "SEMANTIC_SEARCH_SKIPPED"
+    # More statements than POLICY_RETRIEVAL_MAX_STATEMENTS; only the first ones were searched.
+    STATEMENTS_TRUNCATED = "STATEMENTS_TRUNCATED"
+
+
 class CheckType(StrEnum):
     """What makes the final decision for a rule: code alone, or the model after a phrase check."""
 

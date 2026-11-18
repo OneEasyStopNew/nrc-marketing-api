@@ -39,13 +39,16 @@ from app.models import (
     StudySnapshot,
 )
 from app.models.enums import (
+    Applicability,
     BundleLifecycleState,
     CheckType,
     Gate,
     IndexBuildState,
+    MissingContextCode,
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
+    RetrievalMode,
     Severity,
 )
 from app.models.policy_graph import SEARCHABLE_NODE_TYPES
@@ -61,7 +64,6 @@ from app.services.policy_context.graph import adjacency, walk
 from app.services.policy_context.manifest import (
     EXCERPT_MAX_CHARS,
     RETRIEVAL_CONFIG_VERSION,
-    Applicability,
     BundleRef,
     ContextManifest,
     ContextRequest,
@@ -70,9 +72,7 @@ from app.services.policy_context.manifest import (
     ExceptionItem,
     ManifestRule,
     MissingContext,
-    MissingContextCode,
     RetrievalConfig,
-    RetrievalMode,
     SearchMatch,
     SnapshotRef,
     Statement,

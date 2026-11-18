@@ -894,13 +894,114 @@
         }
       }
     },
+    "/v1/marketing/policy-bundles/{policy_bundle_id}/rules": {
+      "get": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "A policy bundle's rules with their sources, disclosures and exceptions",
+        "description": "Approved rules of an active or retired bundle (the ones validation runs pin), for rule detail and evidence views. Shows rule ids, node keys and clause references.",
+        "operationId": "get_policy_bundle_rules",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "policy_bundle_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Policy Bundle Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyBundleRulesRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such bundle for the tenant, or it is not active or retired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "POLICY_CONTEXT_UNAVAILABLE: the bundle has no rule graph (details.reason GRAPH_MISSING).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/marketing/validations": {
       "post": {
         "tags": [
           "validations"
         ],
         "summary": "Validate a brief, caption or image",
-        "description": "Briefs and captions are checked against the active policy and the study facts before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run.",
+        "description": "Briefs and captions are checked against the active policy and the study facts before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run. Each brief or caption run also stores the policy context it was checked against (see GET /validations/{validation_run_id}/context); it doesn't change the outcome yet.",
         "operationId": "create_validation",
         "security": [
           {
@@ -1108,6 +1209,97 @@
           },
           "501": {
             "description": "Not implemented yet (DEMO_STUBS is off).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/validations/{validation_run_id}/context": {
+      "get": {
+        "tags": [
+          "validations"
+        ],
+        "summary": "Policy rules and evidence the run's text was checked against",
+        "description": "The stored policy context of a brief or caption run: the rules selected by their conditions, their source clauses, disclosures and exceptions, search matches and anything retrieval couldn't settle (missing_context, never a pass). Evidence only: the outcome still comes from the rule checks. A run without stored context (older runs, or context unavailable, recorded as a coverage gap) answers 404 CONTEXT_NOT_AVAILABLE.",
+        "operationId": "get_validation_context",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "validation_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Validation Run Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationContextRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND (no such run for the caller), or CONTEXT_NOT_AVAILABLE (the run stored no policy context).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1560,6 +1752,15 @@
   },
   "components": {
     "schemas": {
+      "Applicability": {
+        "type": "string",
+        "enum": [
+          "true",
+          "false",
+          "unresolved"
+        ],
+        "title": "Applicability"
+      },
       "AssetOrigin": {
         "type": "string",
         "enum": [
@@ -1674,6 +1875,115 @@
         "title": "AssetRead",
         "description": "Immutable stored bytes: any change produces a new asset_id and needs new validation."
       },
+      "BundleLifecycleState": {
+        "type": "string",
+        "enum": [
+          "DRAFT",
+          "REVIEW",
+          "APPROVED",
+          "BUILDING",
+          "READY",
+          "ACTIVE",
+          "REJECTED",
+          "RETIRED"
+        ],
+        "title": "BundleLifecycleState",
+        "description": "Where a policy bundle is in its NRC-4 lifecycle. Only ACTIVE bundles validate content."
+      },
+      "BundleRuleRead": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "rule_version": {
+            "type": "integer",
+            "title": "Rule Version"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "requirement": {
+            "type": "string",
+            "title": "Requirement"
+          },
+          "gate": {
+            "$ref": "#/components/schemas/Gate"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "mandatory": {
+            "type": "boolean",
+            "title": "Mandatory"
+          },
+          "check_type": {
+            "$ref": "#/components/schemas/CheckType"
+          },
+          "exact_wording": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exact Wording",
+            "description": "Required wording, never paraphrased."
+          },
+          "prohibited_phrases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Prohibited Phrases"
+          },
+          "applicability": {
+            "$ref": "#/components/schemas/RuleApplicabilityRead"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/RuleSourceRead"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "disclosures": {
+            "items": {
+              "$ref": "#/components/schemas/RuleDisclosureRead"
+            },
+            "type": "array",
+            "title": "Disclosures"
+          },
+          "exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/RuleExceptionRead"
+            },
+            "type": "array",
+            "title": "Exceptions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule_id",
+          "rule_version",
+          "title",
+          "requirement",
+          "gate",
+          "severity",
+          "mandatory",
+          "check_type",
+          "exact_wording",
+          "prohibited_phrases",
+          "applicability",
+          "sources",
+          "disclosures",
+          "exceptions"
+        ],
+        "title": "BundleRuleRead"
+      },
       "Capability": {
         "type": "string",
         "enum": [
@@ -1694,6 +2004,144 @@
           "facebook"
         ],
         "title": "Channel"
+      },
+      "CheckType": {
+        "type": "string",
+        "enum": [
+          "deterministic",
+          "semantic"
+        ],
+        "title": "CheckType",
+        "description": "What makes the final decision for a rule: code alone, or the model after a phrase check."
+      },
+      "ContextEvidenceRead": {
+        "properties": {
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "node_type": {
+            "$ref": "#/components/schemas/PolicyNodeType"
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "excerpt": {
+            "type": "string",
+            "title": "Excerpt"
+          },
+          "clause_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clause Ref"
+          },
+          "paths": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Paths",
+            "description": "How each selected rule reaches this node: rule key, then edge and node key."
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/ContextMatchRead"
+            },
+            "type": "array",
+            "title": "Matches",
+            "description": "The statements whose search found it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_key",
+          "node_type",
+          "language",
+          "excerpt",
+          "clause_ref",
+          "paths",
+          "matches"
+        ],
+        "title": "ContextEvidenceRead"
+      },
+      "ContextExceptionRead": {
+        "properties": {
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "for_rule_id": {
+            "type": "string",
+            "title": "For Rule Id"
+          },
+          "applicable": {
+            "$ref": "#/components/schemas/Applicability"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "excerpt": {
+            "type": "string",
+            "title": "Excerpt"
+          },
+          "path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_key",
+          "for_rule_id",
+          "applicable",
+          "reasons",
+          "excerpt",
+          "path"
+        ],
+        "title": "ContextExceptionRead"
+      },
+      "ContextMatchRead": {
+        "properties": {
+          "statement_index": {
+            "type": "integer",
+            "title": "Statement Index"
+          },
+          "found_by": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Found By"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank",
+            "description": "1 is the best match for that statement."
+          }
+        },
+        "type": "object",
+        "required": [
+          "statement_index",
+          "found_by",
+          "rank"
+        ],
+        "title": "ContextMatchRead"
       },
       "ContextRead": {
         "properties": {
@@ -1765,6 +2213,74 @@
           "active_policy"
         ],
         "title": "ContextRead"
+      },
+      "ContextRuleRead": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "rule_version": {
+            "type": "integer",
+            "title": "Rule Version"
+          },
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "mandatory": {
+            "type": "boolean",
+            "title": "Mandatory"
+          },
+          "check_type": {
+            "$ref": "#/components/schemas/CheckType"
+          },
+          "gate": {
+            "$ref": "#/components/schemas/Gate"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "unresolved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unresolved",
+            "description": "Dimensions the request didn't know; the rule is kept, never dropped."
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule_id",
+          "rule_version",
+          "node_key",
+          "mandatory",
+          "check_type",
+          "gate",
+          "severity",
+          "unresolved"
+        ],
+        "title": "ContextRuleRead"
+      },
+      "ContextStatementRead": {
+        "properties": {
+          "span": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TextSpan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "span"
+        ],
+        "title": "ContextStatementRead"
       },
       "CoverageGap": {
         "properties": {
@@ -2785,6 +3301,55 @@
         ],
         "title": "MediaPage"
       },
+      "MissingContextCode": {
+        "type": "string",
+        "enum": [
+          "APPLICABILITY_UNRESOLVED",
+          "TRAVERSAL_TRUNCATED",
+          "CONFLICT",
+          "SOURCE_MISSING",
+          "SEMANTIC_SEARCH_SKIPPED",
+          "STATEMENTS_TRUNCATED"
+        ],
+        "title": "MissingContextCode",
+        "description": "Why a manifest is incomplete. A caller must never treat any of these as a PASS."
+      },
+      "MissingContextRead": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/MissingContextCode"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Id"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "rule_id",
+          "detail"
+        ],
+        "title": "MissingContextRead"
+      },
       "Outcome": {
         "type": "string",
         "enum": [
@@ -2849,6 +3414,68 @@
           "rules"
         ],
         "title": "PolicyBundleRead"
+      },
+      "PolicyBundleRulesRead": {
+        "properties": {
+          "policy_bundle_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Policy Bundle Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "lifecycle_state": {
+            "$ref": "#/components/schemas/BundleLifecycleState"
+          },
+          "is_synthetic": {
+            "type": "boolean",
+            "title": "Is Synthetic",
+            "description": "True for demo rules, never an approved client policy."
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/BundleRuleRead"
+            },
+            "type": "array",
+            "title": "Rules"
+          }
+        },
+        "type": "object",
+        "required": [
+          "policy_bundle_id",
+          "version",
+          "name",
+          "lifecycle_state",
+          "is_synthetic",
+          "rules"
+        ],
+        "title": "PolicyBundleRulesRead"
+      },
+      "PolicyLanguage": {
+        "type": "string",
+        "enum": [
+          "en",
+          "es"
+        ],
+        "title": "PolicyLanguage"
+      },
+      "PolicyNodeType": {
+        "type": "string",
+        "enum": [
+          "RULE",
+          "CLAUSE",
+          "DISCLOSURE",
+          "EXCEPTION",
+          "INTERPRETATION",
+          "EXAMPLE"
+        ],
+        "title": "PolicyNodeType"
       },
       "PolicyRule": {
         "properties": {
@@ -2996,6 +3623,15 @@
         ],
         "title": "RecruitmentStatus"
       },
+      "RetrievalMode": {
+        "type": "string",
+        "enum": [
+          "graph_only",
+          "lexical_only",
+          "full"
+        ],
+        "title": "RetrievalMode"
+      },
       "Role": {
         "type": "string",
         "enum": [
@@ -3006,6 +3642,144 @@
           "admin"
         ],
         "title": "Role"
+      },
+      "RuleApplicabilityRead": {
+        "properties": {
+          "input_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Input Kinds"
+          },
+          "channels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Channels"
+          },
+          "languages": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Languages"
+          },
+          "audiences": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Audiences"
+          },
+          "jurisdictions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Jurisdictions"
+          },
+          "study_specific": {
+            "type": "boolean",
+            "title": "Study Specific",
+            "description": "True when the rule applies to named studies only."
+          },
+          "effective_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective From"
+          },
+          "effective_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_kinds",
+          "channels",
+          "languages",
+          "audiences",
+          "jurisdictions",
+          "study_specific",
+          "effective_from",
+          "effective_to"
+        ],
+        "title": "RuleApplicabilityRead",
+        "description": "When the rule applies. An empty list means no restriction on that dimension."
+      },
+      "RuleDisclosureRead": {
+        "properties": {
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_key",
+          "language",
+          "text"
+        ],
+        "title": "RuleDisclosureRead"
+      },
+      "RuleExceptionRead": {
+        "properties": {
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "requires_study_fact": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Study Fact",
+            "description": "The study fact that must be present for the exception to apply."
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_key",
+          "language",
+          "text",
+          "requires_study_fact"
+        ],
+        "title": "RuleExceptionRead"
       },
       "RuleResult": {
         "properties": {
@@ -3054,6 +3828,57 @@
           "UNABLE_TO_ASSESS"
         ],
         "title": "RuleResultValue"
+      },
+      "RuleSourceRead": {
+        "properties": {
+          "source_title": {
+            "type": "string",
+            "title": "Source Title"
+          },
+          "clause_ref": {
+            "type": "string",
+            "title": "Clause Ref"
+          },
+          "section": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "excerpt": {
+            "type": "string",
+            "title": "Excerpt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_title",
+          "clause_ref",
+          "section",
+          "page",
+          "language",
+          "excerpt"
+        ],
+        "title": "RuleSourceRead"
       },
       "Severity": {
         "type": "string",
@@ -3260,6 +4085,24 @@
         ],
         "title": "StudySnapshotRead"
       },
+      "SupersededRuleRead": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "superseded_by": {
+            "type": "string",
+            "title": "Superseded By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule_id",
+          "superseded_by"
+        ],
+        "title": "SupersededRuleRead"
+      },
       "TenantMembershipRead": {
         "properties": {
           "tenant_id": {
@@ -3339,6 +4182,162 @@
           "state"
         ],
         "title": "ValidationAccepted"
+      },
+      "ValidationContextRead": {
+        "properties": {
+          "validation_run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Validation Run Id"
+          },
+          "policy_bundle_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Policy Bundle Id"
+          },
+          "policy_bundle_version": {
+            "type": "integer",
+            "title": "Policy Bundle Version"
+          },
+          "is_synthetic": {
+            "type": "boolean",
+            "title": "Is Synthetic"
+          },
+          "study_snapshot_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Study Snapshot Id"
+          },
+          "study_snapshot_version": {
+            "type": "integer",
+            "title": "Study Snapshot Version"
+          },
+          "input_kind": {
+            "$ref": "#/components/schemas/ValidationInputKind"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "jurisdiction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jurisdiction"
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Evaluated At"
+          },
+          "retrieval_mode": {
+            "$ref": "#/components/schemas/RetrievalMode"
+          },
+          "embedding_model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model Id"
+          },
+          "statements": {
+            "items": {
+              "$ref": "#/components/schemas/ContextStatementRead"
+            },
+            "type": "array",
+            "title": "Statements"
+          },
+          "required_rules": {
+            "items": {
+              "$ref": "#/components/schemas/ContextRuleRead"
+            },
+            "type": "array",
+            "title": "Required Rules"
+          },
+          "optional_rules": {
+            "items": {
+              "$ref": "#/components/schemas/ContextRuleRead"
+            },
+            "type": "array",
+            "title": "Optional Rules"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/ContextEvidenceRead"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/ContextExceptionRead"
+            },
+            "type": "array",
+            "title": "Exceptions"
+          },
+          "superseded": {
+            "items": {
+              "$ref": "#/components/schemas/SupersededRuleRead"
+            },
+            "type": "array",
+            "title": "Superseded"
+          },
+          "missing_context": {
+            "items": {
+              "$ref": "#/components/schemas/MissingContextRead"
+            },
+            "type": "array",
+            "title": "Missing Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "validation_run_id",
+          "policy_bundle_id",
+          "policy_bundle_version",
+          "is_synthetic",
+          "study_snapshot_id",
+          "study_snapshot_version",
+          "input_kind",
+          "channel",
+          "language",
+          "audience",
+          "jurisdiction",
+          "evaluated_at",
+          "retrieval_mode",
+          "embedding_model_id",
+          "statements",
+          "required_rules",
+          "optional_rules",
+          "evidence",
+          "exceptions",
+          "superseded",
+          "missing_context"
+        ],
+        "title": "ValidationContextRead",
+        "description": "The policy context stored for one validation run: which rules it had to use and why.\n\nEvidence only for now: the run's outcome comes from the rule checks until NRC-7's judge uses\nthis context. A code in missing_context means the context is incomplete, never a pass."
       },
       "ValidationCreate": {
         "properties": {

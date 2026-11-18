@@ -1,17 +1,19 @@
 # The context manifest (NRC-5): what one retrieval decided, stored as JSON and validated here.
 
-from enum import StrEnum
 from typing import Final, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from app.models.enums import (
+    Applicability,
     Channel,
     CheckType,
     Gate,
+    MissingContextCode,
     PolicyLanguage,
     PolicyNodeType,
+    RetrievalMode,
     Severity,
     ValidationInputKind,
 )
@@ -30,38 +32,8 @@ RRF_K: Final = 60
 MAX_STATEMENT_CHARS: Final = 4000
 
 
-class RetrievalMode(StrEnum):
-    # No statements: rule selection and the graph walk only.
-    GRAPH_ONLY = "graph_only"
-    # Statements searched with full-text only: no embedder (e.g. inside an API request, where
-    # provider calls aren't allowed).
-    LEXICAL_ONLY = "lexical_only"
-    # Full-text and vector search, fused.
-    FULL = "full"
-
-
 class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-class Applicability(StrEnum):
-    TRUE = "true"
-    FALSE = "false"
-    # A condition restricts a dimension the request doesn't know (e.g. no audience yet).
-    UNRESOLVED = "unresolved"
-
-
-class MissingContextCode(StrEnum):
-    """Why a manifest is incomplete. A caller must never treat any of these as a PASS."""
-
-    APPLICABILITY_UNRESOLVED = "APPLICABILITY_UNRESOLVED"
-    TRAVERSAL_TRUNCATED = "TRAVERSAL_TRUNCATED"
-    CONFLICT = "CONFLICT"
-    SOURCE_MISSING = "SOURCE_MISSING"
-    # Statements were searched with full-text only (no embedder).
-    SEMANTIC_SEARCH_SKIPPED = "SEMANTIC_SEARCH_SKIPPED"
-    # More statements than POLICY_RETRIEVAL_MAX_STATEMENTS; only the first ones were searched.
-    STATEMENTS_TRUNCATED = "STATEMENTS_TRUNCATED"
 
 
 class ContextScope(_Frozen):

@@ -3,11 +3,17 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from app.models.enums import Channel, PolicyEdgeType, PolicyLanguage, ValidationInputKind
+from app.models.enums import (
+    Applicability,
+    Channel,
+    PolicyEdgeType,
+    PolicyLanguage,
+    ValidationInputKind,
+)
 from app.schemas.tenancy import StudyFacts
 from app.services.policy_context.applicability import Conditions, evaluate
 from app.services.policy_context.graph import APPLIED_BY, adjacency, walk
-from app.services.policy_context.manifest import Applicability, ContextScope
+from app.services.policy_context.manifest import ContextScope
 from scripts.seed_demo import SYNTHETIC_FACTS
 
 AT = datetime(2026, 11, 18, 12, tzinfo=UTC)

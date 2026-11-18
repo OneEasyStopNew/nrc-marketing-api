@@ -34,6 +34,13 @@ class NotFoundError(AppError):
     default_message = "Resource not found."
 
 
+class ContextNotAvailableError(NotFoundError):
+    # The run exists but stored no policy context (older runs, or retrieval was unavailable and
+    # the run recorded a coverage gap). A separate code so the UI can tell it from NOT_FOUND.
+    code = "CONTEXT_NOT_AVAILABLE"
+    default_message = "No policy context was stored for this validation run."
+
+
 class ConflictError(AppError):
     code = "CONFLICT"
     default_message = "The request conflicts with the current state."

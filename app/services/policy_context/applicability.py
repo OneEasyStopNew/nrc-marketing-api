@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
+from app.models.enums import Applicability
 from app.schemas.tenancy import StudyFacts
-from app.services.policy_context.manifest import Applicability, ContextScope
+from app.services.policy_context.manifest import ContextScope
 
 
 @dataclass(frozen=True, slots=True)
