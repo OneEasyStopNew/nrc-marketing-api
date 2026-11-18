@@ -26,6 +26,8 @@ def load_embedder(settings: EmbeddingSettings | None = None) -> EmbeddingProvide
     settings (Cognito, DATABASE_URL).
     """
     try:
-        return embedding_provider_from_settings(settings or load_settings(EmbeddingSettings))
+        if settings is None:
+            settings = load_settings(EmbeddingSettings)
+        return embedding_provider_from_settings(settings)
     except ProviderConfigError as error:
         raise SystemExit(str(error)) from None

@@ -1,9 +1,11 @@
 # Retrieval evaluation harness (NRC-5, scripts/eval_retrieval.py): metrics, case file, runs.
 
+from collections.abc import Sequence
 from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.config import RetrievalSettings, get_settings
@@ -15,7 +17,12 @@ from app.models.enums import (
 )
 from app.services.policy_context import AuroraPolicyContextProvider
 from app.services.policy_index import build_policy_index
-from app.services.providers.embeddings import EmbeddingProvider, SimulatedEmbeddingProvider
+from app.services.providers.base import ProviderRateLimitedError
+from app.services.providers.embeddings import (
+    EmbeddingProvider,
+    EmbeddingPurpose,
+    SimulatedEmbeddingProvider,
+)
 from scripts.eval_retrieval import (
     DEFAULT_CASES,
     CaseResult,
@@ -31,9 +38,10 @@ from scripts.eval_retrieval import (
     format_report,
     load_cases,
     percentile,
+    summarize,
 )
 from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
-from tests.conftest import World, owner_session
+from tests.conftest import World, add_policy_bundle, as_tenant_owner, owner_session
 
 
 def _case(**overrides: object) -> EvalCase:
@@ -160,6 +168,7 @@ async def test_synthetic_set_has_full_mandatory_coverage(
         case_file,
         results,
         (bundle_id, 1),
+        world.a.snapshot_id,
         mode=RetrievalMode.LEXICAL_ONLY,
         top_k=5,
         cost=CostEstimate(None, 0, 0, None, None),
@@ -190,6 +199,7 @@ async def test_missing_mandatory_rule_fails_coverage(
         case_file,
         results,
         (bundle_id, 1),
+        world.a.snapshot_id,
         mode=RetrievalMode.LEXICAL_ONLY,
         top_k=5,
         cost=CostEstimate(None, 0, 0, None, None),
@@ -204,7 +214,7 @@ async def test_missing_mandatory_rule_fails_coverage(
 async def test_unknown_labels_stop_the_run(connection: AsyncConnection, world: World) -> None:
     bundle_id = await _synthetic(connection, world)
 
-    with pytest.raises(EvalSetupError, match="labels not in the bundle: CL-TYPO, REC-99"):
+    with pytest.raises(EvalSetupError, match="labels not approved in the bundle: CL-TYPO, REC-99"):
         await _evaluate(
             connection,
             world,
@@ -234,3 +244,97 @@ async def test_full_mode_searches_both_ways(connection: AsyncConnection, world: 
     assert results[0].retrieval_mode is RetrievalMode.FULL
     assert results[0].search_missing == ()
     assert "SEMANTIC_SEARCH_SKIPPED" not in results[0].missing_context
+
+
+class _ThrottledEmbedder(SimulatedEmbeddingProvider):
+    # Same model id as the simulator (so its index is READY), but every call is throttled.
+
+    async def embed(self, texts: Sequence[str], purpose: EmbeddingPurpose) -> list[list[float]]:
+        raise ProviderRateLimitedError("throttled")
+
+
+def _result(case_id: str, latency_ms: float, *, reused: bool) -> CaseResult:
+    return CaseResult(
+        case_id=case_id,
+        language=PolicyLanguage.EN,
+        required_expected=("REC-01",),
+        required_missing=(),
+        required_extra=(),
+        relevant_expected=(),
+        relevant_missing=(),
+        search_expected=(),
+        search_missing=(),
+        retrieval_mode=RetrievalMode.LEXICAL_ONLY,
+        latency_ms=latency_ms,
+        reused=reused,
+        missing_context=(),
+    )
+
+
+def test_reused_manifests_are_left_out_of_latency() -> None:
+    group = summarize([_result("a", 10.0, reused=False), _result("b", 0.5, reused=True)])
+
+    assert (group.cases, group.reused) == (2, 1)
+    assert group.latency_p50_ms == group.latency_p95_ms == 10.0
+
+
+async def test_report_shows_snapshot_extra_rules_and_small_sample_note(
+    connection: AsyncConnection, world: World
+) -> None:
+    # Labelling only REC-01 for a brief leaves the brief's other mandatory rules unlabelled.
+    bundle_id = await _synthetic(connection, world)
+    case_file = EvalCaseFile(labelled_by="test", cases=(_case(),))
+
+    results = await _evaluate(connection, world, bundle_id, case_file.cases, _provider())
+    text_report = format_report(
+        build_report(
+            case_file,
+            results,
+            (bundle_id, 1),
+            world.a.snapshot_id,
+            mode=RetrievalMode.LEXICAL_ONLY,
+            top_k=5,
+            cost=CostEstimate(None, 0, 0, None, None),
+        )
+    )
+
+    assert f"Study snapshot: {world.a.snapshot_id}" in text_report
+    assert "en-test: REC-02, REC-03, REC-04, REC-05, REC-08" in text_report
+    assert "Only 1 timed case(s): p95 is the slowest one" in text_report
+
+
+async def test_unapproved_labels_stop_the_run(connection: AsyncConnection, world: World) -> None:
+    bundle_id = await _synthetic(connection, world)
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        await connection.execute(
+            text(
+                "UPDATE policy_nodes SET approved = false"
+                " WHERE policy_bundle_id = :b AND node_key = 'CL-FDA-1'"
+            ),
+            {"b": bundle_id},
+        )
+
+    with pytest.raises(EvalSetupError, match="labels not approved in the bundle: CL-FDA-1"):
+        await _evaluate(connection, world, bundle_id, (_case(),), _provider())
+
+
+async def test_bundle_without_graph_gets_no_index_hint(
+    connection: AsyncConnection, world: World
+) -> None:
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        empty = await add_policy_bundle(connection, world.a.tenant_id, 2)
+    case = _case(required_rules=(), relevant_evidence=(), search_targets=())
+
+    with pytest.raises(EvalSetupError, match=r"retrieval unavailable \(GRAPH_MISSING\)$"):
+        await _evaluate(connection, world, empty, (case,), _provider())
+
+
+async def test_embedding_failure_stops_with_its_code(
+    connection: AsyncConnection, world: World
+) -> None:
+    bundle_id = await _synthetic(connection, world)
+    async with owner_session(connection, world.a.tenant_id) as db:
+        await build_policy_index(db, world.a.tenant_id, bundle_id, SimulatedEmbeddingProvider())
+
+    with pytest.raises(EvalSetupError, match="embedding call failed on case en-test"):
+        await _evaluate(connection, world, bundle_id, (_case(),), _provider(_ThrottledEmbedder()))

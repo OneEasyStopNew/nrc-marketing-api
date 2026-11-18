@@ -35,7 +35,7 @@ from typing import Final, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -58,6 +58,7 @@ from app.services.policy_context import (
     ContextScope,
 )
 from app.services.policy_context.manifest import MAX_STATEMENT_CHARS, Statement
+from app.services.providers.base import ProviderError
 from app.services.providers.embeddings import EmbeddingProvider
 from scripts.embedding_setup import load_embedder, load_settings
 
@@ -66,6 +67,12 @@ DEFAULT_CASES: Final = Path(__file__).resolve().parent / "data" / "retrieval_eva
 # an estimate is enough to compare models. Reported as an estimate.
 CHARS_PER_TOKEN: Final = 4
 Mode = Literal["auto", "full", "lexical"]
+# Unavailable reasons that building the index fixes; the others (no graph, bundle not usable,
+# no snapshot) need a different bundle or snapshot.
+INDEX_REASONS: Final = frozenset({"INDEX_NOT_READY", "INDEX_STALE"})
+INDEX_HINT: Final = "; build the index first with scripts.build_policy_index"
+# Below this many timed cases, nearest-rank p95 is simply the slowest case.
+MIN_CASES_FOR_P95: Final = 20
 
 
 class EvalSetupError(Exception):
@@ -141,6 +148,8 @@ class Ratio:
 @dataclass(frozen=True, slots=True)
 class Group:
     cases: int
+    # Cases answered from an already-stored manifest: left out of the latency figures.
+    reused: int
     mandatory_coverage: Ratio
     evidence_recall: Ratio
     search_recall: Ratio
@@ -170,6 +179,7 @@ class Report:
     labelled_by: str
     policy_bundle_id: UUID
     policy_bundle_version: int
+    study_snapshot_id: UUID
     retrieval_mode: RetrievalMode
     embedding_model_id: str | None
     top_k: int
@@ -229,9 +239,11 @@ def score_case(
 
 
 def summarize(results: Sequence[CaseResult]) -> Group:
-    latencies = [result.latency_ms for result in results]
+    # A reused manifest is a lookup, not a retrieval, so it would flatter the latency.
+    latencies = [result.latency_ms for result in results if not result.reused]
     return Group(
         cases=len(results),
+        reused=sum(result.reused for result in results),
         mandatory_coverage=_ratio(results, "required_expected", "required_missing"),
         evidence_recall=_ratio(results, "relevant_expected", "relevant_missing"),
         search_recall=_ratio(results, "search_expected", "search_missing"),
@@ -258,6 +270,7 @@ def build_report(
     case_file: EvalCaseFile,
     results: Sequence[CaseResult],
     bundle: tuple[UUID, int],
+    snapshot_id: UUID,
     *,
     mode: RetrievalMode,
     top_k: int,
@@ -270,6 +283,7 @@ def build_report(
         labelled_by=case_file.labelled_by,
         policy_bundle_id=bundle[0],
         policy_bundle_version=bundle[1],
+        study_snapshot_id=snapshot_id,
         retrieval_mode=mode,
         embedding_model_id=cost.model_id,
         top_k=top_k,
@@ -292,7 +306,7 @@ async def evaluate(
     """Build one manifest per case in the caller's transaction and score it.
 
     Raises:
-        EvalSetupError: a label names a rule or node the bundle doesn't have (a typo would
+        EvalSetupError: a label names a rule or node the bundle doesn't have approved (a typo would
             otherwise read as a retrieval miss), or the context can't be built (e.g. no READY
             index in full mode).
     """
@@ -315,10 +329,13 @@ async def evaluate(
         try:
             stored = await provider.build(db, tenant_id, request, actor="eval_retrieval")
         except PolicyContextUnavailableError as error:
-            reason = (error.details or {}).get("reason", error.code)
+            reason = str((error.details or {}).get("reason", error.code))
+            hint = INDEX_HINT if reason in INDEX_REASONS else ""
+            raise EvalSetupError(f"retrieval unavailable ({reason}){hint}") from None
+        except ProviderError as error:
+            # The embedding call failed (e.g. throttled): stop with the code, not a traceback.
             raise EvalSetupError(
-                f"retrieval unavailable ({reason}); in full mode build the index first with "
-                "scripts.build_policy_index"
+                f"embedding call failed on case {case.case_id} ({error.code})"
             ) from None
         latency_ms = (time.perf_counter() - started) * 1000
         results.append(score_case(case, stored.manifest, latency_ms, reused=stored.reused))
@@ -330,16 +347,28 @@ async def _check_labels(
 ) -> None:
     rule_ids = set(
         await db.scalars(
-            select(PolicyRuleRecord.rule_id).where(
+            select(PolicyRuleRecord.rule_id)
+            .join(
+                PolicyNode,
+                and_(
+                    PolicyNode.tenant_id == PolicyRuleRecord.tenant_id,
+                    PolicyNode.policy_bundle_id == PolicyRuleRecord.policy_bundle_id,
+                    PolicyNode.id == PolicyRuleRecord.node_id,
+                ),
+            )
+            .where(
                 PolicyRuleRecord.tenant_id == tenant_id,
                 PolicyRuleRecord.policy_bundle_id == bundle_id,
+                PolicyNode.approved.is_(True),
             )
         )
     )
     node_keys = set(
         await db.scalars(
             select(PolicyNode.node_key).where(
-                PolicyNode.tenant_id == tenant_id, PolicyNode.policy_bundle_id == bundle_id
+                PolicyNode.tenant_id == tenant_id,
+                PolicyNode.policy_bundle_id == bundle_id,
+                PolicyNode.approved.is_(True),
             )
         )
     )
@@ -348,7 +377,8 @@ async def _check_labels(
         | {n for case in cases for n in case.relevant_evidence if n not in node_keys}
     )
     if unknown:
-        raise EvalSetupError(f"labels not in the bundle: {', '.join(unknown)}")
+        # Retrieval only returns approved rows, so an unapproved label could only ever miss.
+        raise EvalSetupError(f"labels not approved in the bundle: {', '.join(unknown)}")
 
 
 def _ratio(results: Sequence[CaseResult], expected: str, missing: str) -> Ratio:
@@ -403,6 +433,7 @@ async def run(options: RunOptions, settings: RetrievalSettings) -> Report:
         case_file,
         results,
         bundle,
+        snapshot_id,
         mode=RetrievalMode.FULL if embedder is not None else RetrievalMode.LEXICAL_ONLY,
         top_k=settings.policy_retrieval_top_k,
         cost=CostEstimate(
@@ -475,12 +506,21 @@ def format_report(report: Report) -> str:
         f"Retrieval evaluation: bundle {report.policy_bundle_id} v{report.policy_bundle_version}, "
         f"mode {report.retrieval_mode.value}, model {report.embedding_model_id or 'none'}, "
         f"top_k {report.top_k}",
+        f"Study snapshot: {report.study_snapshot_id}",
         f"Cases labelled by: {report.labelled_by}",
     ]
     if report.embedding_model_id is not None and report.embedding_model_id.startswith("simulator"):
         lines.append("Simulator vectors carry no meaning: semantic numbers don't measure a model.")
     lines += ["", _header(), *_row("all", report.overall)]
     lines += [line for lang, group in report.by_language.items() for line in _row(lang, group)]
+    timed = report.overall.cases - report.overall.reused
+    if report.overall.reused:
+        lines.append(
+            f"{report.overall.reused} case(s) reused an already-stored manifest and are left out "
+            "of the latency figures."
+        )
+    if timed < MIN_CASES_FOR_P95:
+        lines.append(f"Only {timed} timed case(s): p95 is the slowest one, often the first (cold).")
     lines += ["", "Mandatory coverage by rule:"]
     lines += [f"  {rule_id:<10} {_pct(ratio)}" for rule_id, ratio in report.by_rule.items()]
     lines += ["", _cost_line(report.cost), "", "Misses:"]
@@ -499,6 +539,11 @@ def format_report(report: Report) -> str:
         if r.required_missing or r.relevant_missing or r.search_missing
     ]
     lines += misses or ["  none"]
+    extra = [
+        f"  {r.case_id}: {', '.join(r.required_extra)}" for r in report.cases if r.required_extra
+    ]
+    lines += ["", "Mandatory rules selected but not labelled (check the labels or the selection):"]
+    lines += extra or ["  none"]
     return "\n".join(lines)
 
 
