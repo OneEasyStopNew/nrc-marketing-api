@@ -32,6 +32,7 @@ from app.models import (
     ContextManifestRecord,
     PolicyBundle,
     PolicyEdge,
+    PolicyIndexBuild,
     PolicyNode,
     PolicyRuleRecord,
     PolicySourceClause,
@@ -41,12 +42,15 @@ from app.models.enums import (
     BundleLifecycleState,
     CheckType,
     Gate,
+    IndexBuildState,
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
     Severity,
 )
+from app.models.policy_graph import SEARCHABLE_NODE_TYPES
 from app.schemas.tenancy import StudyFacts
+from app.services.policy_context import search
 from app.services.policy_context.applicability import (
     Conditions,
     Verdict,
@@ -68,8 +72,18 @@ from app.services.policy_context.manifest import (
     MissingContext,
     MissingContextCode,
     RetrievalConfig,
+    RetrievalMode,
+    SearchMatch,
     SnapshotRef,
+    Statement,
+    StatementRef,
     SupersededRule,
+)
+from app.services.policy_index import index_content_checksum
+from app.services.providers.embeddings import (
+    EmbeddingProvider,
+    EmbeddingPurpose,
+    EmbeddingResponseError,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,6 +138,24 @@ class GraphRule:
 
 
 @dataclass(frozen=True, slots=True)
+class SearchPlan:
+    mode: RetrievalMode
+    # The statements searched (at most max_statements) and their manifest references.
+    statements: tuple[Statement, ...]
+    refs: tuple[StatementRef, ...]
+    # More statements were given than were searched.
+    truncated: bool
+    embedding_model_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SearchResult:
+    plan: SearchPlan
+    # Search hits per node (only approved, searchable nodes of the bundle).
+    matches: Mapping[UUID, tuple[SearchMatch, ...]]
+
+
+@dataclass(frozen=True, slots=True)
 class LoadedContext:
     # Everything one manifest is built from, loaded in a fixed number of queries.
     bundle: BundleRef
@@ -136,32 +168,47 @@ class LoadedContext:
 
 
 class AuroraPolicyContextProvider:
-    """Reads the approved graph from Postgres (Aurora in AWS) under the caller's tenant."""
+    """Reads the approved graph from Postgres (Aurora in AWS) under the caller's tenant.
 
-    def __init__(self, settings: Settings) -> None:
+    With an embedder, statements are searched by full-text and vector search; without one (the
+    API process, which never calls providers) by full-text only, and the manifest says so.
+    """
+
+    def __init__(self, settings: Settings, embedder: EmbeddingProvider | None = None) -> None:
         self._config = RetrievalConfig(
             version=RETRIEVAL_CONFIG_VERSION,
             max_hops=settings.policy_retrieval_max_hops,
             max_nodes=settings.policy_retrieval_max_nodes,
+            top_k=settings.policy_retrieval_top_k,
+            max_statements=settings.policy_retrieval_max_statements,
         )
+        self._embedder = embedder
 
     async def build(
         self, db: AsyncSession, tenant_id: UUID, request: ContextRequest, *, actor: str
     ) -> StoredManifest:
         """Return the stored manifest for this request, building and storing it if new.
 
-        Runs in the caller's transaction, which has bound the tenant; the caller commits.
+        Runs in the caller's transaction, which has bound the tenant; the caller commits. A
+        stored manifest is found before any search, so a repeat costs no embedding call.
 
         Raises:
             PolicyContextUnavailableError: the bundle is missing, not usable or has no graph,
-                or the study snapshot is missing (details.reason says which).
+                the study snapshot is missing, or (with an embedder) the bundle has no READY
+                index for the embedder's model or it doesn't match the graph
+                (details.reason says which).
+            ProviderError: the embedder failed (only with an embedder).
         """
         loaded = await load_context(db, tenant_id, request)
-        key = cache_key(tenant_id, loaded, request.scope, self._config)
+        plan = self._plan(request)
+        if plan.mode is RetrievalMode.FULL and plan.embedding_model_id is not None:
+            await _require_index(db, tenant_id, loaded, plan.embedding_model_id)
+        key = cache_key(tenant_id, loaded, request.scope, plan, self._config)
         existing = await _find(db, tenant_id, key)
         if existing is not None:
             return existing
-        manifest = assemble(loaded, request.scope, self._config)
+        matches = await self._search(db, tenant_id, loaded, request.scope.language, plan)
+        manifest = assemble(loaded, request.scope, self._config, SearchResult(plan, matches))
         stored = await _store(db, tenant_id, key, loaded, manifest, actor)
         logger.info(
             "policy context built manifest=%s tenant=%s bundle=%s reused=%s",
@@ -171,6 +218,65 @@ class AuroraPolicyContextProvider:
             stored.reused,
         )
         return stored
+
+    def _plan(self, request: ContextRequest) -> SearchPlan:
+        statements = request.statements[: self._config.max_statements]
+        if not statements:
+            mode = RetrievalMode.GRAPH_ONLY
+        elif self._embedder is None:
+            mode = RetrievalMode.LEXICAL_ONLY
+        else:
+            mode = RetrievalMode.FULL
+        return SearchPlan(
+            mode=mode,
+            statements=statements,
+            refs=tuple(StatementRef(sha256=_sha256(s.text), span=s.span) for s in statements),
+            truncated=len(request.statements) > len(statements),
+            embedding_model_id=(
+                self._embedder.model_id
+                if mode is RetrievalMode.FULL and self._embedder is not None
+                else None
+            ),
+        )
+
+    async def _search(
+        self,
+        db: AsyncSession,
+        tenant_id: UUID,
+        loaded: LoadedContext,
+        language: PolicyLanguage,
+        plan: SearchPlan,
+    ) -> dict[UUID, tuple[SearchMatch, ...]]:
+        # Per statement: full-text (and vector) top_k, fused into one ranked list.
+        if not plan.statements:
+            return {}
+        texts = [statement.text for statement in plan.statements]
+        vectors: list[list[float]] | None = None
+        if plan.mode is RetrievalMode.FULL and self._embedder is not None:
+            vectors = await self._embedder.embed(texts, EmbeddingPurpose.QUERY)
+            if len(vectors) != len(texts):
+                raise EmbeddingResponseError(
+                    f"{self._embedder.model_id} returned {len(vectors)} vectors for {len(texts)}"
+                    " statements"
+                )
+        names = {node_id: node.key for node_id, node in loaded.nodes.items()}
+        top_k, bundle_id = self._config.top_k, loaded.bundle.id
+        matches: dict[UUID, list[SearchMatch]] = {}
+        for index, text in enumerate(texts):
+            ranked: dict[search.Source, Sequence[UUID]] = {
+                "lexical": await search.lexical(db, tenant_id, bundle_id, text, language, top_k)
+            }
+            if vectors is not None and plan.embedding_model_id is not None:
+                ranked["semantic"] = await search.semantic(
+                    db, tenant_id, bundle_id, plan.embedding_model_id, vectors[index], top_k
+                )
+            fused = search.fuse(ranked, names, top_k, self._config.rrf_k)
+            for rank, (node_id, found_by) in enumerate(fused, start=1):
+                if node_id in names:
+                    matches.setdefault(node_id, []).append(
+                        SearchMatch(statement_index=index, found_by=found_by, rank=rank)
+                    )
+        return {node_id: tuple(found) for node_id, found in matches.items()}
 
 
 async def load_context(db: AsyncSession, tenant_id: UUID, request: ContextRequest) -> LoadedContext:
@@ -223,13 +329,19 @@ async def load_context(db: AsyncSession, tenant_id: UUID, request: ContextReques
 
 
 def cache_key(
-    tenant_id: UUID, loaded: LoadedContext, scope: ContextScope, config: RetrievalConfig
+    tenant_id: UUID,
+    loaded: LoadedContext,
+    scope: ContextScope,
+    plan: SearchPlan,
+    config: RetrievalConfig,
 ) -> str:
     """Hash of every input the manifest depends on; any change gives a new key.
 
     The graph's content is hashed as well rather than trusted to be immutable, so a changed
     node, rule or edge never reuses an old manifest. evaluated_at itself is left out (it changes
     on every request); what it decides, which dated nodes are in effect, is in the key instead.
+    The statements, the search mode and the embedding model are in it too; the index build for
+    that model is checked against the graph before searching, so its vectors are covered.
     """
     windows = sorted(
         (node.key, not window_reasons(node.conditions, scope.evaluated_at))
@@ -243,6 +355,12 @@ def cache_key(
         "scope": scope.model_dump(mode="json", exclude={"evaluated_at"}),
         "windows": windows,
         "graph": graph_fingerprint(loaded),
+        "search": {
+            "mode": plan.mode,
+            "embedding_model_id": plan.embedding_model_id,
+            "statements": [ref.model_dump(mode="json") for ref in plan.refs],
+            "truncated": plan.truncated,
+        },
         "config": config.model_dump(mode="json"),
     }
     return _sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")))
@@ -286,9 +404,17 @@ def _sha256(value: str) -> str:
 
 
 def assemble(
-    loaded: LoadedContext, scope: ContextScope, config: RetrievalConfig
+    loaded: LoadedContext,
+    scope: ContextScope,
+    config: RetrievalConfig,
+    search: SearchResult | None = None,
 ) -> ContextManifest:
-    """Build the manifest from loaded data. Pure and deterministic: same input, same output."""
+    """Build the manifest from loaded data and search results.
+
+    Pure and deterministic: same input, same output. Search results only add evidence.
+    """
+    if search is None:
+        search = SearchResult(SearchPlan(RetrievalMode.GRAPH_ONLY, (), (), False, None), {})
     nodes = loaded.nodes
     verdicts = {rule.node_id: _verdict(nodes[rule.node_id], scope, loaded) for rule in loaded.rules}
     applicable = {
@@ -313,7 +439,19 @@ def assemble(
                 )
             )
     missing.extend(_missing_sources(selected, nodes, loaded.edges))
-    evidence, exceptions, truncated = _walk_rules(selected, loaded, scope, config)
+    paths, exceptions, truncated = _walk_rules(selected, loaded, scope, config)
+    evidence, dropped = _evidence(paths, search.matches, len(exceptions), nodes, config)
+    truncated = truncated or dropped
+    plan = search.plan
+    if plan.mode is RetrievalMode.LEXICAL_ONLY:
+        missing.append(MissingContext(code=MissingContextCode.SEMANTIC_SEARCH_SKIPPED))
+    if plan.truncated:
+        missing.append(
+            MissingContext(
+                code=MissingContextCode.STATEMENTS_TRUNCATED,
+                detail=f"searched the first {config.max_statements}",
+            )
+        )
     if truncated:
         missing.append(
             MissingContext(
@@ -326,9 +464,12 @@ def assemble(
         policy_bundle=loaded.bundle,
         study_snapshot=loaded.snapshot,
         scope=scope,
+        retrieval_mode=plan.mode,
+        embedding_model_id=plan.embedding_model_id,
+        statements=plan.refs,
         required_rules=tuple(rule for rule in rules if rule.mandatory),
         optional_rules=tuple(rule for rule in rules if not rule.mandatory),
-        evidence=tuple(evidence),
+        evidence=evidence,
         exceptions=tuple(sorted(exceptions, key=lambda item: (item.for_rule_id, item.node_key))),
         superseded=tuple(
             sorted(
@@ -399,9 +540,10 @@ def _walk_rules(
     loaded: LoadedContext,
     scope: ContextScope,
     config: RetrievalConfig,
-) -> tuple[list[EvidenceItem], list[ExceptionItem], bool]:
+) -> tuple[dict[UUID, list[tuple[str, ...]]], list[ExceptionItem], bool]:
     # One walk per rule, so evidence or an exception shared by two rules is tied to each of them.
-    # max_nodes bounds the manifest: distinct evidence nodes plus exception entries.
+    # max_nodes bounds the manifest: distinct evidence nodes plus exception entries. Returns the
+    # graph paths per evidence node (in walk order), the exceptions and whether a bound was hit.
     nodes = loaded.nodes
     names = {node_id: node.key for node_id, node in nodes.items()}
     graph = adjacency(loaded.edges, names)
@@ -434,18 +576,41 @@ def _walk_rules(
                     path=step.path,
                 )
             )
-    evidence = [
+    return paths, exceptions, truncated
+
+
+def _evidence(
+    paths: Mapping[UUID, Sequence[tuple[str, ...]]],
+    matches: Mapping[UUID, Sequence[SearchMatch]],
+    exception_count: int,
+    nodes: Mapping[UUID, GraphNode],
+    config: RetrievalConfig,
+) -> tuple[tuple[EvidenceItem, ...], bool]:
+    # Graph evidence first (walk order), then nodes only search found, best match first. Search
+    # hits share the max_nodes bound; returns whether any had to be left out.
+    search_only = sorted(
+        (node_id for node_id in matches if node_id not in paths),
+        key=lambda node_id: (
+            min(m.rank for m in matches[node_id]),
+            min(m.statement_index for m in matches[node_id]),
+            nodes[node_id].key,
+        ),
+    )
+    room = max(config.max_nodes - len(paths) - exception_count, 0)
+    ordered = [*paths, *search_only[:room]]
+    items = tuple(
         EvidenceItem(
             node_key=nodes[node_id].key,
             node_type=nodes[node_id].node_type,
             language=nodes[node_id].language,
             excerpt=nodes[node_id].text[:EXCERPT_MAX_CHARS],
             clause_ref=nodes[node_id].clause_ref,
-            paths=tuple(node_paths),
+            paths=tuple(paths.get(node_id, ())),
+            matches=tuple(matches.get(node_id, ())),
         )
-        for node_id, node_paths in paths.items()
-    ]
-    return evidence, exceptions, truncated
+        for node_id in ordered
+    )
+    return items, len(search_only) > room
 
 
 def _verdict(node: GraphNode, scope: ContextScope, loaded: LoadedContext) -> Verdict:
@@ -465,6 +630,29 @@ def _manifest_rule(
         severity=rule.severity,
         unresolved=verdict.unresolved,
     )
+
+
+async def _require_index(
+    db: AsyncSession, tenant_id: UUID, loaded: LoadedContext, model_id: str
+) -> None:
+    # Vector search is only trusted on a READY index that covers exactly the approved graph.
+    row = (
+        await db.execute(
+            select(PolicyIndexBuild.node_count, PolicyIndexBuild.content_checksum).where(
+                PolicyIndexBuild.tenant_id == tenant_id,
+                PolicyIndexBuild.policy_bundle_id == loaded.bundle.id,
+                PolicyIndexBuild.model_id == model_id,
+                PolicyIndexBuild.state == IndexBuildState.READY,
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        raise _unavailable("INDEX_NOT_READY", embedding_model_id=model_id)
+    # The index covers the approved searchable nodes, the same set the build embedded.
+    indexed = [node for node in loaded.nodes.values() if node.node_type in SEARCHABLE_NODE_TYPES]
+    checksum = index_content_checksum((node.id, node.text) for node in indexed)
+    if row.node_count != len(indexed) or row.content_checksum != checksum:
+        raise _unavailable("INDEX_STALE", embedding_model_id=model_id)
 
 
 def _unavailable(reason: str, **details: object) -> PolicyContextUnavailableError:

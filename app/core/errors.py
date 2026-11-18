@@ -72,10 +72,18 @@ class NoActivePolicyError(ConflictError):
 
 
 class PolicyContextUnavailableError(ConflictError):
-    # details.reason: BUNDLE_NOT_FOUND, BUNDLE_NOT_USABLE, GRAPH_MISSING or SNAPSHOT_NOT_FOUND.
-    # Callers record it as a coverage gap; it must never turn into a PASS.
+    # details.reason: BUNDLE_NOT_FOUND, BUNDLE_NOT_USABLE, GRAPH_MISSING, SNAPSHOT_NOT_FOUND, or
+    # (with an embedder) INDEX_NOT_READY or INDEX_STALE. Callers record it as a coverage gap; it
+    # must never turn into a PASS.
     code = "POLICY_CONTEXT_UNAVAILABLE"
     default_message = "The policy context for this check could not be built."
+
+
+class PolicyIndexError(ConflictError):
+    # details.reason: NO_APPROVED_NODES or INDEX_CONTENT_CHANGED. Raised by the owner-run index
+    # build only; the API never builds an index.
+    code = "POLICY_INDEX_ERROR"
+    default_message = "The policy index could not be built."
 
 
 class ExportNotReadyError(ConflictError):

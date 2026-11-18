@@ -114,6 +114,7 @@ def app_environment(test_env: IntegrationEnv) -> Iterator[None]:
         # A developer's .env may switch these on; tests always start from production behaviour.
         patch.setenv("DEMO_STUBS", "false")
         patch.setenv("DEV_JWKS_FILE", "")
+        patch.setenv("EMBEDDING_MODE", "off")
         # Local SeaweedFS; these credentials only open that container, not AWS.
         patch.setenv("AWS_S3_BUCKET", BUCKET)
         patch.setenv("AWS_ENDPOINT_URL_S3", ENDPOINT)

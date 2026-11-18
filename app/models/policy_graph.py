@@ -6,6 +6,7 @@
 # another tenant's or another bundle's row.
 
 from datetime import datetime
+from typing import Final
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
@@ -44,6 +45,14 @@ from app.models.enums import (
 EMBEDDING_DIMENSIONS = 1024
 # Same pattern as app.schemas.policies.PolicyRule.rule_id (which imports it from here).
 RULE_ID_PATTERN = r"^[A-Z][A-Z0-9-]{1,39}$"
+# What search returns and the embedding index covers: supporting text. Rules are selected by
+# their conditions and exceptions reached through the graph, so neither is searched or embedded.
+SEARCHABLE_NODE_TYPES: Final = (
+    PolicyNodeType.CLAUSE,
+    PolicyNodeType.DISCLOSURE,
+    PolicyNodeType.INTERPRETATION,
+    PolicyNodeType.EXAMPLE,
+)
 
 # An unrecognised language would silently fall back to the English text-search config.
 _LANGUAGE_CHECK = "language IN ({})".format(", ".join(f"'{lang.value}'" for lang in PolicyLanguage))

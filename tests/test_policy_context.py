@@ -32,6 +32,13 @@ from app.services.policy_context import (
     MissingContextCode,
     StoredManifest,
 )
+from app.services.policy_context.manifest import RetrievalMode, Statement
+from app.services.policy_index import build_policy_index
+from app.services.providers.embeddings import (
+    EmbeddingProvider,
+    EmbeddingPurpose,
+    SimulatedEmbeddingProvider,
+)
 from scripts.import_policy_graph import (
     ClauseImport,
     EdgeImport,
@@ -74,11 +81,13 @@ def _scope(
     )
 
 
-def _provider(**limits: int) -> AuroraPolicyContextProvider:
+def _provider(
+    embedder: EmbeddingProvider | None = None, **limits: int
+) -> AuroraPolicyContextProvider:
     settings = get_settings().model_copy(
         update={f"policy_retrieval_{name}": value for name, value in limits.items()}
     )
-    return AuroraPolicyContextProvider(settings)
+    return AuroraPolicyContextProvider(settings, embedder)
 
 
 async def _build(
@@ -88,10 +97,14 @@ async def _build(
     snapshot_id: UUID,
     scope: ContextScope | None = None,
     provider: AuroraPolicyContextProvider | None = None,
+    statements: Sequence[str] = (),
 ) -> StoredManifest:
     # As the API role, like the validation request that will call it.
     request = ContextRequest(
-        policy_bundle_id=bundle_id, study_snapshot_id=snapshot_id, scope=scope or _scope()
+        policy_bundle_id=bundle_id,
+        study_snapshot_id=snapshot_id,
+        scope=scope or _scope(),
+        statements=tuple(Statement(text=text) for text in statements),
     )
     async with app_session(connection) as db:
         await bind_tenant(db, tenant_id)
@@ -751,3 +764,330 @@ async def test_manifests_are_tenant_scoped_and_immutable(
         select(ContextManifestRecord.manifest).where(ContextManifestRecord.id == stored.id)
     )
     assert ContextManifest.model_validate(row) == stored.manifest
+
+
+# Search (statements)
+
+FREE_CLAUSE = (
+    "[SYNTHETIC] Recruitment material must not promise free treatment; it may say that taking"
+    " part costs nothing."
+)
+
+
+class _TestEmbedder:
+    """The labelled simulator, plus aliases: a paraphrase is embedded as if it were its target.
+
+    That proves the vector branch finds what full-text can't; it says nothing about how good a
+    real model is at paraphrases (the evaluation harness measures that).
+    """
+
+    model_id = "test:alias-simulator"
+
+    def __init__(self, aliases: dict[str, str] | None = None) -> None:
+        self._simulator = SimulatedEmbeddingProvider()
+        self._aliases = aliases or {}
+        self.calls = 0
+
+    async def embed(self, texts: Sequence[str], purpose: EmbeddingPurpose) -> list[list[float]]:
+        self.calls += 1
+        return await self._simulator.embed(
+            [self._aliases.get(text, text) for text in texts], purpose
+        )
+
+
+async def _indexed(connection: AsyncConnection, world: World, embedder: _TestEmbedder) -> UUID:
+    bundle_id, _ = await _synthetic(connection, world)
+    async with owner_session(connection, world.a.tenant_id) as db:
+        await build_policy_index(db, world.a.tenant_id, bundle_id, embedder)
+    return bundle_id
+
+
+def _match(manifest: ContextManifest, node_key: str) -> Any:
+    return next(item for item in manifest.evidence if item.node_key == node_key)
+
+
+async def test_no_statements_means_graph_only(connection: AsyncConnection, world: World) -> None:
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+
+    manifest = (await _build(connection, world.a.tenant_id, bundle_id, snapshot_id)).manifest
+
+    assert manifest.retrieval_mode is RetrievalMode.GRAPH_ONLY
+    assert manifest.statements == ()
+    assert all(item.matches == () for item in manifest.evidence)
+
+
+async def test_full_text_search_without_an_embedder_says_vectors_were_skipped(
+    connection: AsyncConnection, world: World
+) -> None:
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+
+    manifest = (
+        await _build(
+            connection,
+            world.a.tenant_id,
+            bundle_id,
+            snapshot_id,
+            statements=["Join us for free treatment"],
+        )
+    ).manifest
+
+    assert manifest.retrieval_mode is RetrievalMode.LEXICAL_ONLY
+    assert (MissingContextCode.SEMANTIC_SEARCH_SKIPPED, None) in _codes(manifest)
+    hit = _match(manifest, "CL-FDA-5")
+    assert hit.matches[0].found_by == ("lexical",)
+    assert hit.matches[0].rank == 1
+    assert len(manifest.statements) == 1
+    assert manifest.statements[0].sha256 != "Join us for free treatment"
+
+
+async def test_full_search_fuses_both_searches(connection: AsyncConnection, world: World) -> None:
+    embedder = _TestEmbedder()
+    bundle_id = await _indexed(connection, world, embedder)
+
+    manifest = (
+        await _build(
+            connection,
+            world.a.tenant_id,
+            bundle_id,
+            world.a.snapshot_id,
+            provider=_provider(embedder),
+            statements=["Join us for free treatment"],
+        )
+    ).manifest
+
+    assert manifest.retrieval_mode is RetrievalMode.FULL
+    assert manifest.embedding_model_id == embedder.model_id
+    assert _match(manifest, "CL-FDA-5").matches[0].found_by == ("lexical", "semantic")
+    assert MissingContextCode.SEMANTIC_SEARCH_SKIPPED not in [code for code, _ in _codes(manifest)]
+
+
+async def test_paraphrase_is_found_by_vectors_only(
+    connection: AsyncConnection, world: World
+) -> None:
+    # No word in common with the clause, so full-text can't find it; the vector does.
+    paraphrase = "Zero charge whatsoever"
+    embedder = _TestEmbedder({paraphrase: FREE_CLAUSE})
+    bundle_id = await _indexed(connection, world, embedder)
+
+    manifest = (
+        await _build(
+            connection,
+            world.a.tenant_id,
+            bundle_id,
+            world.a.snapshot_id,
+            provider=_provider(embedder),
+            statements=[paraphrase],
+        )
+    ).manifest
+
+    match = _match(manifest, "CL-FDA-5").matches[0]
+    assert match.found_by == ("semantic",)
+    assert match.rank == 1
+
+
+async def test_spanish_statement_finds_the_spanish_clause(
+    connection: AsyncConnection, world: World
+) -> None:
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+    spanish = _scope().model_copy(update={"language": PolicyLanguage.ES})
+
+    manifest = (
+        await _build(
+            connection,
+            world.a.tenant_id,
+            bundle_id,
+            snapshot_id,
+            spanish,
+            statements=["¿Este tratamiento cura la enfermedad?"],
+        )
+    ).manifest
+
+    assert "lexical" in _match(manifest, "CL-FDA-1-ES").matches[0].found_by
+
+
+async def test_a_negated_word_does_not_match_everything(
+    connection: AsyncConnection, world: World
+) -> None:
+    # websearch syntax turns "-word" into NOT word; ORed, that would match every other node. No
+    # node contains either word, so any match would come from the negation.
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+
+    manifest = (
+        await _build(
+            connection,
+            world.a.tenant_id,
+            bundle_id,
+            snapshot_id,
+            statements=["Sunshine -zzqx"],
+        )
+    ).manifest
+
+    assert all(item.matches == () for item in manifest.evidence)
+
+
+async def test_full_text_search_stays_in_the_statements_language(
+    connection: AsyncConnection, world: World
+) -> None:
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+    spanish = _scope().model_copy(update={"language": PolicyLanguage.ES})
+
+    manifest = (
+        await _build(
+            connection,
+            world.a.tenant_id,
+            bundle_id,
+            snapshot_id,
+            spanish,
+            statements=["El tratamiento es gratis y la participación es voluntaria"],
+        )
+    ).manifest
+
+    matched = [item for item in manifest.evidence if item.matches]
+    assert matched
+    assert {item.language for item in matched} == {PolicyLanguage.ES}
+
+
+async def test_search_never_adds_rules_or_exceptions(
+    connection: AsyncConnection, world: World
+) -> None:
+    # The image-only rule's own words, in a caption check: still not selected or cited.
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+
+    manifest = (
+        await _build(
+            connection,
+            world.a.tenant_id,
+            bundle_id,
+            snapshot_id,
+            statements=["A before-and-after result and a clinician endorsing the treatment"],
+        )
+    ).manifest
+
+    assert "REC-09" not in _ids(manifest.required_rules)
+    kinds = {item.node_type for item in manifest.evidence}
+    assert PolicyNodeType.RULE not in kinds
+    assert PolicyNodeType.EXCEPTION not in kinds
+
+
+async def test_full_search_needs_a_ready_index_that_matches_the_graph(
+    connection: AsyncConnection, world: World
+) -> None:
+    embedder = _TestEmbedder()
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+    tenant = world.a.tenant_id
+
+    with pytest.raises(PolicyContextUnavailableError, match="could not be built") as missing:
+        await _build(
+            connection,
+            tenant,
+            bundle_id,
+            snapshot_id,
+            provider=_provider(embedder),
+            statements=["free treatment"],
+        )
+
+    async with owner_session(connection, tenant) as db:
+        await build_policy_index(db, tenant, bundle_id, embedder)
+    async with as_tenant_owner(connection, tenant):
+        await connection.execute(
+            text(
+                "UPDATE policy_nodes SET text = text || ' (edited)'"
+                " WHERE node_key = 'CL-FDA-2' AND policy_bundle_id = :b"
+            ),
+            {"b": bundle_id},
+        )
+    with pytest.raises(PolicyContextUnavailableError, match="could not be built") as stale:
+        await _build(
+            connection,
+            tenant,
+            bundle_id,
+            snapshot_id,
+            provider=_provider(embedder),
+            statements=["free treatment"],
+        )
+
+    assert missing.value.details == {
+        "reason": "INDEX_NOT_READY",
+        "embedding_model_id": embedder.model_id,
+    }
+    assert stale.value.details == {"reason": "INDEX_STALE", "embedding_model_id": embedder.model_id}
+
+
+async def test_repeated_search_reuses_the_manifest_without_embedding_again(
+    connection: AsyncConnection, world: World
+) -> None:
+    embedder = _TestEmbedder()
+    bundle_id = await _indexed(connection, world, embedder)
+    calls_after_index = embedder.calls
+    provider = _provider(embedder)
+    tenant, snapshot = world.a.tenant_id, world.a.snapshot_id
+
+    first = await _build(
+        connection, tenant, bundle_id, snapshot, provider=provider, statements=["free treatment"]
+    )
+    second = await _build(
+        connection, tenant, bundle_id, snapshot, provider=provider, statements=["free treatment"]
+    )
+    other = await _build(
+        connection,
+        tenant,
+        bundle_id,
+        snapshot,
+        provider=provider,
+        statements=["better than other treatments"],
+    )
+
+    assert second.id == first.id
+    assert second.reused
+    assert other.id != first.id
+    # One query embedding per distinct request; the repeat was answered from the store.
+    assert embedder.calls - calls_after_index == 2
+
+
+async def test_statements_beyond_the_limit_are_recorded(
+    connection: AsyncConnection, world: World
+) -> None:
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+
+    manifest = (
+        await _build(
+            connection,
+            world.a.tenant_id,
+            bundle_id,
+            snapshot_id,
+            provider=_provider(max_statements=1),
+            statements=["free treatment", "better than other treatments"],
+        )
+    ).manifest
+
+    assert len(manifest.statements) == 1
+    assert (MissingContextCode.STATEMENTS_TRUNCATED, None) in _codes(manifest)
+    assert {m.statement_index for item in manifest.evidence for m in item.matches} == {0}
+
+
+async def test_same_search_request_gives_the_same_manifest(
+    connection: AsyncConnection, world: World
+) -> None:
+    # Reproducibility: a fresh provider and embedder, same inputs, same stored decision.
+    bundle_id = await _indexed(connection, world, _TestEmbedder())
+    tenant, snapshot = world.a.tenant_id, world.a.snapshot_id
+
+    first = await _build(
+        connection,
+        tenant,
+        bundle_id,
+        snapshot,
+        provider=_provider(_TestEmbedder()),
+        statements=["free treatment"],
+    )
+    again = await _build(
+        connection,
+        tenant,
+        bundle_id,
+        snapshot,
+        provider=_provider(_TestEmbedder()),
+        statements=["free treatment"],
+    )
+
+    assert again.id == first.id
+    assert again.manifest == first.manifest

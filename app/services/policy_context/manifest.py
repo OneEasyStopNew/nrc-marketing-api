@@ -15,13 +15,29 @@ from app.models.enums import (
     Severity,
     ValidationInputKind,
 )
+from app.schemas.validations import TextSpan
 
-# Bumped whenever the selection or walk logic changes, so cached manifests built by older logic
-# are never reused (the version is part of every cache key).
-RETRIEVAL_CONFIG_VERSION: Final = 1
-MANIFEST_SCHEMA_VERSION: Final = 1
+# Bumped whenever the selection, walk or search logic changes, so cached manifests built by older
+# logic are never reused (the version is part of every cache key). 2: search added.
+RETRIEVAL_CONFIG_VERSION: Final = 2
+MANIFEST_SCHEMA_VERSION: Final = 2
 # Evidence quotes node text; long clauses are cut so a manifest stays a bounded size.
 EXCERPT_MAX_CHARS: Final = 1000
+# The common reciprocal rank fusion constant: a high rank in either search list counts, and
+# neither list's raw scores (which aren't comparable) decide on their own.
+RRF_K: Final = 60
+# Same bound as a creative prompt (MAX_PROMPT_CHARS): one statement is at most a whole post.
+MAX_STATEMENT_CHARS: Final = 4000
+
+
+class RetrievalMode(StrEnum):
+    # No statements: rule selection and the graph walk only.
+    GRAPH_ONLY = "graph_only"
+    # Statements searched with full-text only: no embedder (e.g. inside an API request, where
+    # provider calls aren't allowed).
+    LEXICAL_ONLY = "lexical_only"
+    # Full-text and vector search, fused.
+    FULL = "full"
 
 
 class _Frozen(BaseModel):
@@ -42,6 +58,10 @@ class MissingContextCode(StrEnum):
     TRAVERSAL_TRUNCATED = "TRAVERSAL_TRUNCATED"
     CONFLICT = "CONFLICT"
     SOURCE_MISSING = "SOURCE_MISSING"
+    # Statements were searched with full-text only (no embedder).
+    SEMANTIC_SEARCH_SKIPPED = "SEMANTIC_SEARCH_SKIPPED"
+    # More statements than POLICY_RETRIEVAL_MAX_STATEMENTS; only the first ones were searched.
+    STATEMENTS_TRUNCATED = "STATEMENTS_TRUNCATED"
 
 
 class ContextScope(_Frozen):
@@ -58,11 +78,19 @@ class ContextScope(_Frozen):
     evaluated_at: AwareDatetime
 
 
+class Statement(_Frozen):
+    # Something the post says. Today the whole brief or caption; later each claim the extraction
+    # model finds. Search uses it to add evidence; it never selects or removes a rule.
+    text: str = Field(min_length=1, max_length=MAX_STATEMENT_CHARS)
+    span: TextSpan | None = None
+
+
 class ContextRequest(_Frozen):
     # The caller pins the bundle (the one its run records), never "whatever is active now".
     policy_bundle_id: UUID
     study_snapshot_id: UUID
     scope: ContextScope
+    statements: tuple[Statement, ...] = ()
 
 
 class BundleRef(_Frozen):
@@ -90,6 +118,20 @@ class ManifestRule(_Frozen):
     unresolved: tuple[str, ...] = ()
 
 
+class StatementRef(_Frozen):
+    # The manifest keeps a hash, not the text: the creative version already holds the text.
+    sha256: str
+    span: TextSpan | None = None
+
+
+class SearchMatch(_Frozen):
+    # Index into ContextManifest.statements.
+    statement_index: int
+    found_by: tuple[Literal["lexical", "semantic"], ...]
+    # 1 is the best match for that statement after fusing both searches.
+    rank: int
+
+
 class EvidenceItem(_Frozen):
     node_key: str
     node_type: PolicyNodeType
@@ -97,10 +139,11 @@ class EvidenceItem(_Frozen):
     excerpt: str
     # The source clause the node quotes, if any.
     clause_ref: str | None
-    found_by: Literal["graph"] = "graph"
-    # One path per selected rule that reaches this node: rule node key, then edge label and node
-    # key per hop. "applied_by" is an applies_to edge followed backwards (interpretation -> rule).
-    paths: tuple[tuple[str, ...], ...]
+    # How it was found; at least one is non-empty. paths: one per selected rule whose graph walk
+    # reaches the node (rule node key, then edge label and node key per hop; "applied_by" is an
+    # applies_to edge followed backwards). matches: the statements whose search found it.
+    paths: tuple[tuple[str, ...], ...] = ()
+    matches: tuple[SearchMatch, ...] = ()
 
 
 class ExceptionItem(_Frozen):
@@ -129,6 +172,10 @@ class RetrievalConfig(_Frozen):
     version: int
     max_hops: int
     max_nodes: int
+    # Matches kept per statement after fusion, and per search before it.
+    top_k: int
+    max_statements: int
+    rrf_k: int = RRF_K
 
 
 class ContextManifest(_Frozen):
@@ -142,6 +189,10 @@ class ContextManifest(_Frozen):
     policy_bundle: BundleRef
     study_snapshot: SnapshotRef
     scope: ContextScope
+    retrieval_mode: RetrievalMode
+    # The model whose vectors were searched (FULL mode only).
+    embedding_model_id: str | None = None
+    statements: tuple[StatementRef, ...] = ()
     required_rules: tuple[ManifestRule, ...]
     optional_rules: tuple[ManifestRule, ...]
     evidence: tuple[EvidenceItem, ...]

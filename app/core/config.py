@@ -16,8 +16,9 @@ LEASE_MIN_SECONDS = 5
 LEASE_MAX_SECONDS = 600
 
 
-class Settings(BaseSettings):
-    # Typed configuration. Required values have no default, so a missing one fails at startup.
+class EmbeddingSettings(BaseSettings):
+    # What policy embeddings need, on its own so owner scripts (seed, index build) can load it
+    # without the API's settings (Cognito, DATABASE_URL). Settings inherits every field here.
 
     # .env.local (git-ignored, local only) overrides .env; it holds provider keys such as
     # HIGGSFIELD_API_KEY.
@@ -27,6 +28,33 @@ class Settings(BaseSettings):
 
     # Defaults to the strictest value: a deployment that forgets it gets no dev shortcuts.
     app_env: AppEnv = "production"
+    aws_region: str = "us-east-1"
+    # Policy embeddings (NRC-5). "off" builds and uses no vectors (retrieval is lexical only), so
+    # staging and production start unchanged until Bedrock access exists. "live" never falls back
+    # to the simulator and refuses to start without BEDROCK_EMBEDDING_MODEL_ID. The simulator's
+    # vectors carry no meaning: local and demo only.
+    embedding_mode: Literal["off", "simulator", "live"] = "off"
+    # One of the pinned models in app.services.providers.bedrock_embeddings.PINNED_MODELS.
+    bedrock_embedding_model_id: str | None = None
+    # Bedrock client: connect and read timeout per request, and botocore's retries after the
+    # first attempt (standard mode). The region is AWS_REGION; access comes from the IAM role.
+    bedrock_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    bedrock_max_retries: int = Field(default=3, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def _simulated_embeddings_only_outside_production(self) -> Self:
+        if self.embedding_mode == "simulator" and self.app_env not in NON_PRODUCTION_ENVS:
+            raise ValueError(
+                f"EMBEDDING_MODE=simulator cannot be used when APP_ENV={self.app_env!r}; "
+                "set APP_ENV=local (or demo) for development"
+            )
+        return self
+
+
+class Settings(EmbeddingSettings):
+    # Typed configuration. Required values have no default, so a missing one fails at startup.
+    # app_env, aws_region and the embedding settings come from EmbeddingSettings.
+
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     enable_docs: bool = False
     max_request_body_bytes: int = Field(default=1_048_576, ge=1024)
@@ -104,8 +132,8 @@ class Settings(BaseSettings):
     # Higgsfield's documented minimum retention.
     provider_output_retention_fallback_seconds: int = Field(default=604_800, ge=3600, le=1_209_600)
 
-    # Media storage (NRC-3). The bucket comes only from configuration, never from code.
-    aws_region: str = "us-east-1"
+    # Media storage (NRC-3). The bucket comes only from configuration, never from code. The
+    # region (AWS_REGION) is in EmbeddingSettings.
     aws_s3_bucket: str | None = None
     # Local SeaweedFS only; never set on servers, where the IAM role gives access.
     aws_endpoint_url_s3: str | None = None
@@ -128,6 +156,10 @@ class Settings(BaseSettings):
     # context manifest (TRAVERSAL_TRUNCATED), never silently dropped.
     policy_retrieval_max_hops: int = Field(default=3, ge=1, le=10)
     policy_retrieval_max_nodes: int = Field(default=200, ge=10, le=2000)
+    # Search: matches kept per statement (per search, and after fusing them), and statements
+    # searched per request (more are recorded as STATEMENTS_TRUNCATED, not silently dropped).
+    policy_retrieval_top_k: int = Field(default=5, ge=1, le=50)
+    policy_retrieval_max_statements: int = Field(default=50, ge=1, le=200)
 
     @field_validator("cognito_client_ids", "cors_origins", "higgsfield_output_hosts", mode="before")
     @classmethod
@@ -150,6 +182,7 @@ class Settings(BaseSettings):
             return self
         enabled = [
             name
+            # EMBEDDING_MODE=simulator is refused by EmbeddingSettings' own validator.
             for name, on in (("DEMO_STUBS", self.demo_stubs), ("DEV_JWKS_FILE", self.dev_jwks_file))
             if on
         ]

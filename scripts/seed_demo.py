@@ -24,6 +24,9 @@ from app.db.session import TenantSession, bind_tenant
 from app.models import Membership, MembershipStudy, PolicyBundle, Study, StudySnapshot, Tenant
 from app.models.enums import BundleLifecycleState, Language, RecruitmentStatus
 from app.schemas.policies import PolicyRule
+from app.services.policy_index import build_policy_index
+from app.services.providers.embeddings import EmbeddingProvider
+from scripts.embedding_setup import load_embedder
 from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
 
 _SUB = re.compile(r"[A-Za-z0-9-]{1,128}")
@@ -173,7 +176,11 @@ def parse_member(value: str) -> tuple[str, list[str]]:
     return sub, role_names
 
 
-async def seed(tenant_name: str, members: list[tuple[str, list[str]]]) -> dict[str, object]:
+async def seed(
+    tenant_name: str,
+    members: list[tuple[str, list[str]]],
+    embedder: EmbeddingProvider | None = None,
+) -> dict[str, object]:
     engine = create_async_engine(
         OwnerDatabaseSettings().migration_database_url.get_secret_value(), poolclass=NullPool
     )
@@ -207,6 +214,10 @@ async def seed(tenant_name: str, members: list[tuple[str, list[str]]]) -> dict[s
             await db.flush()
             # Graph rows (synthetic rulebook) for the bundle, in the same transaction.
             await import_policy_graph(db, tenant_id, policy_id, load_synthetic_graph())
+            # Then its embedding index, when EMBEDDING_MODE gives a provider (the simulator
+            # locally). Off (the default) skips it: retrieval is then lexical only.
+            if embedder is not None:
+                await build_policy_index(db, tenant_id, policy_id, embedder)
             db.add(
                 StudySnapshot(
                     id=snapshot_id,
@@ -242,7 +253,8 @@ def main() -> None:
     parser.add_argument("--tenant-name", required=True)
     parser.add_argument("--member", type=parse_member, action="append", required=True)
     args = parser.parse_args()
-    print(json.dumps(asyncio.run(seed(args.tenant_name, args.member)), indent=2))
+    embedder = load_embedder()
+    print(json.dumps(asyncio.run(seed(args.tenant_name, args.member, embedder)), indent=2))
 
 
 if __name__ == "__main__":
