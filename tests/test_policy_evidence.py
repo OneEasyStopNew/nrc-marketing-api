@@ -9,7 +9,9 @@ from sqlalchemy import Row, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.models import ContextManifestRecord, ValidationRun
-from app.models.enums import BundleLifecycleState
+from app.models.enums import BundleLifecycleState, Language, PolicyLanguage
+from app.services.policy_context.manifest import MAX_STATEMENT_CHARS
+from app.services.validations import policy_language
 from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
 from scripts.seed_demo import demo_policy_rules
 from tests.conftest import (
@@ -27,6 +29,7 @@ RISKY_PROMPT = "Guaranteed results! This proven cure is free treatment."
 CAPTION = "Learn about a research study near you. Taking part is voluntary."
 UUID_TEXT = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 BRIEF_RULES = ["REC-01", "REC-02", "REC-03", "REC-04", "REC-05", "REC-08"]
+GAP_START = "Policy evidence was not gathered for this run"
 
 
 async def _with_graph(connection: AsyncConnection, world: World) -> UUID:
@@ -133,7 +136,7 @@ async def test_brief_run_stores_lexical_context(
     assert [rule["rule_id"] for rule in context["required_rules"]] == BRIEF_RULES
     # The outcome is still the rule checks' only: no gap for the context.
     run = (await _get(client, auth, f"/validations/{run_id}", world.a.tenant_id)).json()
-    assert not any("CONTEXT_UNAVAILABLE" in gap["reason"] for gap in run["coverage_gaps"])
+    assert not any(GAP_START in gap["reason"] for gap in run["coverage_gaps"])
 
 
 async def test_context_shows_no_internal_ids_or_statement_text(
@@ -228,9 +231,7 @@ async def test_bundle_without_graph_stores_run_with_gap(
     # Unchanged: the context is evidence only, so its absence doesn't change the outcome yet.
     assert run["outcome"] == "PASS"
     gaps = [gap["reason"] for gap in run["coverage_gaps"]]
-    assert any(
-        reason.startswith("CONTEXT_UNAVAILABLE") and "GRAPH_MISSING" in reason for reason in gaps
-    )
+    assert any(reason.startswith(GAP_START) and "(GRAPH_MISSING)" in reason for reason in gaps)
     response = await _get(client, auth, f"/validations/{run_id}/context", world.a.tenant_id)
     assert response.status_code == 404
     assert response.json()["code"] == "CONTEXT_NOT_AVAILABLE"
@@ -355,8 +356,15 @@ async def test_bundle_rules_show_sources_disclosures_and_exceptions(
     assert [(e["node_key"], e["requires_study_fact"]) for e in rules["REC-06"]["exceptions"]] == [
         ("EXC-01", "compensation_statement")
     ]
-    # REC-08 is supported by an interpretation, which quotes no clause.
+    # REC-08 is supported by an interpretation, which quotes no clause: shown as one.
     assert rules["REC-08"]["sources"] == []
+    assert [i["node_key"] for i in rules["REC-08"]["interpretations"]] == ["INT-01"]
+    assert rules["REC-01"]["interpretations"] == []
+    assert rules["REC-01"]["examples"] == []
+    # An exception carries its own conditions.
+    exception = rules["REC-06"]["exceptions"][0]
+    assert exception["applicability"]["input_kinds"] == []
+    assert exception["applicability"]["study_specific"] is False
 
 
 async def test_bundle_rules_show_no_internal_ids(
@@ -389,6 +397,48 @@ async def test_rules_of_a_bundle_without_graph_are_unavailable(
     assert response.status_code == 409
     assert response.json()["code"] == "POLICY_CONTEXT_UNAVAILABLE"
     assert response.json()["details"] == {"reason": "GRAPH_MISSING"}
+
+
+async def test_rules_of_a_retired_bundle_are_shown(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+) -> None:
+    # A run pinned to a bundle that has since been retired can still show its rules.
+    bundle_id = await _with_graph(connection, world)
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        await connection.execute(
+            text("UPDATE policy_bundles SET lifecycle_state = 'RETIRED' WHERE id = :b"),
+            {"b": bundle_id},
+        )
+
+    response = await _get(client, auth, f"/policy-bundles/{bundle_id}/rules", world.a.tenant_id)
+
+    assert response.status_code == 200
+    assert response.json()["lifecycle_state"] == "RETIRED"
+
+
+async def test_statement_too_long_for_search_stores_run_with_gap(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+) -> None:
+    # A stored text over the statement limit (e.g. grown by NFC normalisation) gets no context,
+    # but the validation still runs and is stored.
+    await _with_graph(connection, world)
+    creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        await connection.execute(
+            text("UPDATE creative_versions SET prompt = :p WHERE creative_id = :c"),
+            {"p": "a" * (MAX_STATEMENT_CHARS + 1), "c": UUID(creative["id"])},
+        )
+
+    run_id = await _validate(client, auth, world, creative)
+
+    assert (await _run(connection, run_id)).context_manifest_id is None
+    run = (await _get(client, auth, f"/validations/{run_id}", world.a.tenant_id)).json()
+    assert any("(STATEMENT_TOO_LONG)" in gap["reason"] for gap in run["coverage_gaps"])
+
+
+def test_a_language_without_policy_text_gets_no_context() -> None:
+    assert policy_language(Language.EN) is PolicyLanguage.EN
+    assert policy_language("fr") is None
 
 
 async def test_rules_of_a_draft_bundle_are_not_found(
