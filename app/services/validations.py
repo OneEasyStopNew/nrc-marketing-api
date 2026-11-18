@@ -18,6 +18,7 @@ from typing import Final
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
@@ -52,12 +53,14 @@ from app.schemas.validations import (
 from app.services import idempotency, policies, rules
 from app.services.creatives import visible_to
 from app.services.policy_context import ContextRequest, ContextScope, PolicyContextProvider
-from app.services.policy_context.manifest import Statement
+from app.services.policy_context.manifest import MAX_STATEMENT_CHARS, Statement
 
 VALIDATE_ROUTE: Final = "POST /validations"
-# Recorded when the policy context couldn't be gathered; the rule checks still ran.
+# Recorded when the policy context couldn't be gathered; the rule checks still ran. The reason
+# in brackets is a code (e.g. GRAPH_MISSING): CoverageGap has no code field.
 CONTEXT_UNAVAILABLE_GAP: Final = (
-    "CONTEXT_UNAVAILABLE: policy evidence could not be gathered for this run ({reason})."
+    "Policy evidence was not gathered for this run ({reason}); the result comes from the rule "
+    "checks only."
 )
 
 logger = logging.getLogger(__name__)
@@ -108,22 +111,9 @@ async def create_validation(
     text = target.prompt if body.input_kind is ValidationInputKind.BRIEF else target.caption or ""
     evaluation = rules.evaluate_text(body.input_kind, text, policy, target.facts)
     evaluated_at = datetime.now(tz=UTC)
-    context_gaps: list[CoverageGap] = []
-    try:
-        manifest_id: UUID | None = await _gather_context(
-            db, ctx, context_provider, body.input_kind, text, target, policy, evaluated_at
-        )
-    except PolicyContextUnavailableError as error:
-        # E.g. an older bundle without a graph. The run is still stored, without context.
-        reason = str((error.details or {}).get("reason", error.code))
-        logger.warning(
-            "policy context unavailable tenant=%s bundle=%s reason=%s",
-            ctx.tenant_id,
-            policy.policy_bundle_id,
-            reason,
-        )
-        manifest_id = None
-        context_gaps.append(CoverageGap(reason=CONTEXT_UNAVAILABLE_GAP.format(reason=reason)))
+    manifest_id, context_gaps = await _gather_context(
+        db, ctx, context_provider, body.input_kind, text, target, policy, evaluated_at
+    )
     run = _new_run(
         ctx, body, text, target, policy, evaluation, evaluated_at, manifest_id, context_gaps
     )
@@ -337,23 +327,67 @@ async def _gather_context(
     target: _Target,
     policy: PolicyBundleRead,
     evaluated_at: datetime,
-) -> UUID:
-    # The run's pinned bundle and snapshot, and the whole brief or caption as one statement.
-    # Inside a request there is no embedder, so search is full-text only (flagged in the
-    # manifest). An identical earlier request reuses its stored manifest.
-    request = ContextRequest(
-        policy_bundle_id=policy.policy_bundle_id,
-        study_snapshot_id=target.snapshot_id,
-        scope=ContextScope(
-            input_kind=kind,
-            channel=target.channel,
-            language=PolicyLanguage(target.language.value),
-            evaluated_at=evaluated_at,
-        ),
-        statements=(Statement(text=text),) if text else (),
+) -> tuple[UUID | None, list[CoverageGap]]:
+    """The stored context's id, or no context and a coverage gap saying why.
+
+    The context is evidence only, so failing to gather it never fails the validation: the run is
+    stored with the rule checks' outcome and the gap. Uses the run's pinned bundle and snapshot,
+    and the whole brief or caption as one statement. Inside a request there is no embedder, so
+    search is full-text only (flagged in the manifest); an identical earlier request reuses its
+    stored manifest.
+    """
+    language = policy_language(target.language)
+    if language is None:
+        reason = "LANGUAGE_NOT_SUPPORTED"
+    elif len(text) > MAX_STATEMENT_CHARS:
+        # Possible after NFC normalisation of a text at the length limit.
+        reason = "STATEMENT_TOO_LONG"
+    else:
+        request = ContextRequest(
+            policy_bundle_id=policy.policy_bundle_id,
+            study_snapshot_id=target.snapshot_id,
+            scope=ContextScope(
+                input_kind=kind,
+                channel=target.channel,
+                language=language,
+                evaluated_at=evaluated_at,
+            ),
+            statements=(Statement(text=text),) if text else (),
+        )
+        try:
+            # A savepoint, so a database error here leaves the run's own transaction usable.
+            async with db.begin_nested():
+                stored = await provider.build(db, ctx.tenant_id, request, actor=ctx.principal.sub)
+        except PolicyContextUnavailableError as error:
+            # E.g. an older bundle without a graph.
+            reason = str((error.details or {}).get("reason", error.code))
+        except SQLAlchemyError as error:
+            # The class name only: database errors can quote the statement's parameters.
+            reason = "RETRIEVAL_ERROR"
+            logger.error(
+                "policy context failed tenant=%s bundle=%s error=%s",
+                ctx.tenant_id,
+                policy.policy_bundle_id,
+                type(error).__name__,
+            )
+        else:
+            return stored.id, []
+    logger.warning(
+        "policy context unavailable tenant=%s bundle=%s reason=%s",
+        ctx.tenant_id,
+        policy.policy_bundle_id,
+        reason,
     )
-    stored = await provider.build(db, ctx.tenant_id, request, actor=ctx.principal.sub)
-    return stored.id
+    return None, [CoverageGap(reason=CONTEXT_UNAVAILABLE_GAP.format(reason=reason))]
+
+
+def policy_language(language: Language | str) -> PolicyLanguage | None:
+    # Policy text may support a language before the public enum does (F33), and the reverse must
+    # not crash validation: a language without policy text gets no context and a gap.
+    try:
+        return PolicyLanguage(language)
+    except ValueError:
+        return None
 
 
 async def _active_policy(db: AsyncSession, ctx: TenantContext) -> PolicyBundleRead:

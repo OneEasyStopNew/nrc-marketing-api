@@ -34,9 +34,9 @@ from app.schemas.policy_evidence import (
     MissingContextRead,
     PolicyBundleRulesRead,
     RuleApplicabilityRead,
-    RuleDisclosureRead,
     RuleExceptionRead,
     RuleSourceRead,
+    RuleTextRead,
     SupersededRuleRead,
     ValidationContextRead,
 )
@@ -64,11 +64,17 @@ async def get_bundle_rules(
         PolicyContextUnavailableError: the bundle has no approved rules in its graph (an older
             bundle without one); details.reason is GRAPH_MISSING.
     """
-    bundle = await db.scalar(
-        select(PolicyBundle).where(
-            PolicyBundle.tenant_id == ctx.tenant_id, PolicyBundle.id == policy_bundle_id
+    bundle = (
+        await db.execute(
+            select(
+                PolicyBundle.id,
+                PolicyBundle.version,
+                PolicyBundle.name,
+                PolicyBundle.lifecycle_state,
+                PolicyBundle.is_synthetic,
+            ).where(PolicyBundle.tenant_id == ctx.tenant_id, PolicyBundle.id == policy_bundle_id)
         )
-    )
+    ).one_or_none()
     if bundle is None or bundle.lifecycle_state not in USABLE_BUNDLE_STATES:
         raise NotFoundError("Policy bundle not found.")
     rules = (
@@ -189,7 +195,7 @@ def _flatten(linked: _Linked) -> list[tuple[PolicyEdgeType, PolicyNode]]:
 async def _linked_nodes(
     db: AsyncSession, tenant_id: UUID, bundle_id: UUID, rule_node_ids: Sequence[UUID]
 ) -> _Linked:
-    # One query: every approved edge from a rule to an approved node, keyed by the rule's node.
+    # Every approved edge between a rule and an approved node, keyed by the rule's node.
     rows = (
         await db.execute(
             select(PolicyEdge.from_node_id, PolicyEdge.edge_type, PolicyNode)
@@ -212,9 +218,32 @@ async def _linked_nodes(
             .order_by(PolicyNode.node_key)
         )
     ).all()
+    # Interpretations point at the rule they interpret (applies_to): followed backwards.
+    applied = (
+        await db.execute(
+            select(PolicyEdge.to_node_id, PolicyEdge.edge_type, PolicyNode)
+            .join(
+                PolicyNode,
+                and_(
+                    PolicyNode.tenant_id == PolicyEdge.tenant_id,
+                    PolicyNode.policy_bundle_id == PolicyEdge.policy_bundle_id,
+                    PolicyNode.id == PolicyEdge.from_node_id,
+                ),
+            )
+            .where(
+                PolicyEdge.tenant_id == tenant_id,
+                PolicyEdge.policy_bundle_id == bundle_id,
+                PolicyEdge.approved.is_(True),
+                PolicyEdge.edge_type == PolicyEdgeType.APPLIES_TO,
+                PolicyEdge.to_node_id.in_(rule_node_ids),
+                PolicyNode.approved.is_(True),
+            )
+            .order_by(PolicyNode.node_key)
+        )
+    ).all()
     linked: defaultdict[UUID, list[tuple[PolicyEdgeType, PolicyNode]]] = defaultdict(list)
-    for from_id, edge_type, node in rows:
-        linked[from_id].append((edge_type, node))
+    for rule_node_id, edge_type, node in [*rows, *applied]:
+        linked[rule_node_id].append((edge_type, node))
     return linked
 
 
@@ -251,6 +280,12 @@ def _rule(
     clause_ids = dict.fromkeys(
         n.source_clause_id for n in [node, *supporting] if n.source_clause_id is not None
     )
+    # Interpretations support a rule or point at it (applies_to); one entry per node either way.
+    notes = {
+        n.node_key: n
+        for edge, n in linked
+        if edge in (PolicyEdgeType.SUPPORTED_BY, PolicyEdgeType.APPLIES_TO)
+    }
     return BundleRuleRead(
         rule_id=rule.rule_id,
         rule_version=rule.rule_version,
@@ -262,33 +297,42 @@ def _rule(
         check_type=rule.check_type,
         exact_wording=rule.exact_wording,
         prohibited_phrases=list(rule.prohibited_phrases),
-        applicability=RuleApplicabilityRead(
-            input_kinds=list(node.input_kinds),
-            channels=list(node.channels),
-            languages=list(node.languages),
-            audiences=list(node.audiences),
-            jurisdictions=list(node.jurisdictions),
-            study_specific=bool(node.study_ids),
-            effective_from=node.effective_from,
-            effective_to=node.effective_to,
-        ),
+        applicability=_applicability(node),
         sources=[_source(*clauses[clause_id]) for clause_id in clause_ids if clause_id in clauses],
-        disclosures=[
-            RuleDisclosureRead(node_key=n.node_key, language=n.language, text=n.text)
-            for edge, n in linked
-            if edge is PolicyEdgeType.REQUIRES_DISCLOSURE
+        disclosures=[_text(n) for edge, n in linked if edge is PolicyEdgeType.REQUIRES_DISCLOSURE],
+        interpretations=[
+            _text(n) for n in notes.values() if n.node_type is PolicyNodeType.INTERPRETATION
         ],
+        examples=[_text(n) for n in notes.values() if n.node_type is PolicyNodeType.EXAMPLE],
         exceptions=[
             RuleExceptionRead(
                 node_key=n.node_key,
                 language=n.language,
                 text=n.text,
                 requires_study_fact=n.required_study_fact,
+                applicability=_applicability(n),
             )
             for edge, n in linked
             if edge is PolicyEdgeType.EXCEPT_WHEN and n.node_type is PolicyNodeType.EXCEPTION
         ],
     )
+
+
+def _applicability(node: PolicyNode) -> RuleApplicabilityRead:
+    return RuleApplicabilityRead(
+        input_kinds=list(node.input_kinds),
+        channels=list(node.channels),
+        languages=list(node.languages),
+        audiences=list(node.audiences),
+        jurisdictions=list(node.jurisdictions),
+        study_specific=bool(node.study_ids),
+        effective_from=node.effective_from,
+        effective_to=node.effective_to,
+    )
+
+
+def _text(node: PolicyNode) -> RuleTextRead:
+    return RuleTextRead(node_key=node.node_key, language=node.language, text=node.text)
 
 
 def _source(clause: PolicySourceClause, source_title: str) -> RuleSourceRead:

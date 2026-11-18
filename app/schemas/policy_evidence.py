@@ -3,6 +3,7 @@
 # never the internal ids of nodes or edges, search scores or statement text.
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import Field
@@ -25,7 +26,11 @@ from app.schemas.validations import TextSpan
 
 
 class RuleApplicabilityRead(ApiModel):
-    """When the rule applies. An empty list means no restriction on that dimension."""
+    """When a rule or exception applies. An empty list means no restriction on that dimension.
+
+    The values are the policy's own tags, so they may name channels or languages the API doesn't
+    offer yet; that's why they are strings, not the API's enums.
+    """
 
     input_kinds: list[str]
     channels: list[str]
@@ -46,7 +51,8 @@ class RuleSourceRead(ApiModel):
     excerpt: str
 
 
-class RuleDisclosureRead(ApiModel):
+class RuleTextRead(ApiModel):
+    # A disclosure, interpretation or example linked to the rule.
     node_key: str
     language: PolicyLanguage
     text: str
@@ -59,6 +65,7 @@ class RuleExceptionRead(ApiModel):
     requires_study_fact: str | None = Field(
         description="The study fact that must be present for the exception to apply."
     )
+    applicability: RuleApplicabilityRead
 
 
 class BundleRuleRead(ApiModel):
@@ -74,7 +81,11 @@ class BundleRuleRead(ApiModel):
     prohibited_phrases: list[str]
     applicability: RuleApplicabilityRead
     sources: list[RuleSourceRead]
-    disclosures: list[RuleDisclosureRead]
+    disclosures: list[RuleTextRead] = Field(description="Wording the post must carry.")
+    interpretations: list[RuleTextRead] = Field(
+        description="Approved readings of the rule, e.g. which study facts it checks."
+    )
+    examples: list[RuleTextRead]
     exceptions: list[RuleExceptionRead]
 
 
@@ -107,7 +118,7 @@ class ContextRuleRead(ApiModel):
 
 class ContextMatchRead(ApiModel):
     statement_index: int
-    found_by: list[str]
+    found_by: list[Literal["lexical", "semantic"]]
     rank: int = Field(description="1 is the best match for that statement.")
 
 

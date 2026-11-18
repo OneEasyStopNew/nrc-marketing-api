@@ -1,5 +1,5 @@
 {
-  "_note": "NRC-5 policy evidence sample responses for frontend mocks (NRC-20), generated from the synthetic rulebook. All data is synthetic. rules is trimmed to three rules. Validated against the API schemas by tests/test_contract.py.",
+  "_note": "NRC-5 policy evidence sample responses for frontend mocks (NRC-20), generated from the synthetic rulebook. All data is synthetic. rules is trimmed to four rules. Validated against the API schemas by tests/test_contract.py.",
   "policy_bundle_rules": {
     "request": "GET /v1/marketing/policy-bundles/a1d4c7e2-8b3f-4e6a-9c5d-2f7b1e8a4c06/rules",
     "status": 200,
@@ -60,6 +60,8 @@
             }
           ],
           "disclosures": [],
+          "interpretations": [],
+          "examples": [],
           "exceptions": []
         },
         {
@@ -97,12 +99,24 @@
             }
           ],
           "disclosures": [],
+          "interpretations": [],
+          "examples": [],
           "exceptions": [
             {
               "node_key": "EXC-01",
               "language": "en",
               "text": "[SYNTHETIC] Compensation may be mentioned when the study snapshot has an approved compensation statement.",
-              "requires_study_fact": "compensation_statement"
+              "requires_study_fact": "compensation_statement",
+              "applicability": {
+                "input_kinds": [],
+                "channels": [],
+                "languages": [],
+                "audiences": [],
+                "jurisdictions": [],
+                "study_specific": false,
+                "effective_from": null,
+                "effective_to": null
+              }
             }
           ]
         },
@@ -142,6 +156,44 @@
               "text": "Este es un estudio de investigación. La participación es voluntaria."
             }
           ],
+          "interpretations": [],
+          "examples": [],
+          "exceptions": []
+        },
+        {
+          "rule_id": "REC-08",
+          "rule_version": 1,
+          "title": "Approved study facts only",
+          "requirement": "Statements about the condition, eligibility, sites and compensation must match the approved study snapshot.",
+          "gate": "study_facts",
+          "severity": "critical",
+          "mandatory": true,
+          "check_type": "deterministic",
+          "exact_wording": null,
+          "prohibited_phrases": [],
+          "applicability": {
+            "input_kinds": [
+              "brief",
+              "text"
+            ],
+            "channels": [],
+            "languages": [],
+            "audiences": [],
+            "jurisdictions": [],
+            "study_specific": false,
+            "effective_from": null,
+            "effective_to": null
+          },
+          "sources": [],
+          "disclosures": [],
+          "interpretations": [
+            {
+              "node_key": "INT-01",
+              "language": "en",
+              "text": "[SYNTHETIC] Ages, eligibility and compensation in the copy must match the approved study snapshot."
+            }
+          ],
+          "examples": [],
           "exceptions": []
         }
       ]

@@ -1952,10 +1952,26 @@
           },
           "disclosures": {
             "items": {
-              "$ref": "#/components/schemas/RuleDisclosureRead"
+              "$ref": "#/components/schemas/RuleTextRead"
             },
             "type": "array",
-            "title": "Disclosures"
+            "title": "Disclosures",
+            "description": "Wording the post must carry."
+          },
+          "interpretations": {
+            "items": {
+              "$ref": "#/components/schemas/RuleTextRead"
+            },
+            "type": "array",
+            "title": "Interpretations",
+            "description": "Approved readings of the rule, e.g. which study facts it checks."
+          },
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/RuleTextRead"
+            },
+            "type": "array",
+            "title": "Examples"
           },
           "exceptions": {
             "items": {
@@ -1980,6 +1996,8 @@
           "applicability",
           "sources",
           "disclosures",
+          "interpretations",
+          "examples",
           "exceptions"
         ],
         "title": "BundleRuleRead"
@@ -2124,7 +2142,11 @@
           },
           "found_by": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "lexical",
+                "semantic"
+              ]
             },
             "type": "array",
             "title": "Found By"
@@ -3722,29 +3744,7 @@
           "effective_to"
         ],
         "title": "RuleApplicabilityRead",
-        "description": "When the rule applies. An empty list means no restriction on that dimension."
-      },
-      "RuleDisclosureRead": {
-        "properties": {
-          "node_key": {
-            "type": "string",
-            "title": "Node Key"
-          },
-          "language": {
-            "$ref": "#/components/schemas/PolicyLanguage"
-          },
-          "text": {
-            "type": "string",
-            "title": "Text"
-          }
-        },
-        "type": "object",
-        "required": [
-          "node_key",
-          "language",
-          "text"
-        ],
-        "title": "RuleDisclosureRead"
+        "description": "When a rule or exception applies. An empty list means no restriction on that dimension.\n\nThe values are the policy's own tags, so they may name channels or languages the API doesn't\noffer yet; that's why they are strings, not the API's enums."
       },
       "RuleExceptionRead": {
         "properties": {
@@ -3770,6 +3770,9 @@
             ],
             "title": "Requires Study Fact",
             "description": "The study fact that must be present for the exception to apply."
+          },
+          "applicability": {
+            "$ref": "#/components/schemas/RuleApplicabilityRead"
           }
         },
         "type": "object",
@@ -3777,7 +3780,8 @@
           "node_key",
           "language",
           "text",
-          "requires_study_fact"
+          "requires_study_fact",
+          "applicability"
         ],
         "title": "RuleExceptionRead"
       },
@@ -3879,6 +3883,28 @@
           "excerpt"
         ],
         "title": "RuleSourceRead"
+      },
+      "RuleTextRead": {
+        "properties": {
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_key",
+          "language",
+          "text"
+        ],
+        "title": "RuleTextRead"
       },
       "Severity": {
         "type": "string",
