@@ -26,7 +26,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import Settings
+from app.core.config import RetrievalSettings
 from app.core.errors import PolicyContextUnavailableError
 from app.models import (
     ContextManifestRecord,
@@ -174,7 +174,9 @@ class AuroraPolicyContextProvider:
     API process, which never calls providers) by full-text only, and the manifest says so.
     """
 
-    def __init__(self, settings: Settings, embedder: EmbeddingProvider | None = None) -> None:
+    def __init__(
+        self, settings: RetrievalSettings, embedder: EmbeddingProvider | None = None
+    ) -> None:
         self._config = RetrievalConfig(
             version=RETRIEVAL_CONFIG_VERSION,
             max_hops=settings.policy_retrieval_max_hops,

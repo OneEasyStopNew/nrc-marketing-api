@@ -31,6 +31,7 @@ import app.services.providers.bedrock_embeddings
 import app.services.policy_index
 import app.services.storage
 import scripts.build_policy_index
+import scripts.eval_retrieval
 import scripts.list_unknown_jobs
 import scripts.higgsfield_smoke
 """

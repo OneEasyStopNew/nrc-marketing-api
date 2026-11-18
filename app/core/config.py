@@ -51,9 +51,25 @@ class EmbeddingSettings(BaseSettings):
         return self
 
 
-class Settings(EmbeddingSettings):
+class RetrievalSettings(EmbeddingSettings):
+    # What policy retrieval needs (its bounds plus the embedding settings), on its own so the
+    # retrieval evaluation script runs without the API's settings. Settings inherits it.
+
+    # Policy retrieval (NRC-5): bounds on the graph walk from the selected rules: hops per rule,
+    # and evidence nodes plus exception entries per manifest. Hitting either is recorded in the
+    # context manifest (TRAVERSAL_TRUNCATED), never silently dropped.
+    policy_retrieval_max_hops: int = Field(default=3, ge=1, le=10)
+    policy_retrieval_max_nodes: int = Field(default=200, ge=10, le=2000)
+    # Search: matches kept per statement (per search, and after fusing them), and statements
+    # searched per request (more are recorded as STATEMENTS_TRUNCATED, not silently dropped).
+    policy_retrieval_top_k: int = Field(default=5, ge=1, le=50)
+    policy_retrieval_max_statements: int = Field(default=50, ge=1, le=200)
+
+
+class Settings(RetrievalSettings):
     # Typed configuration. Required values have no default, so a missing one fails at startup.
-    # app_env, aws_region and the embedding settings come from EmbeddingSettings.
+    # app_env, aws_region, the embedding settings and the retrieval bounds come from
+    # RetrievalSettings.
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     enable_docs: bool = False
@@ -150,16 +166,6 @@ class Settings(EmbeddingSettings):
     max_image_pixels: int = Field(default=25_000_000, ge=1, le=100_000_000)
     # The S3 standard caps presigned links at 15 minutes.
     asset_url_ttl_seconds: int = Field(default=900, ge=60, le=900)
-
-    # Policy retrieval (NRC-5): bounds on the graph walk from the selected rules: hops per rule,
-    # and evidence nodes plus exception entries per manifest. Hitting either is recorded in the
-    # context manifest (TRAVERSAL_TRUNCATED), never silently dropped.
-    policy_retrieval_max_hops: int = Field(default=3, ge=1, le=10)
-    policy_retrieval_max_nodes: int = Field(default=200, ge=10, le=2000)
-    # Search: matches kept per statement (per search, and after fusing them), and statements
-    # searched per request (more are recorded as STATEMENTS_TRUNCATED, not silently dropped).
-    policy_retrieval_top_k: int = Field(default=5, ge=1, le=50)
-    policy_retrieval_max_statements: int = Field(default=50, ge=1, le=200)
 
     @field_validator("cognito_client_ids", "cors_origins", "higgsfield_output_hosts", mode="before")
     @classmethod
