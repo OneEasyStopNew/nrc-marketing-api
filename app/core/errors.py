@@ -71,6 +71,13 @@ class NoActivePolicyError(ConflictError):
     default_message = "This tenant has no active policy to validate against."
 
 
+class PolicyContextUnavailableError(ConflictError):
+    # details.reason: BUNDLE_NOT_FOUND, BUNDLE_NOT_USABLE, GRAPH_MISSING or SNAPSHOT_NOT_FOUND.
+    # Callers record it as a coverage gap; it must never turn into a PASS.
+    code = "POLICY_CONTEXT_UNAVAILABLE"
+    default_message = "The policy context for this check could not be built."
+
+
 class ExportNotReadyError(ConflictError):
     code = "EXPORT_NOT_READY"
     default_message = "Generate an image for the current version before exporting."

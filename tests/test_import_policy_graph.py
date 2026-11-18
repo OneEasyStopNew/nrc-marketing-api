@@ -1,16 +1,14 @@
 """Policy graph import (NRC-5): validation, idempotency, source reuse, the synthetic rulebook."""
 
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Callable
 from dataclasses import asdict
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.orm import aliased
 
-from app.db.session import bind_tenant
 from app.models import (
     PolicyEdge,
     PolicyNode,
@@ -31,11 +29,11 @@ from scripts.import_policy_graph import (
 from scripts.seed_demo import demo_policy_rules
 from tests.conftest import (
     World,
-    _session,
     add_policy_bundle,
     as_tenant_owner,
     bind_test_tenant,
     count_rows,
+    owner_session,
 )
 
 GRAPH_MODELS = (PolicySource, PolicySourceClause, PolicyNode, PolicyRuleRecord, PolicyEdge)
@@ -46,17 +44,6 @@ EXPECTED_COUNTS = (1, 8, 21, 9, 15)
 def _bundle_of(world: World) -> UUID:
     assert world.a.policy_bundle_id is not None
     return world.a.policy_bundle_id
-
-
-@asynccontextmanager
-async def owner_session(
-    connection: AsyncConnection, tenant_id: UUID
-) -> AsyncIterator[AsyncSession]:
-    # What the import script does: the owner role, the tenant bound, one transaction.
-    async with as_tenant_owner(connection, tenant_id), _session(connection) as db:
-        await bind_tenant(db, tenant_id)
-        yield db
-        await db.commit()
 
 
 async def _counts(connection: AsyncConnection) -> tuple[int, ...]:

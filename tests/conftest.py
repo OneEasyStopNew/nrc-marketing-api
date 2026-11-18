@@ -336,6 +336,16 @@ async def as_tenant_owner(conn: AsyncConnection, tenant_id: UUID) -> AsyncIterat
         await conn.execute(text(f"SET LOCAL ROLE {APP_ROLE}"))
 
 
+@asynccontextmanager
+async def owner_session(conn: AsyncConnection, tenant_id: UUID) -> AsyncIterator[AsyncSession]:
+    # What owner scripts (seed, policy graph import) do: the owner role, the tenant bound, one
+    # transaction (a savepoint of the test's).
+    async with as_tenant_owner(conn, tenant_id), _session(conn) as db:
+        await bind_tenant(db, tenant_id)
+        yield db
+        await db.commit()
+
+
 async def count_rows(conn: AsyncConnection, model: type[Any]) -> int:
     return int(await conn.scalar(select(func.count()).select_from(model)) or 0)
 

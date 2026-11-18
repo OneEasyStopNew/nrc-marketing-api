@@ -123,6 +123,12 @@ class Settings(BaseSettings):
     # The S3 standard caps presigned links at 15 minutes.
     asset_url_ttl_seconds: int = Field(default=900, ge=60, le=900)
 
+    # Policy retrieval (NRC-5): bounds on the graph walk from the selected rules: hops per rule,
+    # and evidence nodes plus exception entries per manifest. Hitting either is recorded in the
+    # context manifest (TRAVERSAL_TRUNCATED), never silently dropped.
+    policy_retrieval_max_hops: int = Field(default=3, ge=1, le=10)
+    policy_retrieval_max_nodes: int = Field(default=200, ge=10, le=2000)
+
     @field_validator("cognito_client_ids", "cors_origins", "higgsfield_output_hosts", mode="before")
     @classmethod
     def _split_comma_separated(cls, value: object) -> object:
