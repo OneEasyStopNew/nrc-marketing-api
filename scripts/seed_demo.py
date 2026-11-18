@@ -24,6 +24,7 @@ from app.db.session import TenantSession, bind_tenant
 from app.models import Membership, MembershipStudy, PolicyBundle, Study, StudySnapshot, Tenant
 from app.models.enums import BundleLifecycleState, Language, RecruitmentStatus
 from app.schemas.policies import PolicyRule
+from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
 
 _SUB = re.compile(r"[A-Za-z0-9-]{1,128}")
 SYNTHETIC_FACTS = {
@@ -204,6 +205,8 @@ async def seed(tenant_name: str, members: list[tuple[str, list[str]]]) -> dict[s
                 )
             )
             await db.flush()
+            # Graph rows (synthetic rulebook) for the bundle, in the same transaction.
+            await import_policy_graph(db, tenant_id, policy_id, load_synthetic_graph())
             db.add(
                 StudySnapshot(
                     id=snapshot_id,

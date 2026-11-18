@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, insert, select, text
+from sqlalchemy import insert, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -33,7 +33,16 @@ from app.models.enums import (
     Severity,
 )
 from app.models.policy_graph import EMBEDDING_DIMENSIONS
-from tests.conftest import APP_ROLE, WORKER_ROLE, World, as_role
+from tests.conftest import (
+    APP_ROLE,
+    WORKER_ROLE,
+    World,
+    add_policy_bundle,
+    as_role,
+    as_tenant_owner,
+    bind_test_tenant,
+    count_rows,
+)
 
 GRAPH_MODELS = (
     PolicySource,
@@ -49,56 +58,11 @@ SYNTHETIC_CHECKSUM = "a" * 64
 
 
 @asynccontextmanager
-async def as_owner(connection: AsyncConnection, tenant_id: UUID) -> AsyncIterator[None]:
-    # The policy tables are written by owner scripts, which bind the tenant like any session.
-    await connection.execute(text("RESET ROLE"))
-    await _bind(connection, tenant_id)
-    try:
-        yield
-    finally:
-        await connection.execute(text(f"SET LOCAL ROLE {APP_ROLE}"))
-
-
-async def _bind(connection: AsyncConnection, tenant_id: UUID) -> None:
-    await connection.execute(
-        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_id)}
-    )
-
-
-@asynccontextmanager
 async def rejected(connection: AsyncConnection, match: str) -> AsyncIterator[None]:
     # The savepoint keeps the test's transaction usable after the expected database error.
     with pytest.raises(DBAPIError, match=match):
         async with connection.begin_nested():
             yield
-
-
-async def _count(connection: AsyncConnection, model: type[Any]) -> int:
-    return int(await connection.scalar(select(func.count()).select_from(model)) or 0)
-
-
-async def _add_bundle(
-    connection: AsyncConnection,
-    tenant_id: UUID,
-    version: int,
-    state: BundleLifecycleState = BundleLifecycleState.ACTIVE,
-) -> UUID:
-    bundle_id = uuid4()
-    await connection.execute(
-        insert(PolicyBundle).values(
-            id=bundle_id,
-            tenant_id=tenant_id,
-            version=version,
-            name="[SYNTHETIC] graph test bundle",
-            source_ref="synthetic:test-fixture",
-            rules=[],
-            is_synthetic=True,
-            approved_by="synthetic-fixture",
-            approved_at=datetime(2026, 11, 17, tzinfo=UTC),
-            lifecycle_state=state,
-        )
-    )
-    return bundle_id
 
 
 async def _add_source(connection: AsyncConnection, tenant_id: UUID, checksum: str) -> UUID:
@@ -270,7 +234,7 @@ class Graph:
 
 async def _seed_graph(connection: AsyncConnection, tenant_id: UUID, bundle_id: UUID) -> Graph:
     # One row in every graph table, as the owner.
-    async with as_owner(connection, tenant_id):
+    async with as_tenant_owner(connection, tenant_id):
         source_id = await _add_source(connection, tenant_id, SYNTHETIC_CHECKSUM)
         clause_id = await _add_clause(connection, tenant_id, source_id)
         rule_node = await _add_node(connection, tenant_id, bundle_id, "REC-01", clause_id=clause_id)
@@ -301,10 +265,10 @@ async def test_other_tenant_sees_none_of_the_graph(
 ) -> None:
     await _seed_graph(connection, world.a.tenant_id, _bundle_of(world))
 
-    await _bind(connection, world.a.tenant_id)
-    own = [await _count(connection, model) for model in GRAPH_MODELS]
-    await _bind(connection, world.b.tenant_id)
-    other = [await _count(connection, model) for model in GRAPH_MODELS]
+    await bind_test_tenant(connection, world.a.tenant_id)
+    own = [await count_rows(connection, model) for model in GRAPH_MODELS]
+    await bind_test_tenant(connection, world.b.tenant_id)
+    other = [await count_rows(connection, model) for model in GRAPH_MODELS]
 
     assert own == [1, 1, 2, 1, 1, 1, 1]
     assert other == [0] * len(GRAPH_MODELS)
@@ -316,7 +280,7 @@ async def test_api_and_worker_roles_cannot_write_the_graph(
     connection: AsyncConnection, world: World, role: str, model: type[Any]
 ) -> None:
     await as_role(connection, role)
-    await _bind(connection, world.a.tenant_id)
+    await bind_test_tenant(connection, world.a.tenant_id)
 
     # The privilege check comes before any constraint, so no valid row is needed.
     async with rejected(connection, "permission denied"):
@@ -327,7 +291,7 @@ async def test_new_bundle_without_a_state_is_a_draft(
     connection: AsyncConnection, world: World
 ) -> None:
     bundle_id = uuid4()
-    async with as_owner(connection, world.a.tenant_id):
+    async with as_tenant_owner(connection, world.a.tenant_id):
         await connection.execute(
             insert(PolicyBundle).values(
                 id=bundle_id,
@@ -368,7 +332,7 @@ class Pair:
 
 async def _pair(connection: AsyncConnection, world: World) -> Pair:
     bundle_id = _bundle_of(world)
-    async with as_owner(connection, world.a.tenant_id):
+    async with as_tenant_owner(connection, world.a.tenant_id):
         node_a = await _add_node(connection, world.a.tenant_id, bundle_id, "REC-01")
         node_b = await _add_node(connection, world.a.tenant_id, bundle_id, "DISC-01")
     return Pair(world.a.tenant_id, bundle_id, node_a, node_b)
@@ -378,8 +342,8 @@ async def test_edge_to_a_node_of_another_bundle_is_rejected(
     connection: AsyncConnection, world: World
 ) -> None:
     pair = await _pair(connection, world)
-    async with as_owner(connection, pair.tenant_id):
-        other_bundle = await _add_bundle(connection, pair.tenant_id, version=2)
+    async with as_tenant_owner(connection, pair.tenant_id):
+        other_bundle = await add_policy_bundle(connection, pair.tenant_id, version=2)
         foreign = await _add_node(connection, pair.tenant_id, other_bundle, "REC-01")
 
         async with rejected(connection, "fk_policy_edges_to_node_policy_nodes"):
@@ -392,10 +356,10 @@ async def test_edge_to_a_node_of_another_tenant_is_rejected(
     connection: AsyncConnection, world: World
 ) -> None:
     pair = await _pair(connection, world)
-    async with as_owner(connection, world.b.tenant_id):
-        bundle_b = await _add_bundle(connection, world.b.tenant_id, version=1)
+    async with as_tenant_owner(connection, world.b.tenant_id):
+        bundle_b = await add_policy_bundle(connection, world.b.tenant_id, version=1)
         foreign = await _add_node(connection, world.b.tenant_id, bundle_b, "REC-01")
-    async with as_owner(connection, pair.tenant_id):
+    async with as_tenant_owner(connection, pair.tenant_id):
         async with rejected(connection, "fk_policy_edges_to_node_policy_nodes"):
             await _add_edge(connection, pair.tenant_id, pair.bundle_id, pair.node_a, foreign)
         # Pointing the row at the other tenant's bundle does not help: the bundle's own
@@ -407,11 +371,11 @@ async def test_edge_to_a_node_of_another_tenant_is_rejected(
 async def test_node_cannot_cite_another_tenants_clause(
     connection: AsyncConnection, world: World
 ) -> None:
-    async with as_owner(connection, world.b.tenant_id):
+    async with as_tenant_owner(connection, world.b.tenant_id):
         source_b = await _add_source(connection, world.b.tenant_id, SYNTHETIC_CHECKSUM)
         clause_b = await _add_clause(connection, world.b.tenant_id, source_b)
     async with (
-        as_owner(connection, world.a.tenant_id),
+        as_tenant_owner(connection, world.a.tenant_id),
         rejected(connection, "fk_policy_nodes_tenant_id_policy_source_clauses"),
     ):
         await _add_node(
@@ -423,8 +387,8 @@ async def test_rule_cannot_attach_to_a_node_of_another_bundle(
     connection: AsyncConnection, world: World
 ) -> None:
     pair = await _pair(connection, world)
-    async with as_owner(connection, pair.tenant_id):
-        other_bundle = await _add_bundle(connection, pair.tenant_id, version=2)
+    async with as_tenant_owner(connection, pair.tenant_id):
+        other_bundle = await add_policy_bundle(connection, pair.tenant_id, version=2)
 
         async with rejected(connection, "fk_policy_rules_tenant_id_policy_nodes"):
             await _add_rule(connection, pair.tenant_id, other_bundle, pair.node_a)
@@ -433,7 +397,7 @@ async def test_rule_cannot_attach_to_a_node_of_another_bundle(
 async def test_edge_to_itself_is_rejected(connection: AsyncConnection, world: World) -> None:
     pair = await _pair(connection, world)
     async with (
-        as_owner(connection, pair.tenant_id),
+        as_tenant_owner(connection, pair.tenant_id),
         rejected(connection, "ck_policy_edges_no_self_edge"),
     ):
         await _add_edge(connection, pair.tenant_id, pair.bundle_id, pair.node_a, pair.node_a)
@@ -445,7 +409,7 @@ async def test_approved_edge_needs_provenance(
 ) -> None:
     pair = await _pair(connection, world)
     async with (
-        as_owner(connection, pair.tenant_id),
+        as_tenant_owner(connection, pair.tenant_id),
         rejected(connection, "ck_policy_edges_approved_has_provenance"),
     ):
         await _add_edge(
@@ -463,7 +427,7 @@ async def test_edges_with_provenance_or_unapproved_are_stored(
     connection: AsyncConnection, world: World
 ) -> None:
     pair = await _pair(connection, world)
-    async with as_owner(connection, pair.tenant_id):
+    async with as_tenant_owner(connection, pair.tenant_id):
         source_id = await _add_source(connection, pair.tenant_id, SYNTHETIC_CHECKSUM)
         clause_id = await _add_clause(connection, pair.tenant_id, source_id)
         await _add_edge(
@@ -479,12 +443,12 @@ async def test_edges_with_provenance_or_unapproved_are_stored(
             clause_id=clause_id,
         )
 
-        assert await _count(connection, PolicyEdge) == 2
+        assert await count_rows(connection, PolicyEdge) == 2
 
 
 async def test_duplicate_edge_is_rejected(connection: AsyncConnection, world: World) -> None:
     pair = await _pair(connection, world)
-    async with as_owner(connection, pair.tenant_id):
+    async with as_tenant_owner(connection, pair.tenant_id):
         await _add_edge(connection, pair.tenant_id, pair.bundle_id, pair.node_a, pair.node_b)
 
         async with rejected(connection, "uq_policy_edges_endpoints"):
@@ -495,20 +459,20 @@ async def test_node_key_is_unique_within_a_bundle_only(
     connection: AsyncConnection, world: World
 ) -> None:
     pair = await _pair(connection, world)
-    async with as_owner(connection, pair.tenant_id):
+    async with as_tenant_owner(connection, pair.tenant_id):
         async with rejected(connection, "uq_policy_nodes_tenant_id_policy_bundle_id_node_key"):
             await _add_node(connection, pair.tenant_id, pair.bundle_id, "REC-01")
 
-        other_bundle = await _add_bundle(connection, pair.tenant_id, version=2)
+        other_bundle = await add_policy_bundle(connection, pair.tenant_id, version=2)
         await _add_node(connection, pair.tenant_id, other_bundle, "REC-01")
 
-        assert await _count(connection, PolicyNode) == 3
+        assert await count_rows(connection, PolicyNode) == 3
 
 
 async def test_source_checksum_and_clause_ref_are_unique(
     connection: AsyncConnection, world: World
 ) -> None:
-    async with as_owner(connection, world.a.tenant_id):
+    async with as_tenant_owner(connection, world.a.tenant_id):
         source_id = await _add_source(connection, world.a.tenant_id, SYNTHETIC_CHECKSUM)
         await _add_clause(connection, world.a.tenant_id, source_id)
 
@@ -522,7 +486,7 @@ async def test_rule_id_must_match_the_policy_rule_pattern_and_be_unique(
     connection: AsyncConnection, world: World
 ) -> None:
     pair = await _pair(connection, world)
-    async with as_owner(connection, pair.tenant_id):
+    async with as_tenant_owner(connection, pair.tenant_id):
         async with rejected(connection, "ck_policy_rules_rule_id_pattern"):
             await _add_rule(connection, pair.tenant_id, pair.bundle_id, pair.node_a, "rec-1")
 
@@ -533,7 +497,7 @@ async def test_rule_id_must_match_the_policy_rule_pattern_and_be_unique(
 
 async def test_node_language_must_be_known(connection: AsyncConnection, world: World) -> None:
     async with (
-        as_owner(connection, world.a.tenant_id),
+        as_tenant_owner(connection, world.a.tenant_id),
         rejected(connection, "ck_policy_nodes_language"),
     ):
         await connection.execute(
@@ -553,7 +517,7 @@ async def test_embedding_round_trips_with_1024_dimensions(
 ) -> None:
     pair = await _pair(connection, world)
     vector = [index / EMBEDDING_DIMENSIONS for index in range(EMBEDDING_DIMENSIONS)]
-    async with as_owner(connection, pair.tenant_id):
+    async with as_tenant_owner(connection, pair.tenant_id):
         await _add_embedding(connection, pair.tenant_id, pair.bundle_id, pair.node_a, vector)
 
     stored = await connection.scalar(select(PolicyNodeEmbedding.embedding))
@@ -568,7 +532,7 @@ async def test_embedding_with_the_wrong_dimension_is_rejected(
 ) -> None:
     pair = await _pair(connection, world)
     async with (
-        as_owner(connection, pair.tenant_id),
+        as_tenant_owner(connection, pair.tenant_id),
         rejected(connection, f"expected {EMBEDDING_DIMENSIONS} dimensions, not 3"),
     ):
         await _add_embedding(
@@ -595,7 +559,7 @@ async def test_search_vector_is_generated_per_node_language(
     connection: AsyncConnection, world: World
 ) -> None:
     bundle_id = _bundle_of(world)
-    async with as_owner(connection, world.a.tenant_id):
+    async with as_tenant_owner(connection, world.a.tenant_id):
         await _add_node(
             connection, world.a.tenant_id, bundle_id, "EN-1", body="[SYNTHETIC] This product cures."
         )
@@ -630,7 +594,7 @@ async def test_only_one_ready_build_per_bundle_and_model(
 ) -> None:
     bundle_id = _bundle_of(world)
     tenant_id = world.a.tenant_id
-    async with as_owner(connection, tenant_id):
+    async with as_tenant_owner(connection, tenant_id):
         await _add_build(connection, tenant_id, bundle_id, IndexBuildState.READY)
 
         async with rejected(connection, "uq_policy_index_builds_ready"):
@@ -640,7 +604,7 @@ async def test_only_one_ready_build_per_bundle_and_model(
         await _add_build(connection, tenant_id, bundle_id, IndexBuildState.FAILED)
         await _add_build(connection, tenant_id, bundle_id, IndexBuildState.BUILDING)
         await _add_build(connection, tenant_id, bundle_id, IndexBuildState.READY, "other-model")
-        assert await _count(connection, PolicyIndexBuild) == 4
+        assert await count_rows(connection, PolicyIndexBuild) == 4
 
 
 async def test_ready_build_must_record_what_it_indexed(
@@ -648,7 +612,7 @@ async def test_ready_build_must_record_what_it_indexed(
 ) -> None:
     # Retrieval compares node_count and content_checksum with the bundle before trusting it.
     async with (
-        as_owner(connection, world.a.tenant_id),
+        as_tenant_owner(connection, world.a.tenant_id),
         rejected(connection, "ck_policy_index_builds_ready_is_complete"),
     ):
         await _add_build(
@@ -663,7 +627,7 @@ async def test_effective_window_cannot_be_inverted(
     connection: AsyncConnection, world: World
 ) -> None:
     async with (
-        as_owner(connection, world.a.tenant_id),
+        as_tenant_owner(connection, world.a.tenant_id),
         rejected(connection, "ck_policy_nodes_effective_window"),
     ):
         await connection.execute(
@@ -683,7 +647,7 @@ async def test_effective_window_cannot_be_inverted(
 async def test_rule_version_starts_at_one(connection: AsyncConnection, world: World) -> None:
     pair = await _pair(connection, world)
     async with (
-        as_owner(connection, pair.tenant_id),
+        as_tenant_owner(connection, pair.tenant_id),
         rejected(connection, "ck_policy_rules_rule_version_positive"),
     ):
         await _add_rule(connection, pair.tenant_id, pair.bundle_id, pair.node_a, version=0)
@@ -693,7 +657,7 @@ async def test_prohibited_phrases_cannot_contain_an_empty_phrase(
     connection: AsyncConnection, world: World
 ) -> None:
     pair = await _pair(connection, world)
-    async with as_owner(connection, pair.tenant_id):
+    async with as_tenant_owner(connection, pair.tenant_id):
         async with rejected(connection, "ck_policy_rules_no_empty_phrase"):
             await _add_rule(
                 connection, pair.tenant_id, pair.bundle_id, pair.node_a, phrases=["cure", ""]
@@ -702,4 +666,4 @@ async def test_prohibited_phrases_cannot_contain_an_empty_phrase(
         await _add_rule(
             connection, pair.tenant_id, pair.bundle_id, pair.node_a, phrases=["cure", "proven"]
         )
-        assert await _count(connection, PolicyRuleRecord) == 1
+        assert await count_rows(connection, PolicyRuleRecord) == 1

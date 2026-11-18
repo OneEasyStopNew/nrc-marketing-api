@@ -11,6 +11,7 @@ import os
 import time
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -30,7 +31,7 @@ from jwt.algorithms import RSAAlgorithm
 from PIL import Image
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import Connection, Row, event, select, text
+from sqlalchemy import Connection, Row, event, func, insert, select, text
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncSession,
@@ -316,6 +317,52 @@ async def as_role(conn: AsyncConnection, role: str) -> None:
     # Switch the test's own statements to one of the two login roles.
     assert role in (APP_ROLE, WORKER_ROLE)
     await conn.execute(text(f"SET LOCAL ROLE {role}"))
+
+
+async def bind_test_tenant(conn: AsyncConnection, tenant_id: UUID) -> None:
+    # The tenant for the test's own statements, as bind_tenant does for sessions.
+    await conn.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_id)})
+
+
+@asynccontextmanager
+async def as_tenant_owner(conn: AsyncConnection, tenant_id: UUID) -> AsyncIterator[None]:
+    # Owner scripts (seed, policy graph import) write as the owner with the tenant bound; the
+    # test's statements go back to the API role afterwards.
+    await conn.execute(text("RESET ROLE"))
+    await bind_test_tenant(conn, tenant_id)
+    try:
+        yield
+    finally:
+        await conn.execute(text(f"SET LOCAL ROLE {APP_ROLE}"))
+
+
+async def count_rows(conn: AsyncConnection, model: type[Any]) -> int:
+    return int(await conn.scalar(select(func.count()).select_from(model)) or 0)
+
+
+async def add_policy_bundle(
+    conn: AsyncConnection,
+    tenant_id: UUID,
+    version: int,
+    state: BundleLifecycleState = BundleLifecycleState.ACTIVE,
+) -> UUID:
+    # An empty synthetic bundle (no JSONB rules), written as the owner by the caller.
+    bundle_id = uuid4()
+    await conn.execute(
+        insert(PolicyBundle).values(
+            id=bundle_id,
+            tenant_id=tenant_id,
+            version=version,
+            name=f"[SYNTHETIC] Policy v{version}",
+            source_ref="synthetic:test-fixture",
+            rules=[],
+            is_synthetic=True,
+            approved_by="synthetic-fixture",
+            approved_at=datetime(2026, 11, 17, tzinfo=UTC),
+            lifecycle_state=state,
+        )
+    )
+    return bundle_id
 
 
 @pytest.fixture
