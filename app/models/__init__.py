@@ -7,6 +7,7 @@ from app.models.jobs import CreditReservation, Job, OutboxEvent, ProviderSpend
 from app.models.policies import PolicyBundle
 from app.models.studies import Study, StudySnapshot
 from app.models.tenancy import Membership, MembershipStudy, Tenant
+from app.models.uploads import MediaUpload
 from app.models.validations import ValidationRun
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "CreditReservation",
     "IdempotencyRecord",
     "Job",
+    "MediaUpload",
     "Membership",
     "MembershipStudy",
     "OutboxEvent",

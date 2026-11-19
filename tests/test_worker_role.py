@@ -171,6 +171,8 @@ async def test_worker_role_has_exactly_the_table_privileges_it_uses(
         "outbox_events": {"SELECT", "INSERT", "UPDATE"},
         "assets": {"SELECT", "INSERT"},
         "provider_spend": {"SELECT", "UPDATE"},
+        # The media worker (NRC-3) moves uploads through inspection; the API creates them.
+        "media_uploads": {"SELECT", "UPDATE"},
     }
     rows = (
         await connection.execute(
