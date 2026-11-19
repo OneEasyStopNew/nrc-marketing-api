@@ -14,6 +14,8 @@ NON_PRODUCTION_ENVS: Final[frozenset[str]] = frozenset({"local", "demo"})
 # lease_outbox_events() clamps its lease to the same range in SQL; keep the two in sync.
 LEASE_MIN_SECONDS = 5
 LEASE_MAX_SECONDS = 600
+# The types app.services.media can decode; widening it needs a decoder first.
+SUPPORTED_UPLOAD_IMAGE_TYPES: Final[frozenset[str]] = frozenset({"image/png", "image/jpeg"})
 
 
 class Settings(BaseSettings):
@@ -123,12 +125,47 @@ class Settings(BaseSettings):
     # The S3 standard caps presigned links at 15 minutes.
     asset_url_ttl_seconds: int = Field(default=900, ge=60, le=900)
 
-    @field_validator("cognito_client_ids", "cors_origins", "higgsfield_output_hosts", mode="before")
+    # Client uploads (NRC-3). Final limits come from the product owner; these are the defaults.
+    # Presigned upload URLs share the 15-minute S3 cap above.
+    upload_url_ttl_seconds: int = Field(default=600, ge=60, le=900)
+    # The worker holds the whole file in memory while inspecting it: 50 MiB at most.
+    upload_image_max_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
+    # Accepted MIME types, comma-separated in the environment.
+    upload_image_types: Annotated[tuple[str, ...], NoDecode] = ("image/png", "image/jpeg")
+    # Defaults to the strict value: a deployment that forgets it gets no simulator. The simulator
+    # marks its verdicts as simulated; live needs a real scanner (not chosen yet), and the media
+    # worker refuses to start without one.
+    malware_scan_mode: Literal["simulator", "live"] = "live"
+    # Failed inspection attempts (a crash, an expired lease) before an upload is rejected as
+    # INSPECTION_FAILED. Retryable scanner and storage outages are bounded separately.
+    media_inspection_max_attempts: int = Field(default=3, ge=1, le=10)
+
+    @field_validator(
+        "cognito_client_ids",
+        "cors_origins",
+        "higgsfield_output_hosts",
+        "upload_image_types",
+        mode="before",
+    )
     @classmethod
     def _split_comma_separated(cls, value: object) -> object:
         if isinstance(value, str):
             return tuple(item.strip() for item in value.split(",") if item.strip())
         return value
+
+    @field_validator("upload_image_types")
+    @classmethod
+    def _upload_types_are_decodable(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        types = tuple(item.strip().lower() for item in value)
+        if not types:
+            raise ValueError("upload_image_types must list at least one MIME type")
+        unsupported = sorted(set(types) - SUPPORTED_UPLOAD_IMAGE_TYPES)
+        if unsupported:
+            raise ValueError(
+                f"upload_image_types has unsupported type(s): {', '.join(unsupported)}; "
+                f"supported: {', '.join(sorted(SUPPORTED_UPLOAD_IMAGE_TYPES))}"
+            )
+        return types
 
     @field_validator("dev_jwks_file", mode="before")
     @classmethod
@@ -144,7 +181,11 @@ class Settings(BaseSettings):
             return self
         enabled = [
             name
-            for name, on in (("DEMO_STUBS", self.demo_stubs), ("DEV_JWKS_FILE", self.dev_jwks_file))
+            for name, on in (
+                ("DEMO_STUBS", self.demo_stubs),
+                ("DEV_JWKS_FILE", self.dev_jwks_file),
+                ("MALWARE_SCAN_MODE=simulator", self.malware_scan_mode == "simulator"),
+            )
             if on
         ]
         if enabled:
