@@ -9,13 +9,16 @@ from io import BytesIO
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.core.config import Settings
+from app.core.media_types import IMAGE_EXTENSIONS
 
-_FORMATS = {
-    "PNG": ("image/png", "png"),
-    "JPEG": ("image/jpeg", "jpg"),
+# Pillow format name to MIME type; extensions come from app.core.media_types.
+_FORMAT_TYPES = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
     # Some cameras and phones write JPEGs that Pillow reports as MPO.
-    "MPO": ("image/jpeg", "jpg"),
+    "MPO": "image/jpeg",
 }
+_FORMATS = {name: (mime, IMAGE_EXTENSIONS[mime]) for name, mime in _FORMAT_TYPES.items()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +52,7 @@ def inspect_header(content: bytes) -> ImageInfo:
             image_format = probe.format or ""
             if image_format not in _FORMATS:
                 raise MediaRejectedError(
-                    "MEDIA_UNSUPPORTED_TYPE", "Only PNG and JPEG images are accepted"
+                    "MEDIA_UNSUPPORTED_TYPE", "This image type is not supported"
                 )
             width, height = probe.size
             probe.verify()

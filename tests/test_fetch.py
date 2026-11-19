@@ -88,6 +88,79 @@ async def test_success_returns_image_and_host() -> None:
     assert len(seen) == 1
 
 
+async def test_connection_is_pinned_to_the_vetted_address_with_host_and_sni_kept() -> None:
+    fetcher, seen = _fetcher(_ok(), addresses=("93.184.216.34",))
+    await _fetch(fetcher)
+    (request,) = seen
+    assert request.url.host == "93.184.216.34"
+    assert request.url.scheme == "https"
+    assert request.url.path == "/out/1.png"
+    assert request.url.query == b"X-Signature=secret-signature"
+    assert request.headers["host"] == HOST
+    assert request.extensions["sni_hostname"] == HOST
+
+
+async def test_explicit_port_is_kept_in_the_url_and_host_header() -> None:
+    fetcher, seen = _fetcher(_ok())
+    await _fetch(fetcher, f"https://{HOST}:8443/out/1.png?a=1")
+    (request,) = seen
+    assert (request.url.host, request.url.port) == ("93.184.216.34", 8443)
+    assert request.headers["host"] == f"{HOST}:8443"
+    assert request.extensions["sni_hostname"] == HOST
+
+
+async def test_explicit_default_port_is_not_added_to_the_host_header() -> None:
+    fetcher, seen = _fetcher(_ok())
+    await _fetch(fetcher, f"https://{HOST}:443/out/1.png")
+    assert seen[0].headers["host"] == HOST
+
+
+async def test_ipv6_only_host_is_requested_by_bracketed_literal() -> None:
+    fetcher, seen = _fetcher(_ok(), addresses=("2606:2800:220:1:248:1893:25c8:1946",))
+    await _fetch(fetcher, f"https://{HOST}:8443/out/1.png?a=1")
+    (request,) = seen
+    assert request.url.host == "2606:2800:220:1:248:1893:25c8:1946"
+    assert request.url.port == 8443
+    assert request.url.path == "/out/1.png"
+    assert request.url.query == b"a=1"
+    assert request.url.netloc == b"[2606:2800:220:1:248:1893:25c8:1946]:8443"
+    assert request.headers["host"] == f"{HOST}:8443"
+
+
+async def test_mixed_addresses_pick_the_first_ipv4() -> None:
+    fetcher, seen = _fetcher(
+        _ok(), addresses=("2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34", "93.184.216.35")
+    )
+    await _fetch(fetcher)
+    assert seen[0].url.host == "93.184.216.34"
+
+
+async def test_zone_suffix_is_stripped_from_the_pinned_address() -> None:
+    fetcher, seen = _fetcher(_ok(), addresses=("2606:2800:220:1:248:1893:25c8:1946%eth0",))
+    await _fetch(fetcher)
+    assert seen[0].url.host == "2606:2800:220:1:248:1893:25c8:1946"
+
+
+async def test_rebinding_after_the_check_cannot_reach_a_private_address() -> None:
+    calls: list[str] = []
+
+    async def rebinding(host: str) -> list[str]:
+        calls.append(host)
+        return ["93.184.216.34"] if len(calls) == 1 else ["10.0.0.5"]
+
+    seen: list[httpx.Request] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _ok()(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(record))
+    fetcher = SafeFetcher(client, timeout_seconds=30, resolver=rebinding)
+    await _fetch(fetcher)
+    assert calls == [HOST]
+    assert [request.url.host for request in seen] == ["93.184.216.34"]
+
+
 async def test_jpeg_with_charset_parameter_is_accepted() -> None:
     fetcher, _ = _fetcher(_ok(JPEG, "image/jpeg; charset=binary"))
     assert (await _fetch(fetcher)).content_type == "image/jpeg"
@@ -179,6 +252,14 @@ async def test_tiny_file_with_huge_dimensions_is_rejected_without_decoding() -> 
 
 def test_default_client_ignores_proxy_environment() -> None:
     assert build_fetch_client()._trust_env is False
+
+
+def test_default_client_keeps_no_connections_alive() -> None:
+    # Pooling is by pinned IP, so a reused connection could carry another host's request over a
+    # TLS session verified for the first host.
+    transport = build_fetch_client()._transport
+    assert isinstance(transport, httpx.AsyncHTTPTransport)
+    assert transport._pool._max_keepalive_connections == 0
 
 
 @pytest.mark.parametrize(

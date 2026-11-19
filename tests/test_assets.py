@@ -26,7 +26,8 @@ from app.services.jobs import JobContent, JobContentMissingError
 from app.services.providers.base import FetchedImage, ProviderOutputError
 from app.services.providers.simulator import SimulatedImageProvider, render_simulated_png
 from app.services.storage import ObjectStorage, StorageError
-from app.workers.connector import WorkerConfigError, build_providers, run_once
+from app.workers.common import WorkerConfigError
+from app.workers.connector import build_providers, run_once
 from tests.conftest import (
     AuthHeaders,
     ScriptedProvider,

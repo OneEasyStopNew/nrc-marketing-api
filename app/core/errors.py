@@ -76,6 +76,26 @@ class ExportNotReadyError(ConflictError):
     default_message = "Generate an image for the current version before exporting."
 
 
+class UploadNotReceivedError(ConflictError):
+    # Complete was called before the file reached storage; upload it, then complete again.
+    code = "UPLOAD_NOT_RECEIVED"
+    default_message = "The file has not been received yet. Upload it, then complete again."
+    retryable = True
+
+
+class UploadNotPendingError(ConflictError):
+    # details.status: the upload's current state.
+    code = "UPLOAD_NOT_PENDING"
+    default_message = "This upload is no longer waiting for its file."
+
+
+class UploadNotAcceptedError(AppError):
+    # The declared file breaks a configured limit. details.field names the field; the limits
+    # are in GET /assets/upload-limits.
+    code = "UPLOAD_NOT_ACCEPTED"
+    default_message = "This file cannot be uploaded."
+
+
 class GenerationLimitError(AppError):
     # details.reason is ACTIVE_JOB_LIMIT or CREDIT_CEILING.
     code = "GENERATION_LIMIT_REACHED"

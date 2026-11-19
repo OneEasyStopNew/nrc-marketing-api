@@ -1,0 +1,529 @@
+{
+  "_note": "Synthetic examples for NRC-3 uploads (NRC-18, NRC-41). URLs are placeholders, never real signed links.",
+  "upload_limits": {
+    "request": "GET /v1/marketing/assets/upload-limits",
+    "status": 200,
+    "schema": "UploadLimits",
+    "body": {
+      "image_types": ["image/png", "image/jpeg"],
+      "image_max_bytes": 20971520,
+      "upload_url_ttl_seconds": 600
+    }
+  },
+  "upload_created": {
+    "request": "POST /v1/marketing/assets/uploads",
+    "status": 201,
+    "schema": "UploadRead",
+    "body": {
+      "asset_id": "e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84",
+      "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+      "creative_id": null,
+      "purpose": "creative_media",
+      "status": "PENDING_UPLOAD",
+      "reason": null,
+      "name": "product-shot-01.png",
+      "mime_type": "image/png",
+      "size_bytes": 1843200,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "width_px": null,
+      "height_px": null,
+      "scan": null,
+      "authorization": {
+        "identifiable_person": "yes",
+        "usage_authorization_ref": "RELEASE-2026-0142",
+        "permitted_channels": ["facebook"],
+        "expires_at": "2027-11-19T00:00:00Z",
+        "status": "RECORDED"
+      },
+      "created_by": "creator.demo",
+      "created_at": "2026-11-19T10:00:00Z",
+      "completed_at": null,
+      "upload": {
+        "url": "https://storage.example/uploads/2026/11/e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84.png?X-Amz-Signature=placeholder",
+        "method": "PUT",
+        "headers": {
+          "Content-Type": "image/png",
+          "x-amz-checksum-sha256": "n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=",
+          "x-amz-tagging": "doc-type=upload&retention=operational"
+        },
+        "expires_at": "2026-11-19T10:10:00Z"
+      }
+    }
+  },
+  "upload_quarantined": {
+    "request": "POST /v1/marketing/assets/e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84/complete",
+    "status": 202,
+    "schema": "UploadRead",
+    "body": {
+      "asset_id": "e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84",
+      "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+      "creative_id": null,
+      "purpose": "creative_media",
+      "status": "QUARANTINED",
+      "reason": null,
+      "name": "product-shot-01.png",
+      "mime_type": "image/png",
+      "size_bytes": 1843200,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "width_px": null,
+      "height_px": null,
+      "scan": null,
+      "authorization": {
+        "identifiable_person": "yes",
+        "usage_authorization_ref": "RELEASE-2026-0142",
+        "permitted_channels": ["facebook"],
+        "expires_at": "2027-11-19T00:00:00Z",
+        "status": "RECORDED"
+      },
+      "created_by": "creator.demo",
+      "created_at": "2026-11-19T10:00:00Z",
+      "completed_at": "2026-11-19T10:00:05Z",
+      "upload": null
+    }
+  },
+  "upload_scanning": {
+    "request": "GET /v1/marketing/assets/uploads/e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84",
+    "status": 200,
+    "schema": "UploadRead",
+    "body": {
+      "asset_id": "e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84",
+      "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+      "creative_id": null,
+      "purpose": "creative_media",
+      "status": "SCANNING",
+      "reason": null,
+      "name": "product-shot-01.png",
+      "mime_type": "image/png",
+      "size_bytes": 1843200,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "width_px": null,
+      "height_px": null,
+      "scan": null,
+      "authorization": {
+        "identifiable_person": "yes",
+        "usage_authorization_ref": "RELEASE-2026-0142",
+        "permitted_channels": ["facebook"],
+        "expires_at": "2027-11-19T00:00:00Z",
+        "status": "RECORDED"
+      },
+      "created_by": "creator.demo",
+      "created_at": "2026-11-19T10:00:00Z",
+      "completed_at": "2026-11-19T10:00:05Z",
+      "upload": null
+    }
+  },
+  "upload_ready_simulated_scan": {
+    "request": "GET /v1/marketing/assets/uploads/e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84",
+    "status": 200,
+    "schema": "UploadRead",
+    "body": {
+      "asset_id": "e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84",
+      "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+      "creative_id": null,
+      "purpose": "creative_media",
+      "status": "READY",
+      "reason": null,
+      "name": "product-shot-01.png",
+      "mime_type": "image/png",
+      "size_bytes": 1843200,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "width_px": 1080,
+      "height_px": 1080,
+      "scan": {
+        "engine": "SIMULATED",
+        "simulated": true,
+        "scanned_at": "2026-11-19T10:00:09Z"
+      },
+      "authorization": {
+        "identifiable_person": "yes",
+        "usage_authorization_ref": "RELEASE-2026-0142",
+        "permitted_channels": ["facebook"],
+        "expires_at": "2027-11-19T00:00:00Z",
+        "status": "RECORDED"
+      },
+      "created_by": "creator.demo",
+      "created_at": "2026-11-19T10:00:00Z",
+      "completed_at": "2026-11-19T10:00:05Z",
+      "upload": null
+    }
+  },
+  "upload_rejected_malware": {
+    "request": "GET /v1/marketing/assets/uploads/b2f6a9c1-7e35-4d08-a4b9-0c3f8e2d6a17",
+    "status": 200,
+    "schema": "UploadRead",
+    "body": {
+      "asset_id": "b2f6a9c1-7e35-4d08-a4b9-0c3f8e2d6a17",
+      "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+      "creative_id": null,
+      "purpose": "creative_media",
+      "status": "REJECTED",
+      "reason": {
+        "code": "MALWARE_DETECTED",
+        "message": "The malware scan flagged this file.",
+        "retryable": false
+      },
+      "name": "banner-final.png",
+      "mime_type": "image/png",
+      "size_bytes": 1843200,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "width_px": null,
+      "height_px": null,
+      "scan": {
+        "engine": "SIMULATED",
+        "simulated": true,
+        "scanned_at": "2026-11-19T10:02:11Z"
+      },
+      "authorization": {
+        "identifiable_person": "no",
+        "usage_authorization_ref": null,
+        "permitted_channels": [],
+        "expires_at": null,
+        "status": "NO_PERSON_DECLARED"
+      },
+      "created_by": "creator.demo",
+      "created_at": "2026-11-19T10:02:00Z",
+      "completed_at": "2026-11-19T10:02:05Z",
+      "upload": null
+    }
+  },
+  "upload_rejected_forged_type": {
+    "request": "GET /v1/marketing/assets/uploads/c7e1d5b9-2a68-4f3c-9d07-8b4e6f1a2c95",
+    "status": 200,
+    "schema": "UploadRead",
+    "body": {
+      "asset_id": "c7e1d5b9-2a68-4f3c-9d07-8b4e6f1a2c95",
+      "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+      "creative_id": null,
+      "purpose": "creative_media",
+      "status": "REJECTED",
+      "reason": {
+        "code": "TYPE_MISMATCH",
+        "message": "The file's real type does not match the type declared for it.",
+        "retryable": false
+      },
+      "name": "logo-export.png",
+      "mime_type": "image/png",
+      "size_bytes": 1843200,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "width_px": null,
+      "height_px": null,
+      "scan": null,
+      "authorization": {
+        "identifiable_person": "no",
+        "usage_authorization_ref": null,
+        "permitted_channels": [],
+        "expires_at": null,
+        "status": "NO_PERSON_DECLARED"
+      },
+      "created_by": "creator.demo",
+      "created_at": "2026-11-19T10:03:00Z",
+      "completed_at": "2026-11-19T10:03:05Z",
+      "upload": null
+    }
+  },
+  "upload_waiting_scanner": {
+    "request": "GET /v1/marketing/assets/uploads/d9a3f7c2-6b14-4e89-8c52-1f7b0d4e3a66",
+    "status": 200,
+    "schema": "UploadRead",
+    "body": {
+      "asset_id": "d9a3f7c2-6b14-4e89-8c52-1f7b0d4e3a66",
+      "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+      "creative_id": null,
+      "purpose": "creative_media",
+      "status": "QUARANTINED",
+      "reason": {
+        "code": "SCAN_UNAVAILABLE",
+        "message": "The malware scan is temporarily unavailable. The check will be retried.",
+        "retryable": true
+      },
+      "name": "poster-v2.jpg",
+      "mime_type": "image/jpeg",
+      "size_bytes": 1843200,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "width_px": null,
+      "height_px": null,
+      "scan": null,
+      "authorization": {
+        "identifiable_person": "no",
+        "usage_authorization_ref": null,
+        "permitted_channels": [],
+        "expires_at": null,
+        "status": "NO_PERSON_DECLARED"
+      },
+      "created_by": "creator.demo",
+      "created_at": "2026-11-19T10:04:00Z",
+      "completed_at": "2026-11-19T10:04:05Z",
+      "upload": null
+    }
+  },
+  "upload_authorization_missing": {
+    "request": "GET /v1/marketing/assets/uploads/f1b8e4d6-9c27-4a3f-b5e0-7d2c8a6f4b38",
+    "status": 200,
+    "schema": "UploadRead",
+    "body": {
+      "asset_id": "f1b8e4d6-9c27-4a3f-b5e0-7d2c8a6f4b38",
+      "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+      "creative_id": null,
+      "purpose": "creative_media",
+      "status": "QUARANTINED",
+      "reason": null,
+      "name": "crowd-event.png",
+      "mime_type": "image/png",
+      "size_bytes": 1843200,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "width_px": null,
+      "height_px": null,
+      "scan": null,
+      "authorization": {
+        "identifiable_person": "unknown",
+        "usage_authorization_ref": null,
+        "permitted_channels": [],
+        "expires_at": null,
+        "status": "MISSING"
+      },
+      "created_by": "creator.demo",
+      "created_at": "2026-11-19T10:05:00Z",
+      "completed_at": "2026-11-19T10:05:05Z",
+      "upload": null
+    }
+  },
+  "upload_authorization_expired": {
+    "request": "GET /v1/marketing/assets/uploads/a4c7b2e9-5d81-4f60-93e1-4b8f0c2d7e59",
+    "status": 200,
+    "schema": "UploadRead",
+    "body": {
+      "asset_id": "a4c7b2e9-5d81-4f60-93e1-4b8f0c2d7e59",
+      "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+      "creative_id": null,
+      "purpose": "creative_media",
+      "status": "READY",
+      "reason": null,
+      "name": "clinic-visit.png",
+      "mime_type": "image/png",
+      "size_bytes": 1843200,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "width_px": 1080,
+      "height_px": 1080,
+      "scan": {
+        "engine": "SIMULATED",
+        "simulated": true,
+        "scanned_at": "2026-06-30T09:00:09Z"
+      },
+      "authorization": {
+        "identifiable_person": "yes",
+        "usage_authorization_ref": "RELEASE-2026-0097",
+        "permitted_channels": ["facebook"],
+        "expires_at": "2026-06-30T00:00:00Z",
+        "status": "EXPIRED"
+      },
+      "created_by": "creator.demo",
+      "created_at": "2026-06-30T08:59:00Z",
+      "completed_at": "2026-06-30T09:00:05Z",
+      "upload": null
+    }
+  },
+  "uploads_page": {
+    "request": "GET /v1/marketing/assets/uploads?status=QUARANTINED&status=REJECTED",
+    "status": 200,
+    "schema": "UploadPage",
+    "body": {
+      "items": [
+        {
+          "asset_id": "e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84",
+          "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+          "creative_id": null,
+          "purpose": "creative_media",
+          "status": "QUARANTINED",
+          "reason": null,
+          "name": "product-shot-01.png",
+          "mime_type": "image/png",
+          "size_bytes": 1843200,
+          "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "width_px": null,
+          "height_px": null,
+          "scan": null,
+          "authorization": {
+            "identifiable_person": "yes",
+            "usage_authorization_ref": "RELEASE-2026-0142",
+            "permitted_channels": ["facebook"],
+            "expires_at": "2027-11-19T00:00:00Z",
+            "status": "RECORDED"
+          },
+          "created_by": "creator.demo",
+          "created_at": "2026-11-19T10:00:00Z",
+          "completed_at": "2026-11-19T10:00:05Z",
+          "upload": null
+        },
+        {
+          "asset_id": "b2f6a9c1-7e35-4d08-a4b9-0c3f8e2d6a17",
+          "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+          "creative_id": null,
+          "purpose": "creative_media",
+          "status": "REJECTED",
+          "reason": {
+            "code": "MALWARE_DETECTED",
+            "message": "The malware scan flagged this file.",
+            "retryable": false
+          },
+          "name": "banner-final.png",
+          "mime_type": "image/png",
+          "size_bytes": 1843200,
+          "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "width_px": null,
+          "height_px": null,
+          "scan": {
+            "engine": "SIMULATED",
+            "simulated": true,
+            "scanned_at": "2026-11-19T10:02:11Z"
+          },
+          "authorization": {
+            "identifiable_person": "no",
+            "usage_authorization_ref": null,
+            "permitted_channels": [],
+            "expires_at": null,
+            "status": "NO_PERSON_DECLARED"
+          },
+          "created_by": "creator.demo",
+          "created_at": "2026-11-19T10:02:00Z",
+          "completed_at": "2026-11-19T10:02:05Z",
+          "upload": null
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  "ready_upload_as_asset": {
+    "request": "GET /v1/marketing/assets/e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84",
+    "status": 200,
+    "schema": "AssetRead",
+    "body": {
+      "asset_id": "e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84",
+      "creative_id": null,
+      "origin": "uploaded",
+      "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+      "name": "product-shot-01.png",
+      "authorization": {
+        "identifiable_person": "yes",
+        "usage_authorization_ref": "RELEASE-2026-0142",
+        "permitted_channels": ["facebook"],
+        "expires_at": "2027-11-19T00:00:00Z",
+        "status": "RECORDED"
+      },
+      "mime_type": "image/png",
+      "width_px": 1080,
+      "height_px": 1080,
+      "size_bytes": 1843200,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "provider": null,
+      "model": null,
+      "created_at": "2026-11-19T10:00:09Z",
+      "download_url": "https://storage.example/downloads/2026/11/e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84.png?X-Amz-Signature=placeholder",
+      "download_url_expires_at": "2026-11-19T10:15:00Z"
+    }
+  },
+  "media_page_with_upload": {
+    "request": "GET /v1/marketing/media",
+    "status": 200,
+    "schema": "MediaPage",
+    "body": {
+      "items": [
+        {
+          "asset_id": "9e3b5d7f-2a4c-4b61-8d93-1f6a8c0e2b44",
+          "creative_id": "4d2f8b6a-1c3e-4a75-9b08-5e7f1a3c9d02",
+          "creative_version": 1,
+          "origin": "generated",
+          "study_id": null,
+          "name": null,
+          "authorization": null,
+          "mime_type": "image/png",
+          "width_px": 1080,
+          "height_px": 1080,
+          "size_bytes": 1843200,
+          "created_at": "2026-11-09T10:00:07Z",
+          "created_by": "creator.demo",
+          "created_by_name": null,
+          "download_url": "https://storage.example/downloads/2026/11/9e3b5d7f-2a4c-4b61-8d93-1f6a8c0e2b44.png?X-Amz-Signature=placeholder",
+          "download_url_expires_at": "2026-11-09T10:15:00Z"
+        },
+        {
+          "asset_id": "e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84",
+          "creative_id": null,
+          "creative_version": null,
+          "origin": "uploaded",
+          "study_id": "5a1c3e7b-0d42-4f8e-9b61-2c7e4a9d1f03",
+          "name": "product-shot-01.png",
+          "authorization": {
+            "identifiable_person": "yes",
+            "usage_authorization_ref": "RELEASE-2026-0142",
+            "permitted_channels": ["facebook"],
+            "expires_at": "2027-11-19T00:00:00Z",
+            "status": "RECORDED"
+          },
+          "mime_type": "image/png",
+          "width_px": 1080,
+          "height_px": 1080,
+          "size_bytes": 1843200,
+          "created_at": "2026-11-19T10:00:09Z",
+          "created_by": "creator.demo",
+          "created_by_name": "Creator Demo",
+          "download_url": "https://storage.example/downloads/2026/11/e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84.png?X-Amz-Signature=placeholder",
+          "download_url_expires_at": "2026-11-19T10:15:00Z"
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  "error_upload_not_accepted": {
+    "request": "POST /v1/marketing/assets/uploads",
+    "status": 422,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "UPLOAD_NOT_ACCEPTED",
+      "message": "This file cannot be uploaded.",
+      "request_id": "req-example-0001",
+      "details": {
+        "field": "mime_type",
+        "accepted": ["image/png", "image/jpeg"]
+      },
+      "retryable": false
+    }
+  },
+  "error_upload_not_received": {
+    "request": "POST /v1/marketing/assets/e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84/complete",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "UPLOAD_NOT_RECEIVED",
+      "message": "The file has not been received yet. Upload it, then complete again.",
+      "request_id": "req-example-0002",
+      "details": null,
+      "retryable": true
+    }
+  },
+  "error_upload_not_pending": {
+    "request": "POST /v1/marketing/assets/e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84/complete",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "UPLOAD_NOT_PENDING",
+      "message": "This upload is no longer waiting for its file.",
+      "request_id": "req-example-0003",
+      "details": {
+        "status": "QUARANTINED"
+      },
+      "retryable": false
+    }
+  },
+  "error_forbidden_not_uploader": {
+    "request": "POST /v1/marketing/assets/e8d4f2a6-3b19-4c57-8f20-6a1d9c5e7b84/complete",
+    "status": 403,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "FORBIDDEN",
+      "message": "Only the person who started this upload can do this.",
+      "request_id": "req-example-0004",
+      "details": null,
+      "retryable": false
+    }
+  }
+}
