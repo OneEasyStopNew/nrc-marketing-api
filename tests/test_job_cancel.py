@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.config import get_settings
 from app.db.session import bind_tenant
-from app.models.enums import ExecutionState
+from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState
 from app.services.jobs import transition
 from tests.conftest import (
@@ -286,6 +286,32 @@ async def test_cancel_requested_job_still_takes_its_active_slot(
     assert response.status_code == 429
     assert _error(response)["code"] == "GENERATION_LIMIT_REACHED"
     assert _error(response)["details"] == {"reason": "ACTIVE_JOB_LIMIT"}
+
+
+@pytest.mark.usefixtures("one_active_job_allowed")
+async def test_cancelling_an_unknown_job_takes_no_slot_it_did_not_hold(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+) -> None:
+    creative_id = await _creative(client, auth, world.a)
+    first = await _post_job(client, auth, world, creative_id)
+    first_id = UUID(first.json()["job_id"])
+    # As the worker's _park_unknown leaves it: UNKNOWN in the reconcile stage, no slot taken.
+    async with app_session(connection) as db:
+        await bind_tenant(db, world.a.tenant_id)
+        await transition(
+            db,
+            first_id,
+            allowed_from=set(ExecutionState),
+            to=ExecutionState.UNKNOWN,
+            stage=JobStage.RECONCILE,
+        )
+        await db.commit()
+    cancel = await _cancel(client, auth, world.a.tenant_id, first_id)
+    assert cancel.json()["state"] == "CANCEL_REQUESTED"
+
+    response = await _post_job(client, auth, world, creative_id)
+
+    assert response.status_code == 202
 
 
 async def test_cancel_leaves_the_credit_reservation_to_the_worker(

@@ -17,6 +17,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from enum import Enum
+from types import MappingProxyType
 from typing import Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,13 +44,15 @@ CANCELLED: Final = "CANCELLED"
 CANCELLED_AFTER_COMPLETION: Final = "CANCELLED_AFTER_COMPLETION"
 CANCELLED_OUTCOME_UNKNOWN: Final = "CANCELLED_OUTCOME_UNKNOWN"
 
-_MESSAGES: Final = {
-    CANCELLED: "The job was cancelled before the provider produced an image.",
-    CANCELLED_AFTER_COMPLETION: "The job was cancelled after the provider produced and billed "
-    "an image; the image was not kept.",
-    CANCELLED_OUTCOME_UNKNOWN: "The job was cancelled before the provider's outcome was known; "
-    "its credits stay held until it is reviewed.",
-}
+_MESSAGES: Final = MappingProxyType(
+    {
+        CANCELLED: "The job was cancelled before the provider produced an image.",
+        CANCELLED_AFTER_COMPLETION: "The job was cancelled after the provider produced and "
+        "billed an image; the image was not kept.",
+        CANCELLED_OUTCOME_UNKNOWN: "The job was cancelled before the provider's outcome was "
+        "known; its credits stay held until it is reviewed.",
+    }
+)
 # Stages where the provider may have the request although no request id was recorded.
 _MAYBE_SENT: Final = frozenset({JobStage.SUBMITTING, JobStage.RECONCILE})
 # Stages where the provider is known to have completed (billed) the generation.
@@ -87,18 +90,22 @@ async def finish_cancel(
         # Live mode never falls back to the simulator, so the outcome can't be checked here.
         await _end(db, job, CANCELLED_OUTCOME_UNKNOWN, _Settled.HELD)
         return None
+    # Past the accepted grace window the outcome is left to an operator: a returned retry never
+    # counts as a failed attempt, so without this a status outage would poll forever while the
+    # job keeps its admission slot.
+    past_grace = now >= job.deadline_at + timedelta(
+        seconds=settings.generation_accepted_grace_seconds
+    )
     await heartbeat(db)
     try:
         status = await provider.get_status(request_id)
     except ProviderError as error:
-        if error.retryable or isinstance(error, ProviderOutcomeUnknownError):
-            # The attempt cap ends these (give_up_cancel), never a release.
+        if (error.retryable or isinstance(error, ProviderOutcomeUnknownError)) and not past_grace:
             return max(error.retry_after_seconds or 0.0, backoff_seconds(event_attempts, settings))
         await _end(db, job, CANCELLED_OUTCOME_UNKNOWN, _Settled.HELD)
         return None
     if status.status not in TERMINAL_PROVIDER_STATUSES:
-        grace = timedelta(seconds=settings.generation_accepted_grace_seconds)
-        if now >= job.deadline_at + grace:
+        if past_grace:
             # Same rule as an uncancelled job: it may still complete and bill.
             await _end(db, job, CANCELLED_OUTCOME_UNKNOWN, _Settled.HELD)
             return None

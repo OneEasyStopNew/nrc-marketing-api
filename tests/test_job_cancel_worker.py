@@ -18,7 +18,11 @@ from app.core.config import get_settings
 from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState, SpendState
 from app.services.jobs import jobs_awaiting_review
-from app.services.providers.base import ProviderOutcomeUnknownError
+from app.services.providers.base import (
+    ProviderConfigError,
+    ProviderOutcomeUnknownError,
+    ProviderUnavailableError,
+)
 from app.services.providers.simulator import SimulatorScenario
 from app.workers.connector import run_once
 from tests.conftest import (
@@ -345,4 +349,103 @@ async def test_cancel_given_up_before_any_submit_releases_everything(
     assert job.state is ExecutionState.CANCELLED
     assert job.failure_code == "CANCELLED"
     assert reservation is ReservationState.RELEASED
+    await assert_ledger_consistent(connection, world.a.tenant_id, job_id, spend_before=spend_before)
+
+
+async def test_status_outage_on_a_cancelled_job_retries_within_grace(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
+    job_id: UUID,
+) -> None:
+    spend_before = await _spend(connection)
+    provider, sink = _priced(), FakeSink()
+    await _accepted(sessions, provider, sink, world, job_id)
+    await _cancel(client, auth, world, job_id)
+    provider.status_error = ProviderUnavailableError("Simulated status outage.")
+
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.CANCEL_REQUESTED
+    assert reservation is ReservationState.RESERVED
+    assert (await _event(connection)).processed_at is None
+    await assert_ledger_consistent(connection, world.a.tenant_id, job_id, spend_before=spend_before)
+
+
+async def test_status_outage_past_grace_ends_the_cancel_with_credits_held(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
+    job_id: UUID,
+) -> None:
+    # A returned retry never counts as a failed attempt, so only the grace window ends these.
+    spend_before = await _spend(connection)
+    provider, sink = _priced(), FakeSink()
+    await _accepted(sessions, provider, sink, world, job_id)
+    await _cancel(client, auth, world, job_id)
+    provider.status_error = ProviderUnavailableError("Simulated status outage.")
+    job, _ = await _load(sessions, world, job_id)
+    settings = get_settings()
+    later = job.deadline_at + timedelta(seconds=settings.generation_accepted_grace_seconds)
+
+    await run_once(sessions, {"simulator": provider}, sink, settings, now=later)
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.CANCELLED
+    assert job.failure_code == "CANCELLED_OUTCOME_UNKNOWN"
+    assert reservation is ReservationState.HELD
+    assert (await _event(connection)).processed_at is not None
+    await assert_ledger_consistent(connection, world.a.tenant_id, job_id, spend_before=spend_before)
+
+
+async def test_status_refused_on_a_cancelled_job_holds_its_credits(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
+    job_id: UUID,
+) -> None:
+    spend_before = await _spend(connection)
+    provider, sink = _priced(), FakeSink()
+    await _accepted(sessions, provider, sink, world, job_id)
+    await _cancel(client, auth, world, job_id)
+    provider.status_error = ProviderConfigError("Simulated rejected key.")
+
+    await _run(sessions, provider, sink)
+
+    job, reservation = await _load(sessions, world, job_id)
+    # Accepted, so possibly billed: an unreadable outcome is never released.
+    assert job.state is ExecutionState.CANCELLED
+    assert job.failure_code == "CANCELLED_OUTCOME_UNKNOWN"
+    assert reservation is ReservationState.HELD
+    await assert_ledger_consistent(connection, world.a.tenant_id, job_id, spend_before=spend_before)
+
+
+async def test_cancelled_job_whose_provider_is_not_configured_holds_its_credits(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
+    job_id: UUID,
+) -> None:
+    spend_before = await _spend(connection)
+    provider, sink = _priced(), FakeSink()
+    await _accepted(sessions, provider, sink, world, job_id)
+    await _cancel(client, auth, world, job_id)
+
+    # The worker now runs without the job's provider (live mode never uses the simulator).
+    await run_once(sessions, {}, sink, get_settings())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.CANCELLED
+    assert job.failure_code == "CANCELLED_OUTCOME_UNKNOWN"
+    assert reservation is ReservationState.HELD
+    assert sum(provider.submits.values()) == 1
     await assert_ledger_consistent(connection, world.a.tenant_id, job_id, spend_before=spend_before)

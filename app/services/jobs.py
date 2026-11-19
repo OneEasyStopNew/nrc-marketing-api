@@ -41,7 +41,15 @@ _CANCELLABLE_FROM: Final = NON_TERMINAL_STATES - {ExecutionState.CANCEL_REQUESTE
 # stay HELD, so the daily credit ceiling still bounds them. CANCEL_REQUESTED does: the provider
 # may still be running until the worker confirms the cancel, so a request must not free a slot.
 _TAKES_SLOT: Final = or_(
-    Job.state.in_((ExecutionState.QUEUED, ExecutionState.RUNNING, ExecutionState.CANCEL_REQUESTED)),
+    Job.state.in_((ExecutionState.QUEUED, ExecutionState.RUNNING)),
+    # A cancel of a parked (output_ready) or UNKNOWN (reconcile) job takes no slot it didn't hold.
+    and_(
+        Job.state == ExecutionState.CANCEL_REQUESTED,
+        or_(
+            Job.stage.is_(None),
+            Job.stage.not_in((JobStage.OUTPUT_READY, JobStage.RECONCILE)),
+        ),
+    ),
     and_(
         Job.state == ExecutionState.WAITING_PROVIDER,
         Job.stage.is_distinct_from(JobStage.OUTPUT_READY),
@@ -213,32 +221,26 @@ async def request_cancel(db: AsyncSession, ctx: TenantContext, job_id: UUID) -> 
         JobNotCancellableError: the job already SUCCEEDED or FAILED.
     """
     job = await get_job(db, ctx, job_id)
-    for _ in range(2):
-        if job.state in (ExecutionState.CANCEL_REQUESTED, ExecutionState.CANCELLED):
-            return job
-        if job.state in TERMINAL_STATES:
-            raise JobNotCancellableError(
-                "This job has already finished.", details={"state": job.state.value}
-            )
-        if await transition(
-            db,
+    if job.state not in TERMINAL_STATES and await transition(
+        db, job_id, allowed_from=_CANCELLABLE_FROM, to=ExecutionState.CANCEL_REQUESTED
+    ):
+        await _wake_worker(db, ctx.tenant_id, job_id)
+        await db.commit()
+        logger.info(
+            "job cancel requested job=%s tenant=%s by=%s",
             job_id,
-            allowed_from=_CANCELLABLE_FROM,
-            to=ExecutionState.CANCEL_REQUESTED,
-        ):
-            await _wake_worker(db, ctx.tenant_id, job_id)
-            await db.commit()
-            logger.info(
-                "job cancel requested job=%s tenant=%s by=%s",
-                job_id,
-                ctx.tenant_id,
-                ctx.principal.sub,
-            )
-            return await get_job(db, ctx, job_id)
-        # The worker moved the job first: apply the same rules to what it is now.
-        job = await get_job(db, ctx, job_id)
-    # Two lost races in a row: report the state as it is rather than loop.
-    return job
+            ctx.tenant_id,
+            ctx.principal.sub,
+        )
+        return await get_job(db, ctx, job_id)
+    # Not moved: every other non-terminal state is accepted, so the job is already
+    # CANCEL_REQUESTED or terminal (possibly since it was read).
+    job = await get_job(db, ctx, job_id)
+    if job.state in (ExecutionState.CANCEL_REQUESTED, ExecutionState.CANCELLED):
+        return job
+    raise JobNotCancellableError(
+        "This job has already finished.", details={"state": job.state.value}
+    )
 
 
 async def _wake_worker(db: AsyncSession, tenant_id: UUID, job_id: UUID) -> None:

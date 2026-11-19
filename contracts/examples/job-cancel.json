@@ -20,6 +20,26 @@
       "completed_at": null
     }
   },
+  "cancelled": {
+    "request": "GET /v1/marketing/jobs/2e9c4a6b-5d17-4b83-9a02-7f1d3c5e8b64 after the worker finished the cancel (200). failure_code says what the cancel cost: CANCELLED (nothing billed), CANCELLED_AFTER_COMPLETION (the provider had already produced and billed an image, which was not kept) or CANCELLED_OUTCOME_UNKNOWN (credits held until reviewed). It is not an error to show as a failure.",
+    "status": 200,
+    "schema": "JobRead",
+    "body": {
+      "job_id": "2e9c4a6b-5d17-4b83-9a02-7f1d3c5e8b64",
+      "kind": "image_generation",
+      "creative_id": "4d2f8b6a-1c3e-4a75-9b08-5e7f1a3c9d02",
+      "creative_version": 1,
+      "state": "CANCELLED",
+      "stage": "waiting_provider",
+      "provider_request_id": "sim-6b3d5f7a-9c21-4e48-a0b6-3d5f7a9c1e82",
+      "failure_code": "CANCELLED_AFTER_COMPLETION",
+      "failure_message": "The job was cancelled after the provider produced and billed an image; the image was not kept.",
+      "result_asset_id": null,
+      "created_at": "2026-11-19T09:00:00Z",
+      "updated_at": "2026-11-19T09:00:31Z",
+      "completed_at": "2026-11-19T09:00:31Z"
+    }
+  },
   "not_cancellable": {
     "request": "POST /v1/marketing/jobs/{job_id}/cancel  (409, the job already SUCCEEDED or FAILED)",
     "status": 409,
@@ -28,7 +48,9 @@
       "code": "JOB_NOT_CANCELLABLE",
       "message": "This job has already finished.",
       "request_id": "req-synthetic-0001",
-      "details": {"state": "SUCCEEDED"},
+      "details": {
+        "state": "SUCCEEDED"
+      },
       "retryable": false
     }
   }
