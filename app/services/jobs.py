@@ -319,14 +319,29 @@ async def settle_reservation(db: AsyncSession, job_id: UUID, to: ReservationStat
     )
 
 
+@dataclass(frozen=True, slots=True)
+class AwaitingReview:
+    # A job whose credits wait for an operator. failure_code says why (e.g. ATTEMPTS_EXHAUSTED,
+    # DEADLINE_EXCEEDED, CANCELLED_OUTCOME_UNKNOWN); ids and codes only, never provider text.
+    tenant_id: UUID
+    job_id: UUID
+    state: ExecutionState
+    failure_code: str | None
+
+
 async def jobs_awaiting_review(db: AsyncSession) -> list[tuple[UUID, UUID]]:
-    """(tenant id, job id) of jobs whose credits wait for an operator, across tenants.
+    # (tenant id, job id) of every job awaiting_review_details lists.
+    return [(item.tenant_id, item.job_id) for item in await awaiting_review_details(db)]
+
+
+async def awaiting_review_details(db: AsyncSession) -> list[AwaitingReview]:
+    """Jobs whose credits wait for an operator, across tenants, with the reason they stopped.
 
     UNKNOWN jobs the worker has stopped working on (no unprocessed outbox event is left), and
     CANCELLED jobs whose outcome was unknown at cancel time (credits HELD): the provider may have
-    billed either, so their credits stay HELD until an operator settles each one. Binds each
-    tenant in turn, so it works under row-level security with any role that can read tenants,
-    jobs and credit reservations.
+    billed either, so their credits stay HELD until an operator settles each one
+    (app.services.job_operations). Binds each tenant in turn, so it works under row-level
+    security with any role that can read tenants, jobs and credit reservations.
     """
     pending = (
         select(OutboxEvent.id)
@@ -346,11 +361,11 @@ async def jobs_awaiting_review(db: AsyncSession) -> list[tuple[UUID, UUID]]:
         )
         .correlate(Job)
     )
-    found: list[tuple[UUID, UUID]] = []
+    found: list[AwaitingReview] = []
     for tenant_id in (await db.scalars(select(Tenant.id).order_by(Tenant.id))).all():
         await bind_tenant(db, tenant_id)
-        job_ids = await db.scalars(
-            select(Job.id)
+        rows = await db.execute(
+            select(Job.id, Job.state, Job.failure_code)
             .where(
                 Job.tenant_id == tenant_id,
                 or_(
@@ -360,7 +375,7 @@ async def jobs_awaiting_review(db: AsyncSession) -> list[tuple[UUID, UUID]]:
             )
             .order_by(Job.updated_at)
         )
-        found.extend((tenant_id, job_id) for job_id in job_ids)
+        found.extend(AwaitingReview(tenant_id, row.id, row.state, row.failure_code) for row in rows)
     return found
 
 

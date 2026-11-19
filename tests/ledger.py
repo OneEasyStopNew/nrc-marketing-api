@@ -152,9 +152,14 @@ async def assert_ledger_consistent(
     )
     events = {row.event_type: row.n for row in event_rows}
     # One run event per job, except that cancelling a job the worker had given up on adds one
-    # (app.services.jobs._wake_worker); never more than one is pending.
+    # (app.services.jobs._wake_worker) and each operator replay adds one
+    # (app.services.job_operations.replay); never more than one is pending.
+    replays = await connection.scalar(
+        text("SELECT count(*) FROM job_operator_actions WHERE job_id = :j AND action = 'replay'"),
+        {"j": job_id},
+    )
     runs = events.get(RUN_EVENT, 0)
-    assert runs == 1 or (state in _CANCEL_STATES and runs == 2), events
+    assert runs == 1 + replays or (state in _CANCEL_STATES and runs == 2 + replays), events
     pending = await connection.scalar(
         text(
             "SELECT count(*) FROM outbox_events WHERE job_id = :j AND event_type = :t"

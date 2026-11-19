@@ -82,6 +82,13 @@ class JobNotCancellableError(ConflictError):
     default_message = "This job has already finished."
 
 
+class JobOperationNotAllowedError(ConflictError):
+    # An operator replay or settle the job's state does not allow.
+    # details: state (the job's) and reason (why not).
+    code = "JOB_OPERATION_NOT_ALLOWED"
+    default_message = "This operation is not allowed for the job in its current state."
+
+
 class UploadNotReceivedError(ConflictError):
     # Complete was called before the file reached storage; upload it, then complete again.
     code = "UPLOAD_NOT_RECEIVED"
