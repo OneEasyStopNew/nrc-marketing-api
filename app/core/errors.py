@@ -34,6 +34,13 @@ class NotFoundError(AppError):
     default_message = "Resource not found."
 
 
+class ContextNotAvailableError(NotFoundError):
+    # The run exists but stored no policy context (older runs, or retrieval was unavailable and
+    # the run recorded a coverage gap). A separate code so the UI can tell it from NOT_FOUND.
+    code = "CONTEXT_NOT_AVAILABLE"
+    default_message = "No policy context was stored for this validation run."
+
+
 class ConflictError(AppError):
     code = "CONFLICT"
     default_message = "The request conflicts with the current state."
@@ -69,6 +76,21 @@ class ValidationNotPassedError(ConflictError):
 class NoActivePolicyError(ConflictError):
     code = "NO_ACTIVE_POLICY"
     default_message = "This tenant has no active policy to validate against."
+
+
+class PolicyContextUnavailableError(ConflictError):
+    # details.reason: BUNDLE_NOT_FOUND, BUNDLE_NOT_USABLE, GRAPH_MISSING, SNAPSHOT_NOT_FOUND, or
+    # (with an embedder) INDEX_NOT_READY or INDEX_STALE. Callers record it as a coverage gap; it
+    # must never turn into a PASS.
+    code = "POLICY_CONTEXT_UNAVAILABLE"
+    default_message = "The policy context for this check could not be built."
+
+
+class PolicyIndexError(ConflictError):
+    # details.reason: NO_APPROVED_NODES or INDEX_CONTENT_CHANGED. Raised by the owner-run index
+    # build only; the API never builds an index.
+    code = "POLICY_INDEX_ERROR"
+    default_message = "The policy index could not be built."
 
 
 class ExportNotReadyError(ConflictError):

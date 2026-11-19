@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
+    ContextProviderDep,
     CreativeReader,
     DbSession,
     DemoStubsDep,
@@ -17,13 +18,14 @@ from app.api.deps import (
 )
 from app.core.errors import NotFoundError
 from app.schemas.common import ErrorBody
+from app.schemas.policy_evidence import ValidationContextRead
 from app.schemas.validations import (
     ValidationAccepted,
     ValidationCreate,
     ValidationInputKind,
     ValidationRunRead,
 )
-from app.services import validations
+from app.services import policy_evidence, validations
 
 router = APIRouter()
 
@@ -48,7 +50,9 @@ _VALIDATIONS: dict[int | str, dict[str, Any]] = {
     description="Briefs and captions are checked against the active policy and the study facts "
     "before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until "
     "validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until "
-    "SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run.",
+    "SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run. Each "
+    "brief or caption run also stores the policy context it was checked against (see "
+    "GET /validations/{validation_run_id}/context); it doesn't change the outcome yet.",
     responses=_VALIDATIONS,
 )
 async def create_validation(
@@ -57,13 +61,16 @@ async def create_validation(
     db: DbSession,
     idempotency_key: IdempotencyKey,
     stubs: DemoStubsDep,
+    context_provider: ContextProviderDep,
     response: Response,
 ) -> ValidationAccepted:
     if body.input_kind is ValidationInputKind.IMAGE:
         service = require_stubs(stubs, "Image validation")
         accepted, replayed = await service.start_validation(db, ctx, body, idempotency_key)
     else:
-        accepted, replayed = await validations.create_validation(db, ctx, body, idempotency_key)
+        accepted, replayed = await validations.create_validation(
+            db, ctx, body, idempotency_key, context_provider
+        )
     if replayed:
         response.headers["Idempotent-Replayed"] = "true"
     return accepted
@@ -85,3 +92,26 @@ async def get_validation(
         if stubs is None:
             raise
     return await stubs.get_validation(db, ctx, validation_run_id)
+
+
+@router.get(
+    "/validations/{validation_run_id}/context",
+    tags=["validations"],
+    summary="Policy rules and evidence the run's text was checked against",
+    description="The stored policy context of a brief or caption run: the rules selected by "
+    "their conditions, their source clauses, disclosures and exceptions, search matches and "
+    "anything retrieval couldn't settle (missing_context, never a pass). Evidence only: the "
+    "outcome still comes from the rule checks. A run without stored context (older runs, or "
+    "context unavailable, recorded as a coverage gap) answers 404 CONTEXT_NOT_AVAILABLE.",
+    responses={
+        404: {
+            "model": ErrorBody,
+            "description": "NOT_FOUND (no such run for the caller), or CONTEXT_NOT_AVAILABLE "
+            "(the run stored no policy context).",
+        }
+    },
+)
+async def get_validation_context(
+    validation_run_id: UUID, ctx: CreativeReader, db: DbSession
+) -> ValidationContextRead:
+    return await policy_evidence.get_validation_context(db, ctx, validation_run_id)

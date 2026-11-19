@@ -1,25 +1,42 @@
 """Brief and caption validation (NRC-7): rule checks run in the request and are stored.
 
 The checks are fast, deterministic string matches (app.services.rules), so a run finishes
-before POST /validations returns and is stored as SUCCEEDED. The contract still returns a
-job_id: until validation moves onto the job framework (NRC-6), it equals validation_run_id.
+before POST /validations returns and is stored as SUCCEEDED. Each run also stores the policy
+context for its text (NRC-5: rules selected by their conditions, their evidence and a full-text
+search, no model call). That context is evidence only: the outcome comes from the rule checks
+until NRC-7's judge uses it. The contract still returns a job_id: until validation moves onto
+the job framework (NRC-6), it equals validation_run_id.
 
 Image validation (D4) is not built here; the routes answer it from the demo stubs or with 501.
 """
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
-from app.core.errors import FeatureNotAvailableError, NoActivePolicyError, NotFoundError
+from app.core.errors import (
+    FeatureNotAvailableError,
+    NoActivePolicyError,
+    NotFoundError,
+    PolicyContextUnavailableError,
+)
 from app.models import Creative, CreativeVersion, StudySnapshot, ValidationRun
-from app.models.enums import ExecutionState, Outcome, ValidationInputKind
+from app.models.enums import (
+    Channel,
+    ExecutionState,
+    Language,
+    Outcome,
+    PolicyLanguage,
+    ValidationInputKind,
+)
 from app.schemas.common import ApiModel
 from app.schemas.policies import PolicyBundleRead
 from app.schemas.tenancy import StudyFacts
@@ -35,8 +52,18 @@ from app.schemas.validations import (
 )
 from app.services import idempotency, policies, rules
 from app.services.creatives import visible_to
+from app.services.policy_context import ContextRequest, ContextScope, PolicyContextProvider
+from app.services.policy_context.manifest import MAX_STATEMENT_CHARS, Statement
 
 VALIDATE_ROUTE: Final = "POST /validations"
+# Recorded when the policy context couldn't be gathered; the rule checks still ran. The reason
+# in brackets is a code (e.g. GRAPH_MISSING): CoverageGap has no code field.
+CONTEXT_UNAVAILABLE_GAP: Final = (
+    "Policy evidence was not gathered for this run ({reason}); the result comes from the rule "
+    "checks only."
+)
+
+logger = logging.getLogger(__name__)
 
 
 class _StoredResult(ApiModel):
@@ -56,7 +83,11 @@ class BriefOutcome:
 
 
 async def create_validation(
-    db: AsyncSession, ctx: TenantContext, body: ValidationCreate, idempotency_key: str
+    db: AsyncSession,
+    ctx: TenantContext,
+    body: ValidationCreate,
+    idempotency_key: str,
+    context_provider: PolicyContextProvider,
 ) -> tuple[ValidationAccepted, bool]:
     """Check a brief or caption and store the run. Returns it and whether this was a replay.
 
@@ -79,7 +110,13 @@ async def create_validation(
     policy = await _active_policy(db, ctx)
     text = target.prompt if body.input_kind is ValidationInputKind.BRIEF else target.caption or ""
     evaluation = rules.evaluate_text(body.input_kind, text, policy, target.facts)
-    run = _new_run(ctx, body, text, target, policy, evaluation)
+    evaluated_at = datetime.now(tz=UTC)
+    manifest_id, context_gaps = await _gather_context(
+        db, ctx, context_provider, body.input_kind, text, target, policy, evaluated_at
+    )
+    run = _new_run(
+        ctx, body, text, target, policy, evaluation, evaluated_at, manifest_id, context_gaps
+    )
     db.add(run)
     await idempotency.complete(db, ctx.tenant_id, VALIDATE_ROUTE, idempotency_key, run.id)
     await db.commit()
@@ -192,7 +229,10 @@ async def latest_summary(
 class _Target:
     prompt: str
     caption: str | None
+    language: Language
+    channel: Channel
     facts: StudyFacts
+    snapshot_id: UUID
     snapshot_version: int
 
 
@@ -203,7 +243,10 @@ async def _target(db: AsyncSession, ctx: TenantContext, creative_id: UUID, versi
             select(
                 CreativeVersion.prompt,
                 CreativeVersion.caption,
+                CreativeVersion.language,
+                CreativeVersion.channel,
                 StudySnapshot.facts,
+                StudySnapshot.id.label("snapshot_id"),
                 StudySnapshot.version,
             )
             .join(
@@ -232,7 +275,10 @@ async def _target(db: AsyncSession, ctx: TenantContext, creative_id: UUID, versi
     return _Target(
         prompt=row.prompt,
         caption=row.caption,
+        language=row.language,
+        channel=row.channel,
         facts=StudyFacts.model_validate(row.facts),
+        snapshot_id=row.snapshot_id,
         snapshot_version=row.version,
     )
 
@@ -244,6 +290,9 @@ def _new_run(
     target: _Target,
     policy: PolicyBundleRead,
     evaluation: rules.Evaluation,
+    evaluated_at: datetime,
+    context_manifest_id: UUID | None,
+    context_gaps: list[CoverageGap],
 ) -> ValidationRun:
     return ValidationRun(
         id=uuid4(),
@@ -257,15 +306,88 @@ def _new_run(
         policy_bundle_id=policy.policy_bundle_id,
         policy_bundle_version=policy.version,
         study_snapshot_version=target.snapshot_version,
+        context_manifest_id=context_manifest_id,
         result=_StoredResult(
             gates=evaluation.gates,
             rule_results=evaluation.rule_results,
             findings=evaluation.findings,
-            coverage_gaps=evaluation.coverage_gaps,
+            coverage_gaps=[*evaluation.coverage_gaps, *context_gaps],
         ).model_dump(mode="json"),
         created_by=ctx.principal.sub,
-        evaluated_at=datetime.now(tz=UTC),
+        evaluated_at=evaluated_at,
     )
+
+
+async def _gather_context(
+    db: AsyncSession,
+    ctx: TenantContext,
+    provider: PolicyContextProvider,
+    kind: ValidationInputKind,
+    text: str,
+    target: _Target,
+    policy: PolicyBundleRead,
+    evaluated_at: datetime,
+) -> tuple[UUID | None, list[CoverageGap]]:
+    """The stored context's id, or no context and a coverage gap saying why.
+
+    The context is evidence only, so failing to gather it never fails the validation: the run is
+    stored with the rule checks' outcome and the gap. Uses the run's pinned bundle and snapshot,
+    and the whole brief or caption as one statement. Inside a request there is no embedder, so
+    search is full-text only (flagged in the manifest); an identical earlier request reuses its
+    stored manifest.
+    """
+    language = policy_language(target.language)
+    if language is None:
+        reason = "LANGUAGE_NOT_SUPPORTED"
+    elif len(text) > MAX_STATEMENT_CHARS:
+        # Possible after NFC normalisation of a text at the length limit.
+        reason = "STATEMENT_TOO_LONG"
+    else:
+        request = ContextRequest(
+            policy_bundle_id=policy.policy_bundle_id,
+            study_snapshot_id=target.snapshot_id,
+            scope=ContextScope(
+                input_kind=kind,
+                channel=target.channel,
+                language=language,
+                evaluated_at=evaluated_at,
+            ),
+            statements=(Statement(text=text),) if text else (),
+        )
+        try:
+            # A savepoint, so a database error here leaves the run's own transaction usable.
+            async with db.begin_nested():
+                stored = await provider.build(db, ctx.tenant_id, request, actor=ctx.principal.sub)
+        except PolicyContextUnavailableError as error:
+            # E.g. an older bundle without a graph.
+            reason = str((error.details or {}).get("reason", error.code))
+        except SQLAlchemyError as error:
+            # The class name only: database errors can quote the statement's parameters.
+            reason = "RETRIEVAL_ERROR"
+            logger.error(
+                "policy context failed tenant=%s bundle=%s error=%s",
+                ctx.tenant_id,
+                policy.policy_bundle_id,
+                type(error).__name__,
+            )
+        else:
+            return stored.id, []
+    logger.warning(
+        "policy context unavailable tenant=%s bundle=%s reason=%s",
+        ctx.tenant_id,
+        policy.policy_bundle_id,
+        reason,
+    )
+    return None, [CoverageGap(reason=CONTEXT_UNAVAILABLE_GAP.format(reason=reason))]
+
+
+def policy_language(language: Language | str) -> PolicyLanguage | None:
+    # Policy text may support a language before the public enum does (F33), and the reverse must
+    # not crash validation: a language without policy text gets no context and a gap.
+    try:
+        return PolicyLanguage(language)
+    except ValueError:
+        return None
 
 
 async def _active_policy(db: AsyncSession, ctx: TenantContext) -> PolicyBundleRead:

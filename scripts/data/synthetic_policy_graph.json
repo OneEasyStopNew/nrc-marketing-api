@@ -1,0 +1,65 @@
+{
+  "source": {"title": "[SYNTHETIC] Paraphrased public FDA guidance", "source_ref": "synthetic:staging-policy-v1 (paraphrased public FDA guidance)", "language": "en", "is_synthetic": true,
+    "clauses": [
+    {"clause_ref": "FDA-1", "section": "Claims of safety or effectiveness", "page": 1, "text": "[SYNTHETIC] Recruitment material must not say or suggest that an investigational treatment is safe or effective for the condition under study.", "language": "en"},
+    {"clause_ref": "FDA-2", "section": "Equivalence or superiority claims", "page": 2, "text": "[SYNTHETIC] Recruitment material must not claim that an investigational treatment is equal or superior to another treatment.", "language": "en"},
+    {"clause_ref": "FDA-3", "section": "Use of the word new", "page": 3, "text": "[SYNTHETIC] Calling an investigational treatment new, without saying it is investigational, implies it is proven.", "language": "en"},
+    {"clause_ref": "FDA-4", "section": "Certainty of favourable outcome", "page": 4, "text": "[SYNTHETIC] Recruitment material must not promise a certain favourable outcome or a benefit the consent document does not describe.", "language": "en"},
+    {"clause_ref": "FDA-5", "section": "Free medical treatment", "page": 5, "text": "[SYNTHETIC] Recruitment material must not promise free treatment; it may say that taking part costs nothing.", "language": "en"},
+    {"clause_ref": "FDA-6", "section": "Emphasis on payment", "page": 6, "text": "[SYNTHETIC] Payment may be mentioned but must not be emphasised, for example by large type or by leading with the amount.", "language": "en"},
+    {"clause_ref": "FDA-1-ES", "section": "Afirmaciones de seguridad o eficacia", "page": 1, "text": "[SYNTHETIC] El material de reclutamiento no debe decir ni sugerir que un tratamiento en investigación es seguro, eficaz o que cura la enfermedad en estudio.", "language": "es"},
+    {"clause_ref": "DISC-ES", "section": "Divulgación obligatoria", "page": 7, "text": "[SYNTHETIC] Todo anuncio debe indicar que se trata de un estudio de investigación y que la participación es voluntaria.", "language": "es"}
+    ]
+  },
+  "nodes": [
+    {"node_key": "CL-FDA-1", "node_type": "CLAUSE", "text": "[SYNTHETIC] Recruitment material must not say or suggest that an investigational treatment is safe or effective for the condition under study.", "clause_ref": "FDA-1", "approved": true},
+    {"node_key": "CL-FDA-2", "node_type": "CLAUSE", "text": "[SYNTHETIC] Recruitment material must not claim that an investigational treatment is equal or superior to another treatment.", "clause_ref": "FDA-2", "approved": true},
+    {"node_key": "CL-FDA-3", "node_type": "CLAUSE", "text": "[SYNTHETIC] Calling an investigational treatment new, without saying it is investigational, implies it is proven.", "clause_ref": "FDA-3", "approved": true},
+    {"node_key": "CL-FDA-4", "node_type": "CLAUSE", "text": "[SYNTHETIC] Recruitment material must not promise a certain favourable outcome or a benefit the consent document does not describe.", "clause_ref": "FDA-4", "approved": true},
+    {"node_key": "CL-FDA-5", "node_type": "CLAUSE", "text": "[SYNTHETIC] Recruitment material must not promise free treatment; it may say that taking part costs nothing.", "clause_ref": "FDA-5", "approved": true},
+    {"node_key": "CL-FDA-6", "node_type": "CLAUSE", "text": "[SYNTHETIC] Payment may be mentioned but must not be emphasised, for example by large type or by leading with the amount.", "clause_ref": "FDA-6", "approved": true},
+    {"node_key": "CL-FDA-1-ES", "node_type": "CLAUSE", "text": "[SYNTHETIC] El material de reclutamiento no debe decir ni sugerir que un tratamiento en investigación es seguro, eficaz o que cura la enfermedad en estudio.", "language": "es", "clause_ref": "FDA-1-ES", "approved": true},
+    {"node_key": "REC-01", "node_type": "RULE", "text": "[SYNTHETIC] Do not state or imply that the investigational treatment is safe or effective for the condition being studied.", "input_kinds": ["brief", "text", "image"], "approved": true, "clause_ref": "FDA-1"},
+    {"node_key": "REC-02", "node_type": "RULE", "text": "[SYNTHETIC] Do not claim the investigational treatment is equivalent or superior to any other treatment.", "input_kinds": ["brief", "text"], "approved": true, "clause_ref": "FDA-2"},
+    {"node_key": "REC-03", "node_type": "RULE", "text": "[SYNTHETIC] Do not use terms such as 'new treatment', 'new medication' or 'new drug' without explaining that the treatment is investigational.", "input_kinds": ["brief", "text"], "approved": true, "clause_ref": "FDA-3"},
+    {"node_key": "REC-04", "node_type": "RULE", "text": "[SYNTHETIC] Do not state or imply a certain favourable outcome or any benefit beyond what the consent document and protocol describe.", "input_kinds": ["brief", "text", "image"], "approved": true, "clause_ref": "FDA-4"},
+    {"node_key": "REC-05", "node_type": "RULE", "text": "[SYNTHETIC] Do not promise 'free treatment'. Say instead that taking part costs nothing, if that is true.", "input_kinds": ["brief", "text"], "approved": true, "clause_ref": "FDA-5"},
+    {"node_key": "REC-06", "node_type": "RULE", "text": "[SYNTHETIC] Payment may be mentioned but must not be emphasised, for example by large or bold type or by leading with the amount.", "input_kinds": ["text", "image"], "approved": true, "clause_ref": "FDA-6"},
+    {"node_key": "REC-07", "node_type": "RULE", "text": "[SYNTHETIC] Say that this is a research study and that taking part is voluntary, using the study's required disclosures.", "input_kinds": ["text"], "approved": true},
+    {"node_key": "REC-08", "node_type": "RULE", "text": "[SYNTHETIC] Statements about the condition, eligibility, sites and compensation must match the approved study snapshot.", "input_kinds": ["brief", "text"], "approved": true},
+    {"node_key": "REC-09", "node_type": "RULE", "text": "[SYNTHETIC] Images must not show a cure, a before-and-after result or a clinician endorsing the treatment.", "input_kinds": ["image"], "approved": true, "clause_ref": "FDA-4"},
+    {"node_key": "DISC-01", "node_type": "DISCLOSURE", "text": "This is a research study. Taking part is voluntary.", "approved": true},
+    {"node_key": "DISC-01-ES", "node_type": "DISCLOSURE", "text": "Este es un estudio de investigación. La participación es voluntaria.", "language": "es", "clause_ref": "DISC-ES", "approved": true},
+    {"node_key": "EXC-01", "node_type": "EXCEPTION", "text": "[SYNTHETIC] Compensation may be mentioned when the study snapshot has an approved compensation statement.", "required_study_fact": "compensation_statement", "approved": true},
+    {"node_key": "EXC-02", "node_type": "EXCEPTION", "text": "[SYNTHETIC] Even then, the amount may not be the headline or the first thing the post says.", "approved": true},
+    {"node_key": "INT-01", "node_type": "INTERPRETATION", "text": "[SYNTHETIC] Ages, eligibility and compensation in the copy must match the approved study snapshot.", "approved": true}
+  ],
+  "rules": [
+    {"node_key": "REC-01", "rule_id": "REC-01", "rule_version": 1, "title": "No safety or effectiveness claims", "requirement": "Do not state or imply that the investigational treatment is safe or effective for the condition being studied.", "gate": "policy", "severity": "critical", "mandatory": true, "check_type": "semantic", "prohibited_phrases": ["safe and effective", "proven", "cure", "cures"]},
+    {"node_key": "REC-02", "rule_id": "REC-02", "rule_version": 1, "title": "No superiority claims", "requirement": "Do not claim the investigational treatment is equivalent or superior to any other treatment.", "gate": "policy", "severity": "critical", "mandatory": true, "check_type": "semantic", "prohibited_phrases": ["better than", "superior to", "best treatment"]},
+    {"node_key": "REC-03", "rule_id": "REC-03", "rule_version": 1, "title": "Say it is investigational", "requirement": "Do not use terms such as 'new treatment', 'new medication' or 'new drug' without explaining that the treatment is investigational.", "gate": "policy", "severity": "major", "mandatory": true, "check_type": "semantic", "prohibited_phrases": ["new treatment", "new drug", "new medication", "new medicine"]},
+    {"node_key": "REC-04", "rule_id": "REC-04", "rule_version": 1, "title": "No promised benefit", "requirement": "Do not state or imply a certain favourable outcome or any benefit beyond what the consent document and protocol describe.", "gate": "policy", "severity": "critical", "mandatory": true, "check_type": "semantic", "prohibited_phrases": ["guarantee", "guaranteed", "guarantees"]},
+    {"node_key": "REC-05", "rule_id": "REC-05", "rule_version": 1, "title": "No free treatment promise", "requirement": "Do not promise 'free treatment'. Say instead that taking part costs nothing, if that is true.", "gate": "policy", "severity": "major", "mandatory": true, "check_type": "semantic", "prohibited_phrases": ["free treatment", "free medication", "free medicine", "free care"]},
+    {"node_key": "REC-06", "rule_id": "REC-06", "rule_version": 1, "title": "Payment not emphasised", "requirement": "Payment may be mentioned but must not be emphasised, for example by large or bold type or by leading with the amount.", "gate": "policy", "severity": "major", "mandatory": false, "check_type": "semantic", "prohibited_phrases": []},
+    {"node_key": "REC-07", "rule_id": "REC-07", "rule_version": 1, "title": "Research and voluntary disclosure", "requirement": "Say that this is a research study and that taking part is voluntary, using the study's required disclosures.", "gate": "completeness", "severity": "critical", "mandatory": true, "check_type": "deterministic", "prohibited_phrases": []},
+    {"node_key": "REC-08", "rule_id": "REC-08", "rule_version": 1, "title": "Approved study facts only", "requirement": "Statements about the condition, eligibility, sites and compensation must match the approved study snapshot.", "gate": "study_facts", "severity": "critical", "mandatory": true, "check_type": "deterministic", "prohibited_phrases": []},
+    {"node_key": "REC-09", "rule_id": "REC-09", "rule_version": 1, "title": "No misleading medical imagery", "requirement": "Images must not show a cure, a before-and-after result or a clinician endorsing the treatment.", "gate": "media", "severity": "major", "mandatory": true, "check_type": "semantic", "prohibited_phrases": []}
+  ],
+  "edges": [
+    {"edge_type": "supported_by", "from_node_key": "REC-01", "to_node_key": "CL-FDA-1", "approved": true, "provenance_clause_ref": "FDA-1"},
+    {"edge_type": "supported_by", "from_node_key": "REC-02", "to_node_key": "CL-FDA-2", "approved": true, "provenance_clause_ref": "FDA-2"},
+    {"edge_type": "supported_by", "from_node_key": "REC-03", "to_node_key": "CL-FDA-3", "approved": true, "provenance_clause_ref": "FDA-3"},
+    {"edge_type": "supported_by", "from_node_key": "REC-04", "to_node_key": "CL-FDA-4", "approved": true, "provenance_clause_ref": "FDA-4"},
+    {"edge_type": "supported_by", "from_node_key": "REC-05", "to_node_key": "CL-FDA-5", "approved": true, "provenance_clause_ref": "FDA-5"},
+    {"edge_type": "supported_by", "from_node_key": "REC-06", "to_node_key": "CL-FDA-6", "approved": true, "provenance_clause_ref": "FDA-6"},
+    {"edge_type": "supported_by", "from_node_key": "REC-09", "to_node_key": "CL-FDA-4", "approved": true, "provenance_clause_ref": "FDA-4"},
+    {"edge_type": "supported_by", "from_node_key": "REC-01", "to_node_key": "CL-FDA-1-ES", "approved": true, "provenance_clause_ref": "FDA-1-ES"},
+    {"edge_type": "requires_disclosure", "from_node_key": "REC-07", "to_node_key": "DISC-01", "approved": true, "provenance_note": "Study snapshot required_disclosures"},
+    {"edge_type": "requires_disclosure", "from_node_key": "REC-07", "to_node_key": "DISC-01-ES", "approved": true, "provenance_clause_ref": "DISC-ES"},
+    {"edge_type": "supported_by", "from_node_key": "REC-08", "to_node_key": "INT-01", "approved": true, "provenance_note": "Study snapshot facts are the only approved source for these statements"},
+    {"edge_type": "except_when", "from_node_key": "REC-06", "to_node_key": "EXC-01", "approved": true, "provenance_clause_ref": "FDA-6"},
+    {"edge_type": "except_when", "from_node_key": "EXC-01", "to_node_key": "EXC-02", "approved": true, "provenance_clause_ref": "FDA-6"},
+    {"edge_type": "supported_by", "from_node_key": "EXC-01", "to_node_key": "CL-FDA-6", "approved": true, "provenance_clause_ref": "FDA-6"},
+    {"edge_type": "supported_by", "from_node_key": "EXC-02", "to_node_key": "CL-FDA-6", "approved": true, "provenance_clause_ref": "FDA-6"}
+  ]
+}

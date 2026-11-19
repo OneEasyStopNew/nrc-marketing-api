@@ -19,6 +19,7 @@ from app.core.errors import (
 )
 from app.services import tenancy
 from app.services.demo_stubs import DemoStubs
+from app.services.policy_context import AuroraPolicyContextProvider, PolicyContextProvider
 from app.services.storage import ObjectStorage
 
 
@@ -54,6 +55,14 @@ DemoStubsDep = Annotated[DemoStubs | None, Depends(get_demo_stubs)]
 StorageDep = Annotated[ObjectStorage, Depends(get_storage)]
 OptionalStorageDep = Annotated[ObjectStorage | None, Depends(get_optional_storage)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def get_context_provider(settings: SettingsDep) -> PolicyContextProvider:
+    # No embedder: a request never calls a model provider, so search is full-text only.
+    return AuroraPolicyContextProvider(settings)
+
+
+ContextProviderDep = Annotated[PolicyContextProvider, Depends(get_context_provider)]
 
 
 def require_storage(storage: ObjectStorage | None) -> ObjectStorage:

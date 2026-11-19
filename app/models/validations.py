@@ -23,6 +23,11 @@ class ValidationRun(Base):
         ForeignKeyConstraint(
             ["tenant_id", "policy_bundle_id"], ["policy_bundles.tenant_id", "policy_bundles.id"]
         ),
+        # NULL (older runs, or retrieval unavailable) is not checked, as a composite key allows.
+        ForeignKeyConstraint(
+            ["tenant_id", "context_manifest_id"],
+            ["context_manifests.tenant_id", "context_manifests.id"],
+        ),
         # Latest run of one version and kind: the generation gate and the UI read it.
         Index(
             "ix_validation_runs_latest",
@@ -45,6 +50,8 @@ class ValidationRun(Base):
     policy_bundle_id: Mapped[UUID]
     policy_bundle_version: Mapped[int]
     study_snapshot_version: Mapped[int]
+    # The policy context gathered for this run (NRC-5): evidence only until NRC-7 judges with it.
+    context_manifest_id: Mapped[UUID | None]
     # gates, rule_results, findings and coverage_gaps; validated by the API schemas on read.
     result: Mapped[dict[str, object]] = mapped_column(JSONB)
     created_by: Mapped[str] = mapped_column(String(128))
