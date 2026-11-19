@@ -76,6 +76,12 @@ class ExportNotReadyError(ConflictError):
     default_message = "Generate an image for the current version before exporting."
 
 
+class JobNotCancellableError(ConflictError):
+    # details.state: the job's final state (SUCCEEDED or FAILED).
+    code = "JOB_NOT_CANCELLABLE"
+    default_message = "This job has already finished."
+
+
 class UploadNotReceivedError(ConflictError):
     # Complete was called before the file reached storage; upload it, then complete again.
     code = "UPLOAD_NOT_RECEIVED"

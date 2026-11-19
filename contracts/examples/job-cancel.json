@@ -1,0 +1,35 @@
+{
+  "_note": "NRC-6 sample responses for POST /v1/marketing/jobs/{job_id}/cancel. All data is synthetic. Validated against the API schemas by tests/test_contract.py.",
+  "cancel_requested": {
+    "request": "POST /v1/marketing/jobs/2e9c4a6b-5d17-4b83-9a02-7f1d3c5e8b64/cancel  (202; repeating it returns the same body)",
+    "status": 202,
+    "schema": "JobRead",
+    "body": {
+      "job_id": "2e9c4a6b-5d17-4b83-9a02-7f1d3c5e8b64",
+      "kind": "image_generation",
+      "creative_id": "4d2f8b6a-1c3e-4a75-9b08-5e7f1a3c9d02",
+      "creative_version": 1,
+      "state": "CANCEL_REQUESTED",
+      "stage": "waiting_provider",
+      "provider_request_id": "sim-6b3d5f7a-9c21-4e48-a0b6-3d5f7a9c1e82",
+      "failure_code": null,
+      "failure_message": null,
+      "result_asset_id": null,
+      "created_at": "2026-11-19T09:00:00Z",
+      "updated_at": "2026-11-19T09:00:04Z",
+      "completed_at": null
+    }
+  },
+  "not_cancellable": {
+    "request": "POST /v1/marketing/jobs/{job_id}/cancel  (409, the job already SUCCEEDED or FAILED)",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "JOB_NOT_CANCELLABLE",
+      "message": "This job has already finished.",
+      "request_id": "req-synthetic-0001",
+      "details": {"state": "SUCCEEDED"},
+      "retryable": false
+    }
+  }
+}

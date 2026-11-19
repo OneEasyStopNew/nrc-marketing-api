@@ -1,9 +1,12 @@
-"""List UNKNOWN generation jobs that wait for an operator, one `tenant=<id> job=<id>` per line.
+"""List generation jobs that wait for an operator, one `tenant=<id> job=<id>` per line.
+
+These are UNKNOWN jobs the worker stopped on, and CANCELLED jobs whose provider outcome was
+unknown when they were cancelled (failure_code CANCELLED_OUTCOME_UNKNOWN).
 
 Usage (runs as the database owner, MIGRATION_DATABASE_URL, in a read-only transaction):
     uv run python -m scripts.list_unknown_jobs
 
-The worker has stopped on these jobs and their credits stay HELD: check each one with the
+No worker acts on these jobs again and their credits stay HELD: check each one with the
 provider (by job id, which is in its idempotency key), then settle it. Prints ids only.
 """
 

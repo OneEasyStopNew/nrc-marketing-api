@@ -12,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
 from app.core.config import Settings
-from app.core.errors import DependencyUnavailableError, GenerationLimitError, NotFoundError
+from app.core.errors import (
+    DependencyUnavailableError,
+    GenerationLimitError,
+    JobNotCancellableError,
+    NotFoundError,
+)
 from app.db.session import bind_tenant
 from app.models import Creative, CreativeVersion, CreditReservation, Job, OutboxEvent, Tenant
 from app.models.enums import FORMAT_SPECS, ExecutionState, FormatSpec, JobStage
@@ -30,10 +35,13 @@ TERMINAL_STATES: Final = frozenset(
     {ExecutionState.SUCCEEDED, ExecutionState.FAILED, ExecutionState.CANCELLED}
 )
 NON_TERMINAL_STATES: Final = frozenset(ExecutionState) - TERMINAL_STATES
+# States a cancel request may move a job out of: every non-terminal one but CANCEL_REQUESTED.
+_CANCELLABLE_FROM: Final = NON_TERMINAL_STATES - {ExecutionState.CANCEL_REQUESTED}
 # Jobs that take an active-generation slot. Parked and UNKNOWN jobs don't: UNKNOWN credits
-# stay HELD, so the daily credit ceiling still bounds them.
+# stay HELD, so the daily credit ceiling still bounds them. CANCEL_REQUESTED does: the provider
+# may still be running until the worker confirms the cancel, so a request must not free a slot.
 _TAKES_SLOT: Final = or_(
-    Job.state.in_((ExecutionState.QUEUED, ExecutionState.RUNNING)),
+    Job.state.in_((ExecutionState.QUEUED, ExecutionState.RUNNING, ExecutionState.CANCEL_REQUESTED)),
     and_(
         Job.state == ExecutionState.WAITING_PROVIDER,
         Job.stage.is_distinct_from(JobStage.OUTPUT_READY),
@@ -194,6 +202,73 @@ async def get_job(db: AsyncSession, ctx: TenantContext, job_id: UUID) -> JobRead
     return JobRead.model_validate(row)
 
 
+async def request_cancel(db: AsyncSession, ctx: TenantContext, job_id: UUID) -> JobRead:
+    """Record a durable cancel request; the worker acts on it (stops, settles credits).
+
+    State-idempotent: a job already CANCEL_REQUESTED or CANCELLED is returned unchanged. This
+    never touches the credit reservation or the provider.
+
+    Raises:
+        NotFoundError: no such job, or not visible to the caller.
+        JobNotCancellableError: the job already SUCCEEDED or FAILED.
+    """
+    job = await get_job(db, ctx, job_id)
+    for _ in range(2):
+        if job.state in (ExecutionState.CANCEL_REQUESTED, ExecutionState.CANCELLED):
+            return job
+        if job.state in TERMINAL_STATES:
+            raise JobNotCancellableError(
+                "This job has already finished.", details={"state": job.state.value}
+            )
+        if await transition(
+            db,
+            job_id,
+            allowed_from=_CANCELLABLE_FROM,
+            to=ExecutionState.CANCEL_REQUESTED,
+        ):
+            await _wake_worker(db, ctx.tenant_id, job_id)
+            await db.commit()
+            logger.info(
+                "job cancel requested job=%s tenant=%s by=%s",
+                job_id,
+                ctx.tenant_id,
+                ctx.principal.sub,
+            )
+            return await get_job(db, ctx, job_id)
+        # The worker moved the job first: apply the same rules to what it is now.
+        job = await get_job(db, ctx, job_id)
+    # Two lost races in a row: report the state as it is rather than loop.
+    return job
+
+
+async def _wake_worker(db: AsyncSession, tenant_id: UUID, job_id: UUID) -> None:
+    # Make the job's pending run event due now; a leased event finishes its step first, so the
+    # lease columns stay as they are. With none pending (e.g. an UNKNOWN job the worker gave
+    # up on) add one, so the worker can finalize the cancel.
+    woken = await db.execute(
+        update(OutboxEvent)
+        .where(
+            OutboxEvent.tenant_id == tenant_id,
+            OutboxEvent.job_id == job_id,
+            OutboxEvent.event_type == RUN_EVENT,
+            OutboxEvent.processed_at.is_(None),
+        )
+        .values(available_at=func.now())
+        .returning(OutboxEvent.id)
+        .execution_options(synchronize_session=False)
+    )
+    if woken.first() is None:
+        db.add(
+            OutboxEvent(
+                tenant_id=tenant_id,
+                job_id=job_id,
+                event_type=RUN_EVENT,
+                payload={"job_id": str(job_id)},
+                attempts=0,
+            )
+        )
+
+
 async def transition(
     db: AsyncSession,
     job_id: UUID,
@@ -243,11 +318,13 @@ async def settle_reservation(db: AsyncSession, job_id: UUID, to: ReservationStat
 
 
 async def jobs_awaiting_review(db: AsyncSession) -> list[tuple[UUID, UUID]]:
-    """(tenant id, job id) of UNKNOWN jobs the worker has stopped working on, across tenants.
+    """(tenant id, job id) of jobs whose credits wait for an operator, across tenants.
 
-    The worker gives up on them (no unprocessed outbox event is left) while the provider may have
-    billed them, so their credits stay HELD until an operator settles each one. Binds each tenant
-    in turn, so it works under row-level security with any role that can read tenants and jobs.
+    UNKNOWN jobs the worker has stopped working on (no unprocessed outbox event is left), and
+    CANCELLED jobs whose outcome was unknown at cancel time (credits HELD): the provider may have
+    billed either, so their credits stay HELD until an operator settles each one. Binds each
+    tenant in turn, so it works under row-level security with any role that can read tenants,
+    jobs and credit reservations.
     """
     pending = (
         select(OutboxEvent.id)
@@ -258,6 +335,15 @@ async def jobs_awaiting_review(db: AsyncSession) -> list[tuple[UUID, UUID]]:
         )
         .correlate(Job)
     )
+    held = (
+        select(CreditReservation.id)
+        .where(
+            CreditReservation.tenant_id == Job.tenant_id,
+            CreditReservation.job_id == Job.id,
+            CreditReservation.state == ReservationState.HELD,
+        )
+        .correlate(Job)
+    )
     found: list[tuple[UUID, UUID]] = []
     for tenant_id in (await db.scalars(select(Tenant.id).order_by(Tenant.id))).all():
         await bind_tenant(db, tenant_id)
@@ -265,8 +351,10 @@ async def jobs_awaiting_review(db: AsyncSession) -> list[tuple[UUID, UUID]]:
             select(Job.id)
             .where(
                 Job.tenant_id == tenant_id,
-                Job.state == ExecutionState.UNKNOWN,
-                ~exists(pending),
+                or_(
+                    and_(Job.state == ExecutionState.UNKNOWN, ~exists(pending)),
+                    and_(Job.state == ExecutionState.CANCELLED, exists(held)),
+                ),
             )
             .order_by(Job.updated_at)
         )

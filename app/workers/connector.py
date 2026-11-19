@@ -19,7 +19,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_CEILING, Decimal
 from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 from uuid import UUID
@@ -70,7 +69,9 @@ from app.services.providers.higgsfield import (
     with_higgsfield_key,
 )
 from app.services.providers.simulator import SIMULATOR_NAME, SimulatedImageProvider
+from app.services.spend import usd_micros as _usd_micros
 from app.services.storage import ObjectStorage
+from app.workers.cancellation import finish_cancel, give_up_cancel
 from app.workers.common import (
     DEFAULT_OWNER,
     WorkerConfigError,
@@ -393,6 +394,16 @@ class ImageGenerationHandler:
             failure_code=None,
         )
         if not moved:
+            # A cancel arrived during the submit: keep the request id, so the cancel polls the
+            # outcome instead of holding the credits as unknown.
+            await transition(
+                db,
+                job.id,
+                allowed_from={ExecutionState.CANCEL_REQUESTED},
+                to=ExecutionState.CANCEL_REQUESTED,
+                stage=JobStage.WAITING_PROVIDER,
+                provider_request_id=submitted.provider_request_id,
+            )
             return None
         # The sink records it on the asset; the job was loaded before the id was known.
         set_committed_value(job, "provider_request_id", submitted.provider_request_id)
@@ -557,11 +568,30 @@ class JobRunHandler:
         handler = self._job_handlers.get(JobKind(job.kind)) if job and job.kind in JobKind else None
         if job is None or handler is None:
             raise NoHandlerError
-        return await handler.handle(db, job, step)
+        if job.state is ExecutionState.CANCEL_REQUESTED:
+            return await finish_cancel(
+                db,
+                job,
+                step.providers.get(job.provider or ""),
+                settings=step.settings,
+                now=step.now,
+                event_attempts=step.event_attempts,
+                heartbeat=step.heartbeat,
+            )
+        retry = await handler.handle(db, job, step)
+        if retry is None and await db.scalar(select(Job.state).where(Job.id == job.id)) is (
+            ExecutionState.CANCEL_REQUESTED
+        ):
+            # A cancel arrived mid-step and won the step's guarded update: keep the event, so
+            # the cancel is finished instead of the job being left behind.
+            return backoff_seconds(1, step.settings)
+        return retry
 
     async def give_up(self, db: AsyncSession, event: LeasedEvent, code: str) -> None:
         job = await db.get(Job, event.job_id)
-        if job is not None:
+        if job is not None and job.state is ExecutionState.CANCEL_REQUESTED:
+            await give_up_cancel(db, job)
+        elif job is not None:
             await _give_up(db, job, code, _GIVE_UP_MESSAGES[code])
 
 
@@ -807,11 +837,6 @@ async def _estimate_usd_micros(provider: ImageProvider, request: ImageRequest) -
         # Never submit without a price: a missing estimate is a non-retryable provider error.
         raise ProviderError("The provider returned no cost estimate.")
     return _usd_micros(usd)
-
-
-def _usd_micros(usd: Decimal) -> int:
-    # Money stays in integer units; round up so the cap is never undercut.
-    return int((usd * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
 
 
 def _log_call(
