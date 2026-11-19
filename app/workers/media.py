@@ -21,15 +21,14 @@ MEDIA_INSPECTION_RETRY_WINDOW_SECONDS after completion.
 import asyncio
 import hashlib
 import logging
-import signal
-from collections.abc import Mapping
-from contextlib import suppress
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final
 from uuid import UUID
 
-from sqlalchemy import Update, func, text, update
+from sqlalchemy import ColumnElement, Update, func, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
@@ -50,11 +49,12 @@ from app.services.scanning import (
 )
 from app.services.storage import ObjectStorage, StorageError
 from app.services.uploads import reason_columns
-from app.workers.connector import (
+from app.workers.common import (
     DEFAULT_OWNER,
     WorkerConfigError,
     backoff_seconds,
     lease_seconds,
+    stop_on_signals,
     worker_database_url,
 )
 
@@ -154,54 +154,111 @@ async def _inspect(run: _Run, upload_id: UUID, tenant_id: UUID) -> None:
         if upload.failed_attempts >= run.settings.media_inspection_max_attempts:
             await _reject(db, run, upload, "INSPECTION_FAILED")
             return
-        # Visible progress, and a renewed lease covering the read, the decode and the scan.
+        # Visible progress, and a fresh lease before the slow part.
         await _change(
             db,
             run,
             upload.id,
-            {
-                "state": UploadState.SCANNING,
-                "leased_until": func.clock_timestamp() + timedelta(seconds=run.lease_seconds),
-            },
+            {"state": UploadState.SCANNING, "leased_until": _renewed_lease(run)},
         )
         await db.commit()
-        await _check(db, run, upload)
+        async with _kept_leased(run, upload.id, upload.tenant_id):
+            found = await _examine(run, upload)
+        await _record(db, run, upload, found)
 
 
-async def _check(db: AsyncSession, run: _Run, upload: MediaUpload) -> None:
+def _renewed_lease(run: _Run) -> ColumnElement[datetime]:
+    return func.clock_timestamp() + timedelta(seconds=run.lease_seconds)
+
+
+@asynccontextmanager
+async def _kept_leased(run: _Run, upload_id: UUID, tenant_id: UUID) -> AsyncIterator[None]:
+    """Renew the lease in the background while the upload is read, decoded and scanned.
+
+    A slow object read (the S3 client retries) or a real scanner can outlast one lease; without
+    renewal another worker would take the upload over and count a failure, and enough of those
+    reject a valid file. Renewal stops on a lost lease or a database error; the fenced writes
+    afterwards then fail safely instead of acting on a lease this worker no longer holds.
+    """
+
+    async def renew() -> None:
+        while True:
+            await asyncio.sleep(run.lease_seconds / 3)
+            try:
+                async with run.sessions() as db:
+                    await bind_tenant(db, tenant_id)
+                    await _change(db, run, upload_id, {"leased_until": _renewed_lease(run)})
+                    await db.commit()
+            except LeaseLostError:
+                return
+            except Exception:
+                logger.exception(
+                    "upload lease renewal failed upload=%s tenant=%s", upload_id, tenant_id
+                )
+                return
+
+    task = asyncio.create_task(renew())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+@dataclass(frozen=True, slots=True)
+class _Found:
+    # What examining the object found. Exactly one of reject, retry or (info and verdict) is set.
+    reject: str | None = None
+    retry: str | None = None
+    info: media.ImageInfo | None = None
+    verdict: ScanVerdict | None = None
+
+
+def _sha256_hex(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+async def _examine(run: _Run, upload: MediaUpload) -> _Found:
+    # No database access here: this part may take long and runs while the lease is renewed.
     settings = run.settings
     try:
         content = await run.storage.read(upload.s3_key, version_id=upload.s3_version_id)
     except StorageError:
-        await _retry_later(db, run, upload, "STORAGE_UNAVAILABLE")
-        return
+        return _Found(retry="STORAGE_UNAVAILABLE")
     if len(content) != upload.declared_size_bytes:
-        await _reject(db, run, upload, "SIZE_MISMATCH")
-        return
-    if hashlib.sha256(content).hexdigest() != upload.declared_checksum_sha256:
-        await _reject(db, run, upload, "CHECKSUM_MISMATCH")
-        return
+        return _Found(reject="SIZE_MISMATCH")
+    # CPU-bound on files up to UPLOAD_IMAGE_MAX_BYTES: off the event loop, like the decode.
+    if await asyncio.to_thread(_sha256_hex, content) != upload.declared_checksum_sha256:
+        return _Found(reject="CHECKSUM_MISMATCH")
     try:
         # The real type comes from decoding the file, never from its name or declared type.
         info = await asyncio.to_thread(
             media.inspect_image, content, max_pixels=settings.max_image_pixels
         )
     except MediaRejectedError as error:
-        await _reject(db, run, upload, error.code)
-        return
+        return _Found(reject=error.code)
     if info.mime_type != upload.declared_mime_type:
-        await _reject(db, run, upload, "TYPE_MISMATCH")
-        return
+        return _Found(reject="TYPE_MISMATCH")
     if info.mime_type not in settings.upload_image_types:
-        await _reject(db, run, upload, "MEDIA_UNSUPPORTED_TYPE")
-        return
+        return _Found(reject="MEDIA_UNSUPPORTED_TYPE")
     try:
         verdict = await run.scanner.scan(
             content, bucket=upload.bucket, key=upload.s3_key, version_id=upload.s3_version_id
         )
     except ScanUnavailableError:
-        await _retry_later(db, run, upload, "SCAN_UNAVAILABLE")
+        return _Found(retry="SCAN_UNAVAILABLE")
+    return _Found(info=info, verdict=verdict)
+
+
+async def _record(db: AsyncSession, run: _Run, upload: MediaUpload, found: _Found) -> None:
+    if found.retry is not None:
+        await _retry_later(db, run, upload, found.retry)
         return
+    if found.reject is not None or found.info is None or found.verdict is None:
+        await _reject(db, run, upload, found.reject or "INSPECTION_FAILED")
+        return
+    verdict = found.verdict
     scan = {
         "scan_engine": verdict.engine,
         "scan_simulated": verdict.simulated,
@@ -214,7 +271,7 @@ async def _check(db: AsyncSession, run: _Run, upload: MediaUpload) -> None:
         # Only an explicit CLEAN verdict passes; anything else is a scanner fault.
         await _retry_later(db, run, upload, "SCAN_UNAVAILABLE")
         return
-    await _ready(db, run, upload, info, verdict, scan)
+    await _ready(db, run, upload, found.info, verdict, scan)
 
 
 async def _ready(
@@ -349,7 +406,7 @@ async def run_forever(settings: Settings) -> None:
     engine = create_engine(settings, database_url)
     sessions = create_sessionmaker(engine)
     stop = asyncio.Event()
-    _stop_on_signals(stop)
+    stop_on_signals(stop)
     logger.info(
         "media worker started scan_engine=%s simulated=%s", scanner.engine, scanner.simulated
     )
@@ -366,17 +423,6 @@ async def run_forever(settings: Settings) -> None:
     finally:
         await engine.dispose()
     logger.info("media worker stopped")
-
-
-def _stop_on_signals(stop: asyncio.Event) -> None:
-    # Finish the current upload, then exit.
-    loop = asyncio.get_running_loop()
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(signum, stop.set)
-        except NotImplementedError:
-            # Windows event loops have no add_signal_handler.
-            signal.signal(signum, lambda *_: loop.call_soon_threadsafe(stop.set))
 
 
 def main() -> None:

@@ -8,14 +8,16 @@ from typing import Annotated, Final, Literal, Self
 from pydantic import Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.core.media_types import IMAGE_EXTENSIONS
+
 AppEnv = Literal["local", "demo", "staging", "production"]
 # Environments where simulated data and locally signed tokens are allowed.
 NON_PRODUCTION_ENVS: Final[frozenset[str]] = frozenset({"local", "demo"})
 # lease_outbox_events() clamps its lease to the same range in SQL; keep the two in sync.
 LEASE_MIN_SECONDS = 5
 LEASE_MAX_SECONDS = 600
-# The types app.services.media can decode; widening it needs a decoder first.
-SUPPORTED_UPLOAD_IMAGE_TYPES: Final[frozenset[str]] = frozenset({"image/png", "image/jpeg"})
+# The types app.services.media can decode (app.core.media_types).
+SUPPORTED_UPLOAD_IMAGE_TYPES: Final[frozenset[str]] = frozenset(IMAGE_EXTENSIONS)
 
 
 class Settings(BaseSettings):
@@ -133,8 +135,11 @@ class Settings(BaseSettings):
     # Accepted MIME types, comma-separated in the environment.
     upload_image_types: Annotated[tuple[str, ...], NoDecode] = ("image/png", "image/jpeg")
     # Defaults to the strict value: a deployment that forgets it gets no simulator. The simulator
-    # marks its verdicts as simulated; live needs a real scanner (not chosen yet), and the media
-    # worker refuses to start without one.
+    # marks its verdicts as simulated; live needs a real scanner, and the media worker refuses to
+    # start without one.
+    # Temporary (owner Firoz, NRC-3): "simulator" exists only until Prabhu picks the scanner. When
+    # the live scanner lands, keep this setting for local use but add its implementation in
+    # app.services.scanning.build_scanner and remove the live-mode refusal test named there.
     malware_scan_mode: Literal["simulator", "live"] = "live"
     # Failed inspection attempts (a crash, an expired lease) before an upload is rejected as
     # INSPECTION_FAILED. Retryable scanner and storage outages are bounded separately.

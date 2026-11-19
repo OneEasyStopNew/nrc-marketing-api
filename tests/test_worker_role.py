@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.workers.connector import WorkerConfigError, worker_database_url
+from app.workers.common import WorkerConfigError, worker_database_url
 from tests.conftest import APP_ROLE, WORKER_ROLE, AuthHeaders, World, _creative, _post_job, as_role
 
 LEASE = "lease_outbox_events(text, integer, integer, text[])"

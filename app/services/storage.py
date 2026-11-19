@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import binascii
 import hashlib
 import logging
 from collections.abc import Mapping
@@ -15,6 +16,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import Settings
+from app.core.media_types import IMAGE_EXTENSIONS
 
 # Type stubs are a dev dependency only; never import them at runtime.
 if TYPE_CHECKING:
@@ -27,14 +29,12 @@ logger = logging.getLogger(__name__)
 _ALLOWED_EXTENSIONS = frozenset({"png", "jpg"})
 GENERATED_IMAGE_FOLDER = "generated-images"
 GENERATED_IMAGE_DOC_TYPE = "generated-image"
-# TODO(NRC-3): confirm retention class with Prabhu
+# TODO(NRC-3, owner Firoz): confirm the retention class with Prabhu, then set it here
 GENERATED_IMAGE_RETENTION = "operational"
 UPLOAD_FOLDER = "uploads"
 UPLOAD_DOC_TYPE = "upload"
-# TODO(NRC-3): confirm retention class with Prabhu
+# TODO(NRC-3, owner Firoz): confirm the retention class with Prabhu, then set it here
 UPLOAD_RETENTION = "operational"
-# Accepted upload MIME type to the extension its key carries.
-_UPLOAD_EXTENSIONS: Mapping[str, str] = {"image/png": "png", "image/jpeg": "jpg"}
 # HEAD responses have no body, so botocore reports the HTTP status as the error code.
 _MISSING_OBJECT_CODES = frozenset({"404", "NoSuchKey", "NoSuchVersion", "NotFound"})
 
@@ -78,9 +78,21 @@ class ObjectHead:
     content_type: str | None
 
 
+def _full_object_sha256(checksum: str | None) -> str | None:
+    # S3 reports a multipart object's checksum as "<base64 of the part checksums>-<parts>", which
+    # is not the file's SHA-256. Report no checksum then: callers fall back to hashing the bytes.
+    if not checksum or "-" in checksum:
+        return None
+    try:
+        digest = base64.b64decode(checksum, validate=True)
+    except binascii.Error:
+        return None
+    return digest.hex() if len(digest) == hashlib.sha256().digest_size else None
+
+
 def new_upload_key(content_type: str) -> str:
     # Callers validate the type first; this guards a programming error, not a job path.
-    ext = _UPLOAD_EXTENSIONS.get(content_type)
+    ext = IMAGE_EXTENSIONS.get(content_type)
     if ext is None:
         raise ValueError(f"No upload extension for content type {content_type!r}")
     now = datetime.now(UTC)
@@ -241,10 +253,9 @@ class ObjectStorage:
             raise StorageError from None
         except BotoCoreError:
             raise StorageError from None
-        checksum = response.get("ChecksumSHA256")
         return ObjectHead(
             size_bytes=response["ContentLength"],
             version_id=response.get("VersionId"),
-            checksum_sha256=base64.b64decode(checksum).hex() if checksum else None,
+            checksum_sha256=_full_object_sha256(response.get("ChecksumSHA256")),
             content_type=response.get("ContentType"),
         )

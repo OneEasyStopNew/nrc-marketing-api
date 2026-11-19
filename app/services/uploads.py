@@ -37,6 +37,7 @@ from app.schemas.uploads import (
     UploadTarget,
 )
 from app.services import idempotency
+from app.services.paging import newest_first_page
 from app.services.storage import ObjectStorage, PresignedUpload, StorageError, new_upload_key
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,9 @@ class ReasonText:
 REASONS: Final[Mapping[str, ReasonText]] = MappingProxyType(
     {
         "MEDIA_EMPTY": ReasonText("The file is empty.", False),
-        "MEDIA_UNSUPPORTED_TYPE": ReasonText("Only PNG and JPEG images are accepted.", False),
+        "MEDIA_UNSUPPORTED_TYPE": ReasonText(
+            "This file type is not accepted. See the accepted types in the upload limits.", False
+        ),
         "MEDIA_TOO_LARGE": ReasonText("The image has too many pixels.", False),
         "MEDIA_CORRUPT": ReasonText("The file is not a valid, complete image.", False),
         "TYPE_MISMATCH": ReasonText(
@@ -101,11 +104,26 @@ def authorization_status(
     return AuthorizationStatus.RECORDED
 
 
+def _known_channels(upload: MediaUpload) -> list[Channel]:
+    # A stored value that is no longer a Channel is dropped, never trusted: fewer permitted
+    # channels only narrows what the gates allow. Logged so the stale value gets noticed.
+    known = [Channel(value) for value in upload.permitted_channels if value in Channel]
+    dropped = len(upload.permitted_channels) - len(known)
+    if dropped:
+        logger.warning(
+            "upload has unknown permitted channels upload=%s tenant=%s dropped=%s",
+            upload.id,
+            upload.tenant_id,
+            dropped,
+        )
+    return known
+
+
 def media_authorization(upload: MediaUpload, now: datetime) -> MediaAuthorization:
     return MediaAuthorization(
         identifiable_person=upload.identifiable_person,
         usage_authorization_ref=upload.usage_authorization_ref,
-        permitted_channels=[Channel(value) for value in upload.permitted_channels],
+        permitted_channels=_known_channels(upload),
         expires_at=upload.authorization_expires_at,
         status=authorization_status(
             upload.identifiable_person,
@@ -407,24 +425,19 @@ async def list_uploads(
     limit: int,
 ) -> UploadPage:
     """Uploads the caller can see, newest first, with the same tie-safe cursor as GET /media."""
-    query = select(MediaUpload).where(*_visible(ctx)).order_by(MediaUpload.created_at.desc())
+    query = select(MediaUpload).where(*_visible(ctx))
     if statuses:
         query = query.where(MediaUpload.state.in_(statuses))
     if study_id is not None:
         query = query.where(MediaUpload.study_id == study_id)
-    if before is not None:
-        query = query.where(MediaUpload.created_at < before)
-    rows = (await db.scalars(query.fetch(limit, with_ties=True))).all()
-    page = sorted(rows, key=lambda row: (row.created_at, row.id), reverse=True)
-    next_cursor = None
-    if page:
-        boundary = page[-1].created_at
-        older = await db.scalar(
-            query.with_only_columns(MediaUpload.id)
-            .where(MediaUpload.created_at < boundary)
-            .limit(1)
-        )
-        if older is not None:
-            next_cursor = boundary
+    page, next_cursor = await newest_first_page(
+        db,
+        query,
+        created_at=MediaUpload.created_at,
+        row_id=MediaUpload.id,
+        sort_key=lambda row: (row[0].created_at, row[0].id),
+        before=before,
+        limit=limit,
+    )
     now = datetime.now(UTC)
-    return UploadPage(items=[_to_read(row, now) for row in page], next_cursor=next_cursor)
+    return UploadPage(items=[_to_read(row[0], now) for row in page], next_cursor=next_cursor)

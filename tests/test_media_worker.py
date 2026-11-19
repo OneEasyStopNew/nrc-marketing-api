@@ -5,6 +5,7 @@ API for create, PUT and complete. The scanner is the labelled simulator, or a sm
 around it where a test needs a fault or a callback. Tests that PUT an object need SeaweedFS.
 """
 
+import asyncio
 import hashlib
 import io
 import logging
@@ -20,7 +21,7 @@ from sqlalchemy import Row, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.api.deps import get_optional_storage, get_storage
-from app.core.config import Settings, get_settings
+from app.core.config import LEASE_MIN_SECONDS, Settings, get_settings
 from app.services.scanning import (
     MalwareScanner,
     ScanOutcome,
@@ -30,7 +31,7 @@ from app.services.scanning import (
 )
 from app.services.storage import ObjectStorage, StorageError
 from app.workers import media as media_worker
-from app.workers.connector import WorkerConfigError
+from app.workers.common import WorkerConfigError
 from app.workers.media import build_dependencies, run_once
 from tests.conftest import (
     APP_ROLE,
@@ -885,3 +886,32 @@ async def test_each_tenants_asset_lands_in_its_own_tenant(
     assert [
         item["asset_id"] for item in (await client.get(MEDIA, headers=headers_b)).json()["items"]
     ] == [id_b]
+
+
+@needs_seaweedfs
+async def test_a_scan_longer_than_the_lease_keeps_the_upload(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    sessions: Sessions,
+    storage: ObjectStorage,
+    simulator: SimulatedScanner,
+    settings: Settings,
+) -> None:
+    # Regression (code review, NRC-3): the lease was renewed once before the read, so a scan
+    # that outlasted it lost the upload to another worker and counted a failed attempt.
+    short_lease = settings.model_copy(update={"worker_lease_seconds": LEASE_MIN_SECONDS})
+    asset_id = await _quarantined(client, auth, world.a, _png())
+
+    async def slow(_: int) -> None:
+        await asyncio.sleep(LEASE_MIN_SECONDS + 1.5)
+
+    scanner = FakeScanner(simulator, slow)
+    assert await _run(sessions, storage, scanner, short_lease, max_uploads=1) == 1
+
+    row = await _row(connection, world.a, asset_id)
+    assert row.state == "READY"
+    assert (row.attempts, row.failed_attempts) == (1, 0)
+    assert scanner.calls == 1
+    assert len(await _assets(connection, world.a)) == 1

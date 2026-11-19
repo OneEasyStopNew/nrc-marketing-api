@@ -22,7 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.api.deps import get_optional_storage, get_storage
 from app.core.config import Settings, get_settings
+from app.models import MediaUpload
+from app.models.enums import Channel, IdentifiablePerson
+from app.schemas.uploads import AuthorizationStatus
 from app.services.storage import ObjectHead, ObjectStorage, StorageError
+from app.services.uploads import media_authorization
 from app.workers.connector import run_once
 from tests.conftest import (
     APP_ROLE,
@@ -1270,3 +1274,23 @@ async def test_no_upload_url_or_signature_is_logged(
         assert url not in rendered
         assert reissued_url not in rendered
         assert _key_path(url).rsplit("/", 1)[-1] not in rendered
+
+
+def test_an_unknown_stored_channel_is_dropped_not_fatal(caplog: pytest.LogCaptureFixture) -> None:
+    # Regression (code review, NRC-3): a channel value later removed from Channel made every
+    # read of the upload fail with 500.
+    upload = MediaUpload(
+        id=uuid4(),
+        tenant_id=uuid4(),
+        identifiable_person=IdentifiablePerson.YES,
+        usage_authorization_ref="RELEASE-1",
+        permitted_channels=["facebook", "retired-channel"],
+        authorization_expires_at=None,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        authorization = media_authorization(upload, datetime.now(UTC))
+
+    assert authorization.permitted_channels == [Channel.FACEBOOK]
+    assert authorization.status is AuthorizationStatus.RECORDED
+    assert any("unknown permitted channels" in record.getMessage() for record in caplog.records)

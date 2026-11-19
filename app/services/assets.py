@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.access import TenantContext
 from app.core.config import Settings
 from app.core.errors import DependencyUnavailableError, NotFoundError
+from app.core.media_types import IMAGE_EXTENSIONS
 from app.models import Asset, Creative, Job, MediaUpload, OutboxEvent
 from app.models.enums import ExecutionState
 from app.schemas.assets import AssetOrigin, AssetRead, MediaItem, MediaPage
@@ -19,6 +20,7 @@ from app.schemas.uploads import MediaAuthorization
 from app.services import media, tenancy, uploads
 from app.services.jobs import JobContentMissingError, job_content
 from app.services.media import MediaRejectedError
+from app.services.paging import newest_first_page
 from app.services.providers.base import FetchedImage, ProviderError, ProviderOutputError
 from app.services.storage import ObjectStorage, StorageError
 
@@ -247,15 +249,14 @@ async def list_media(
 ) -> MediaPage:
     """List finished generated images and uploads that passed inspection, newest first.
 
-    Same tenant/study boundary as get_asset. Keep the existing timestamp cursor contract.
-    Include timestamp ties at the page boundary rather than silently dropping them on the next
-    page (which uses a strict `<` cursor).
+    Same tenant/study boundary as get_asset, and the existing timestamp cursor contract
+    (app.services.paging).
     """
     query = (
         _visible_assets(ctx)
         .outerjoin(Job, (Job.tenant_id == Asset.tenant_id) & (Job.id == Asset.job_id))
         .where(
-            Asset.mime_type.in_(("image/png", "image/jpeg")),
+            Asset.mime_type.in_(tuple(IMAGE_EXTENSIONS)),
             or_(
                 and_(
                     Asset.origin == AssetOrigin.GENERATED.value,
@@ -266,22 +267,16 @@ async def list_media(
                 Asset.origin == AssetOrigin.UPLOADED.value,
             ),
         )
-        .order_by(Asset.created_at.desc())
     )
-    if before is not None:
-        query = query.where(Asset.created_at < before)
-    # WITH TIES applies only to created_at; sort equal timestamps by id below for a stable
-    # display order. Check for older rows separately: even limit+1 could land inside a tie.
-    rows = (await db.execute(query.fetch(limit, with_ties=True))).all()
-    page = sorted(rows, key=lambda row: (row[0].created_at, row[0].id), reverse=True)
-    next_cursor = None
-    if page:
-        boundary = page[-1][0].created_at
-        older = await db.scalar(
-            query.with_only_columns(Asset.id).where(Asset.created_at < boundary).limit(1)
-        )
-        if older is not None:
-            next_cursor = boundary
+    page, next_cursor = await newest_first_page(
+        db,
+        query,
+        created_at=Asset.created_at,
+        row_id=Asset.id,
+        sort_key=lambda row: (row[0].created_at, row[0].id),
+        before=before,
+        limit=limit,
+    )
     names = await tenancy.display_names(db, ctx, {asset.created_by for asset, _ in page})
     ttl = settings.asset_url_ttl_seconds
     now = datetime.now(UTC)

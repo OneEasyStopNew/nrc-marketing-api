@@ -321,3 +321,43 @@ async def test_head_unreachable_endpoint_raises_safe_storage_error(settings: Set
         await broken.head("uploads/2026/11/x.png")
     assert raised.value.__cause__ is None
     assert "127.0.0.1" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("reported", "expected"),
+    [
+        pytest.param(
+            base64.b64encode(hashlib.sha256(b"x").digest()).decode(),
+            hashlib.sha256(b"x").hexdigest(),
+            id="full-object",
+        ),
+        # A multipart object's checksum covers its parts, not the file (code review, NRC-3).
+        pytest.param(
+            base64.b64encode(hashlib.sha256(b"x").digest()).decode() + "-3",
+            None,
+            id="multipart-composite",
+        ),
+        pytest.param("not base64!", None, id="malformed"),
+        pytest.param(base64.b64encode(b"short").decode(), None, id="wrong-length"),
+        pytest.param(None, None, id="absent"),
+    ],
+)
+async def test_head_reports_only_a_full_object_sha256(
+    storage: ObjectStorage,
+    monkeypatch: pytest.MonkeyPatch,
+    reported: str | None,
+    expected: str | None,
+) -> None:
+    response: dict[str, object] = {
+        "ContentLength": 1,
+        "VersionId": "v1",
+        "ContentType": "image/png",
+    }
+    if reported is not None:
+        response["ChecksumSHA256"] = reported
+    monkeypatch.setattr(storage._client, "head_object", lambda **_: response)
+
+    head = await storage.head("uploads/2026/11/x.png")
+
+    assert head is not None
+    assert head.checksum_sha256 == expected
