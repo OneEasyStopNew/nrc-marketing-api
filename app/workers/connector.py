@@ -261,7 +261,7 @@ class ImageGenerationHandler:
         if job.deadline_at <= step.now and not accepted:
             await _give_up(db, job, DEADLINE_EXCEEDED, "The job did not finish in time.")
             return None
-        provider = step.providers.get(job.provider or "")
+        provider = _provider_for_job(step.providers, job)
         if provider is None:
             # Live mode never falls back to the simulator, and the simulator never runs live jobs.
             await _give_up(db, job, PROVIDER_NOT_CONFIGURED, "No provider for this job.")
@@ -1048,7 +1048,23 @@ def build_providers(settings: Settings) -> dict[str, ImageProvider]:
     if settings.generation_mode == "simulator":
         return {SIMULATOR_NAME: SimulatedImageProvider()}
     check_live_mode(settings)
-    return {HIGGSFIELD_NAME: create_provider(settings)}
+    # One provider per enabled model: each holds one model's pinned settings.
+    return {
+        provider_key(HIGGSFIELD_NAME, model): create_provider(settings, model=model)
+        for model in settings.enabled_image_models
+    }
+
+
+def provider_key(name: str, model: str) -> str:
+    # Providers are registered per model, so a job runs only on the model it was accepted for.
+    return f"{name}:{model}"
+
+
+def _provider_for_job(providers: Mapping[str, ImageProvider], job: Job) -> ImageProvider | None:
+    # A provider registered under its name alone serves one model (the simulator, test fakes);
+    # _submit still fails the job MODEL_CHANGED if that model differs. Never another model.
+    name, model = job.provider or "", job.model or ""
+    return providers.get(provider_key(name, model)) or providers.get(name)
 
 
 def load_provider_secrets(settings: Settings) -> Settings:

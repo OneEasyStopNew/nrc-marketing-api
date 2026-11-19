@@ -112,7 +112,12 @@ async def test_submit_sends_documented_request_and_parses() -> None:
     assert str(sent.url) == f"https://api.higgsfield.ai/{MODEL}"
     assert sent.headers["Authorization"] == f"Key {KEY_ID}:{KEY_SECRET}"
     assert sent.headers["Idempotency-Key"] == "job-key-1"
-    assert json.loads(sent.content) == {"prompt": PROMPT, "aspect_ratio": "4:3"}
+    # The pinned model always sends its approved resolution (PINNED_MODELS).
+    assert json.loads(sent.content) == {
+        "prompt": PROMPT,
+        "aspect_ratio": "4:3",
+        "resolution": "1080p",
+    }
 
 
 async def test_same_key_resend_returns_same_request_id() -> None:
@@ -518,7 +523,12 @@ async def test_estimate_cost_posts_same_body_without_idempotency_key() -> None:
     assert str(sent.url) == f"https://api.higgsfield.ai/estimate/{MODEL}"
     assert "Idempotency-Key" not in sent.headers
     assert sent.headers["Authorization"] == f"Key {KEY_ID}:{KEY_SECRET}"
-    assert json.loads(sent.content) == {"prompt": PROMPT, "aspect_ratio": "4:3"}
+    # The pinned model always sends its approved resolution (PINNED_MODELS).
+    assert json.loads(sent.content) == {
+        "prompt": PROMPT,
+        "aspect_ratio": "4:3",
+        "resolution": "1080p",
+    }
 
 
 async def test_unsupported_aspect_ratio_fails_before_any_request() -> None:
@@ -548,7 +558,7 @@ async def test_unprobed_model_refuses_to_submit_but_may_estimate() -> None:
         return httpx.Response(200, json={"usd": "0.094"})
 
     provider = make(handler, model=UNPROBED_MODEL)
-    with pytest.raises(ProviderConfigError, match="SUPPORTED_ASPECT_RATIOS"):
+    with pytest.raises(ProviderConfigError, match="PINNED_MODELS"):
         await provider.submit(request())
     assert seen == []
 
