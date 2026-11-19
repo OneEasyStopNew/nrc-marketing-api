@@ -4,8 +4,9 @@ import asyncio
 import base64
 import hashlib
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -28,6 +29,14 @@ GENERATED_IMAGE_FOLDER = "generated-images"
 GENERATED_IMAGE_DOC_TYPE = "generated-image"
 # TODO(NRC-3): confirm retention class with Prabhu
 GENERATED_IMAGE_RETENTION = "operational"
+UPLOAD_FOLDER = "uploads"
+UPLOAD_DOC_TYPE = "upload"
+# TODO(NRC-3): confirm retention class with Prabhu
+UPLOAD_RETENTION = "operational"
+# Accepted upload MIME type to the extension its key carries.
+_UPLOAD_EXTENSIONS: Mapping[str, str] = {"image/png": "png", "image/jpeg": "jpg"}
+# HEAD responses have no body, so botocore reports the HTTP status as the error code.
+_MISSING_OBJECT_CODES = frozenset({"404", "NoSuchKey", "NoSuchVersion", "NotFound"})
 
 
 class StorageNotConfiguredError(RuntimeError):
@@ -50,12 +59,41 @@ class StoredObject:
     content_type: str
 
 
+@dataclass(frozen=True, slots=True)
+class PresignedUpload:
+    key: str
+    url: str
+    method: str
+    # Exactly what the browser must send with the PUT for the signature to match.
+    headers: Mapping[str, str]
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectHead:
+    size_bytes: int
+    version_id: str | None
+    # Lower-case hex, or None when the store reports no checksum.
+    checksum_sha256: str | None
+    content_type: str | None
+
+
+def new_upload_key(content_type: str) -> str:
+    # Callers validate the type first; this guards a programming error, not a job path.
+    ext = _UPLOAD_EXTENSIONS.get(content_type)
+    if ext is None:
+        raise ValueError(f"No upload extension for content type {content_type!r}")
+    now = datetime.now(UTC)
+    return f"{UPLOAD_FOLDER}/{now:%Y}/{now:%m}/{uuid4()}.{ext}"
+
+
 class ObjectStorage:
     def __init__(self, settings: Settings) -> None:
         if not settings.aws_s3_bucket:
             raise StorageNotConfiguredError("AWS_S3_BUCKET is not configured")
         self._bucket = settings.aws_s3_bucket
         self._max_url_ttl = settings.asset_url_ttl_seconds
+        self._max_upload_url_ttl = settings.upload_url_ttl_seconds
         # Credentials come from the profile or environment locally, and the IAM role on servers.
         session = boto3.Session(profile_name=settings.aws_profile)
         client_config = Config(
@@ -141,3 +179,67 @@ class ObjectStorage:
                 body.close()
         except BotoCoreError, ClientError:
             raise StorageError from None
+
+    async def presigned_put(
+        self,
+        key: str,
+        *,
+        content_type: str,
+        size_bytes: int,
+        checksum_sha256: str,
+        expires_in: int,
+    ) -> PresignedUpload:
+        ttl = min(expires_in, self._max_upload_url_ttl)
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl)
+        params: dict[str, Any] = {
+            "Bucket": self._bucket,
+            "Key": key,
+            "ContentType": content_type,
+            "ContentLength": size_bytes,
+            "ChecksumSHA256": base64.b64encode(bytes.fromhex(checksum_sha256)).decode("ascii"),
+            "Tagging": f"doc-type={UPLOAD_DOC_TYPE}&retention={UPLOAD_RETENTION}",
+        }
+        try:
+            url = await asyncio.to_thread(
+                self._client.generate_presigned_url,
+                "put_object",
+                Params=params,
+                ExpiresIn=ttl,
+            )
+        except BotoCoreError, ClientError:
+            raise StorageError from None
+        # The signed headers are content-length, content-type, host, x-amz-checksum-sha256 and
+        # x-amz-tagging (checked on a generated URL). The browser sets host itself and sends the
+        # real Content-Length, a forbidden header it can't be told to set: the signature only
+        # matches when that length equals the declared size, which is the point.
+        headers = {
+            "Content-Type": content_type,
+            "x-amz-checksum-sha256": params["ChecksumSHA256"],
+            "x-amz-tagging": params["Tagging"],
+        }
+        return PresignedUpload(
+            key=key, url=url, method="PUT", headers=headers, expires_at=expires_at
+        )
+
+    async def head(self, key: str, *, version_id: str | None = None) -> ObjectHead | None:
+        return await asyncio.to_thread(self._head, key, version_id)
+
+    def _head(self, key: str, version_id: str | None) -> ObjectHead | None:
+        params: dict[str, Any] = {"Bucket": self._bucket, "Key": key, "ChecksumMode": "ENABLED"}
+        if version_id:
+            params["VersionId"] = version_id
+        try:
+            response = self._client.head_object(**params)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") in _MISSING_OBJECT_CODES:
+                return None
+            raise StorageError from None
+        except BotoCoreError:
+            raise StorageError from None
+        checksum = response.get("ChecksumSHA256")
+        return ObjectHead(
+            size_bytes=response["ContentLength"],
+            version_id=response.get("VersionId"),
+            checksum_sha256=base64.b64decode(checksum).hex() if checksum else None,
+            content_type=response.get("ContentType"),
+        )
