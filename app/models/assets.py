@@ -43,7 +43,7 @@ class Asset(Base):
         ),
         CheckConstraint(
             "(origin = 'generated' AND creative_id IS NOT NULL AND creative_version IS NOT NULL"
-            " AND job_id IS NOT NULL AND upload_id IS NULL)"
+            " AND job_id IS NOT NULL AND upload_id IS NULL AND study_id IS NULL)"
             " OR (origin = 'uploaded' AND upload_id IS NOT NULL AND upload_id = id"
             " AND study_id IS NOT NULL"
             " AND job_id IS NULL)",

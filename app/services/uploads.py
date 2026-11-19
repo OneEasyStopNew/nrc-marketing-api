@@ -256,16 +256,23 @@ async def _presign(
 
 async def _fresh_target(
     db: AsyncSession, upload: MediaUpload, storage: ObjectStorage, settings: Settings
-) -> PresignedUpload:
-    # A new URL for the same key, checksum and owner; the old one simply expires.
+) -> PresignedUpload | None:
+    """A new URL for the same key, checksum and owner; the old one simply expires.
+
+    Commits. Returns None, and refreshes `upload`, when a concurrent complete moved the upload on
+    after it was read: a URL is only handed out while the file is still awaited.
+    """
     target = await _presign(storage, upload, settings)
-    await db.execute(
+    stored = await db.scalar(
         update(MediaUpload)
         .where(MediaUpload.id == upload.id, MediaUpload.state == UploadState.PENDING_UPLOAD)
         .values(upload_url_expires_at=target.expires_at, updated_at=func.now())
+        .returning(MediaUpload.id)
         .execution_options(synchronize_session=False)
     )
-    return target
+    await db.commit()
+    await db.refresh(upload)
+    return target if stored is not None else None
 
 
 async def create_upload(
@@ -296,7 +303,6 @@ async def create_upload(
         target = None
         if upload.state is UploadState.PENDING_UPLOAD and upload.created_by == ctx.principal.sub:
             target = await _fresh_target(db, upload, storage, settings)
-            await db.commit()
         return _to_read(upload, datetime.now(UTC), target), True
 
     _check_limits(body, settings)
@@ -346,8 +352,8 @@ async def reissue_upload_url(
     if upload.state is not UploadState.PENDING_UPLOAD:
         raise UploadNotPendingError(details={"status": upload.state.value})
     target = await _fresh_target(db, upload, storage, settings)
-    await db.commit()
-    await db.refresh(upload)
+    if target is None:
+        raise UploadNotPendingError(details={"status": upload.state.value})
     return _to_read(upload, datetime.now(UTC), target)
 
 
@@ -400,6 +406,13 @@ async def complete_upload(
         .execution_options(synchronize_session=False)
     )
     await db.commit()
+    if moved is not None and head.version_id is None:
+        # The worker then reads whatever the key holds, not a pinned version.
+        logger.warning(
+            "upload stored with no version id; is the bucket versioned? upload=%s tenant=%s",
+            upload.id,
+            upload.tenant_id,
+        )
     if moved is not None:
         logger.info(
             "upload completed upload=%s tenant=%s state=%s",

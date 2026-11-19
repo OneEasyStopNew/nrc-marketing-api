@@ -281,7 +281,9 @@ and demo. The flow for the frontend and the examples are in `contracts/examples/
 - Image: `docker build -t nrc-marketing .`. Run `alembic upgrade head` as a separate release step.
 - Uploads (NRC-3): bucket CORS allowing `PUT` from the frontend origin with the headers that
   `POST /assets/uploads` returns; the API's role signs the uploads, so it needs `s3:PutObject`,
-  `s3:PutObjectTagging` and `s3:GetObject` (for the completion check) on `uploads/`; the media
+  `s3:PutObjectTagging` and `s3:GetObject` (for the completion check) on `uploads/`, plus
+  `s3:ListBucket` limited to that prefix (without it S3 answers a not-yet-uploaded file with 403,
+  and complete returns 503 instead of the retryable 409); the media
   worker's role needs `s3:GetObject` and `s3:GetObjectVersion` there; a real malware scanner (until then the media worker refuses
   to start there, so uploads stay `QUARANTINED`).
 

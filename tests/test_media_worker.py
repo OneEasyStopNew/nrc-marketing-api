@@ -18,6 +18,7 @@ import httpx
 import pytest
 from PIL import Image
 from sqlalchemy import Row, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.api.deps import get_optional_storage, get_storage
@@ -31,7 +32,7 @@ from app.services.scanning import (
 )
 from app.services.storage import ObjectStorage, StorageError
 from app.workers import media as media_worker
-from app.workers.common import WorkerConfigError
+from app.workers.common import WorkerConfigError, backoff_seconds
 from app.workers.media import build_dependencies, run_once
 from tests.conftest import (
     APP_ROLE,
@@ -915,3 +916,104 @@ async def test_a_scan_longer_than_the_lease_keeps_the_upload(
     assert (row.attempts, row.failed_attempts) == (1, 0)
     assert scanner.calls == 1
     assert len(await _assets(connection, world.a)) == 1
+
+
+def test_backoff_stays_bounded_after_many_retries(settings: Settings) -> None:
+    # Regression (final review, NRC-3): an upload waiting out a long scanner outage is leased
+    # over a thousand times inside the retry window, and 2.0 ** 1024 overflowed.
+    assert 0 < backoff_seconds(2000, settings) <= settings.worker_backoff_max_seconds
+
+
+@needs_seaweedfs
+async def test_a_scanner_that_never_answers_defers_the_upload(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    sessions: Sessions,
+    storage: ObjectStorage,
+    simulator: SimulatedScanner,
+    settings: Settings,
+) -> None:
+    # Regression (final review, NRC-3): with the lease renewed in the background, a scan that
+    # never returned held the upload (and the worker) forever.
+    quick = settings.model_copy(update={"malware_scan_timeout_seconds": 1})
+    asset_id = await _quarantined(client, auth, world.a)
+
+    async def hang(_: int) -> None:
+        await asyncio.sleep(60)
+
+    scanner = FakeScanner(simulator, hang)
+    assert await _run(sessions, storage, scanner, quick) == 1
+
+    row = await _row(connection, world.a, asset_id)
+    assert (row.state, row.reason_code) == ("QUARANTINED", "SCAN_UNAVAILABLE")
+    assert (row.attempts, row.failed_attempts) == (1, 0)
+    assert row.lease_owner is None
+    assert await _assets(connection, world.a) == []
+
+
+@needs_seaweedfs
+async def test_lease_renewal_survives_a_transient_database_error(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    sessions: Sessions,
+    storage: ObjectStorage,
+    simulator: SimulatedScanner,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (final review, NRC-3): one failed renewal stopped renewing for good, so the
+    # lease expired during a long scan and a valid file could end up INSPECTION_FAILED.
+    short_lease = settings.model_copy(update={"worker_lease_seconds": LEASE_MIN_SECONDS})
+    asset_id = await _quarantined(client, auth, world.a, _png())
+    real_change = media_worker._change
+    renewals = 0
+
+    async def blip_once(db: Any, run: Any, upload_id: UUID, values: dict[str, Any]) -> None:
+        nonlocal renewals
+        if set(values) == {"leased_until"}:
+            renewals += 1
+            if renewals == 1:
+                raise OperationalError("renew lease", {}, Exception("connection blip"))
+        await real_change(db, run, upload_id, values)
+
+    monkeypatch.setattr(media_worker, "_change", blip_once)
+
+    async def slow(_: int) -> None:
+        await asyncio.sleep(LEASE_MIN_SECONDS + 1.5)
+
+    scanner = FakeScanner(simulator, slow)
+    assert await _run(sessions, storage, scanner, short_lease, max_uploads=1) == 1
+
+    assert renewals >= 2
+    row = await _row(connection, world.a, asset_id)
+    assert row.state == "READY"
+    assert (row.attempts, row.failed_attempts) == (1, 0)
+
+
+@needs_seaweedfs
+async def test_a_type_no_longer_accepted_is_rejected_at_inspection(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    sessions: Sessions,
+    storage: ObjectStorage,
+    simulator: SimulatedScanner,
+    settings: Settings,
+) -> None:
+    # Accepted when the upload was created, then removed from UPLOAD_IMAGE_TYPES before the
+    # worker got to it: the worker applies the current list.
+    asset_id = await _quarantined(
+        client, auth, world.a, _jpeg(), mime_type="image/jpeg", name="[SYNTHETIC] photo.jpg"
+    )
+    png_only = settings.model_copy(update={"upload_image_types": ("image/png",)})
+
+    assert await _run(sessions, storage, simulator, png_only) == 1
+
+    row = await _row(connection, world.a, asset_id)
+    assert (row.state, row.reason_code) == ("REJECTED", "MEDIA_UNSUPPORTED_TYPE")
+    assert await _assets(connection, world.a) == []

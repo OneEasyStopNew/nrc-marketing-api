@@ -7,10 +7,11 @@ uploads that passed.
 
 assets (expand only): creative_id, creative_version and job_id become nullable, because an
 upload may have no creative and never has a job. New nullable study_id, upload_id and name. The
-lineage_matches_origin CHECK keeps generated rows exactly as strict as before (creative, version
-and job required) and requires upload_id = id and a study on uploaded rows. Existing rows are all
-generated and already satisfy it. study_id is for uploads only: generated rows reach their study
-through their creative, so there is nothing to backfill (and no need to lift FORCE RLS here).
+lineage_matches_origin CHECK keeps generated rows as strict as before (creative, version and job
+required, and no study_id of their own) and requires upload_id = id and a study on uploaded rows.
+Existing rows are all generated and already satisfy it. study_id is for uploads only: generated
+rows reach their study through their creative, so there is nothing to backfill (and no need to
+lift FORCE RLS here).
 
 The media worker leases due uploads across tenants only through lease_media_uploads(), a
 SECURITY DEFINER function returning ids, the same scheme as lease_outbox_events(). It connects
@@ -41,7 +42,7 @@ UPLOAD_STATES = ("PENDING_UPLOAD", "QUARANTINED", "SCANNING", "READY", "REJECTED
 DUE = sa.text("state IN ('QUARANTINED', 'SCANNING')")
 LINEAGE_CHECK = (
     "(origin = 'generated' AND creative_id IS NOT NULL AND creative_version IS NOT NULL"
-    " AND job_id IS NOT NULL AND upload_id IS NULL)"
+    " AND job_id IS NOT NULL AND upload_id IS NULL AND study_id IS NULL)"
     " OR (origin = 'uploaded' AND upload_id IS NOT NULL AND upload_id = id"
     " AND study_id IS NOT NULL"
     " AND job_id IS NULL)"

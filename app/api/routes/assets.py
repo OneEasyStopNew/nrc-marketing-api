@@ -4,7 +4,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
 from pydantic import AwareDatetime
 
 from app.api.deps import (
@@ -69,12 +69,16 @@ async def create_upload(
     idempotency_key: IdempotencyKey,
     storage: StorageDep,
     settings: SettingsDep,
+    request: Request,
     response: Response,
 ) -> UploadRead:
     upload, replayed = await uploads.create_upload(
         db, ctx, body, idempotency_key, storage, settings
     )
-    response.headers["Location"] = f"/v1/marketing/assets/uploads/{upload.asset_id}"
+    # The poll route's own path, so the API prefix has one source (app.main.API_PREFIX).
+    response.headers["Location"] = request.app.url_path_for(
+        "get_upload", asset_id=str(upload.asset_id)
+    )
     if replayed:
         response.headers["Idempotent-Replayed"] = "true"
     return upload

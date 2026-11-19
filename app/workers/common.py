@@ -23,6 +23,7 @@ def process_owner() -> str:
 
 # Computed once, so every lease this process takes carries the same owner.
 DEFAULT_OWNER: Final = process_owner()
+_MAX_BACKOFF_EXPONENT: Final = 30
 
 
 class WorkerConfigError(Exception):
@@ -33,7 +34,10 @@ class WorkerConfigError(Exception):
 def backoff_seconds(attempt: int, settings: Settings) -> float:
     # Exponential from WORKER_BACKOFF_BASE_SECONDS up to WORKER_BACKOFF_MAX_SECONDS, with jitter
     # between 50% and 100% so many jobs don't retry in lockstep.
-    delay = settings.worker_backoff_base_seconds * 2.0 ** max(attempt - 1, 0)
+    # The exponent is capped: an upload waiting out a long outage is leased over a thousand
+    # times, and 2.0 ** 1024 overflows. 2 ** 30 times the base is past any allowed maximum.
+    exponent = min(max(attempt - 1, 0), _MAX_BACKOFF_EXPONENT)
+    delay = settings.worker_backoff_base_seconds * 2.0**exponent
     return min(settings.worker_backoff_max_seconds, delay) * _jitter.uniform(0.5, 1.0)
 
 

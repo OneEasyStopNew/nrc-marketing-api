@@ -141,6 +141,9 @@ class Settings(BaseSettings):
     # the live scanner lands, keep this setting for local use but add its implementation in
     # app.services.scanning.build_scanner and remove the live-mode refusal test named there.
     malware_scan_mode: Literal["simulator", "live"] = "live"
+    # Longest one malware scan may take before the upload waits and is retried
+    # (SCAN_UNAVAILABLE). Bounds a scanner that never answers.
+    malware_scan_timeout_seconds: int = Field(default=300, ge=10, le=3600)
     # Failed inspection attempts (a crash, an expired lease) before an upload is rejected as
     # INSPECTION_FAILED. Retryable scanner and storage outages are bounded separately.
     media_inspection_max_attempts: int = Field(default=3, ge=1, le=10)

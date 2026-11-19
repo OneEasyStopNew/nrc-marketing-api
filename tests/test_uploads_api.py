@@ -25,7 +25,8 @@ from app.core.config import Settings, get_settings
 from app.models import MediaUpload
 from app.models.enums import Channel, IdentifiablePerson
 from app.schemas.uploads import AuthorizationStatus
-from app.services.storage import ObjectHead, ObjectStorage, StorageError
+from app.services import uploads as uploads_service
+from app.services.storage import ObjectHead, ObjectStorage, PresignedUpload, StorageError
 from app.services.uploads import media_authorization
 from app.workers.connector import run_once
 from tests.conftest import (
@@ -430,6 +431,36 @@ async def test_complete_rejects_a_stored_file_that_differs_from_the_declaration(
     row = await _upload_row(connection, world, upload["asset_id"])
     assert row.state == "REJECTED"
     assert row.available_at is None
+
+
+async def test_complete_on_an_unversioned_bucket_warns(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Without a version id the worker reads whatever the key holds then, not a pinned version;
+    # say so, as save_generated_image does.
+    content = _png()
+    upload = await _created(client, auth, world, content)
+
+    async def head(self: ObjectStorage, key: str, *, version_id: str | None = None) -> ObjectHead:
+        return ObjectHead(
+            size_bytes=len(content),
+            checksum_sha256=hashlib.sha256(content).hexdigest(),
+            version_id=None,
+            content_type="image/png",
+        )
+
+    monkeypatch.setattr(ObjectStorage, "head", head)
+    with caplog.at_level(logging.WARNING, logger="app.services.uploads"):
+        response = await _complete(client, auth, world, upload["asset_id"])
+
+    assert response.status_code == 202
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("no version id" in m and upload["asset_id"] in m for m in warnings)
+    assert all(BUCKET not in m and "uploads/" not in m for m in warnings)
 
 
 async def test_storage_failure_on_complete_is_503_and_leaves_the_upload_pending(
@@ -838,6 +869,64 @@ async def test_reissue_gives_a_new_url_for_the_same_object_until_completed(
     assert late.status_code == 409
     assert late.json()["code"] == "UPLOAD_NOT_PENDING"
     assert late.json()["details"] == {"status": "QUARANTINED"}
+
+
+@pytest.fixture
+def completes_while_signing(
+    monkeypatch: pytest.MonkeyPatch, connection: AsyncConnection, world: World
+) -> None:
+    # A complete that commits between reading the pending upload and storing the new URL.
+    real_presign = uploads_service._presign
+
+    async def presign_then_complete(
+        storage: ObjectStorage, upload: MediaUpload, settings: Settings
+    ) -> PresignedUpload:
+        target = await real_presign(storage, upload, settings)
+        await _owner_sql(
+            connection,
+            world.a.tenant_id,
+            "UPDATE media_uploads SET state = 'QUARANTINED' WHERE id = :id",
+            {"id": upload.id},
+        )
+        return target
+
+    monkeypatch.setattr(uploads_service, "_presign", presign_then_complete)
+
+
+async def test_reissue_racing_a_complete_is_409_without_a_url(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    request: pytest.FixtureRequest,
+) -> None:
+    upload = await _created(client, auth, world)
+    request.getfixturevalue("completes_while_signing")
+
+    response = await _reissue(client, auth, world, upload["asset_id"])
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "UPLOAD_NOT_PENDING"
+    assert response.json()["details"] == {"status": "QUARANTINED"}
+    assert "upload" not in response.json()
+
+
+async def test_create_replay_racing_a_complete_returns_no_url(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    request: pytest.FixtureRequest,
+) -> None:
+    content = _png()
+    first = await _create(client, auth, world, content, key="replay-race")
+    assert first.status_code == 201
+    request.getfixturevalue("completes_while_signing")
+
+    replay = await _create(client, auth, world, content, key="replay-race")
+
+    assert replay.status_code == 201
+    assert replay.headers["Idempotent-Replayed"] == "true"
+    assert replay.json()["status"] == "QUARANTINED"
+    assert replay.json()["upload"] is None
 
 
 async def test_reissue_of_an_unknown_upload_is_404(

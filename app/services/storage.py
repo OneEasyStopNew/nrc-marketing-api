@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Fixed parts of the object layout and tags, not per environment: bucket lifecycle rules and
 # validation (NRC-7) match on them.
-_ALLOWED_EXTENSIONS = frozenset({"png", "jpg"})
+_ALLOWED_EXTENSIONS = frozenset(IMAGE_EXTENSIONS.values())
 GENERATED_IMAGE_FOLDER = "generated-images"
 GENERATED_IMAGE_DOC_TYPE = "generated-image"
 # TODO(NRC-3, owner Firoz): confirm the retention class with Prabhu, then set it here

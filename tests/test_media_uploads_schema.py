@@ -259,6 +259,8 @@ async def test_an_upload_that_passed_can_become_an_asset(
         "uploaded-without-upload",
         "uploaded-without-study",
         "uploaded-id-differs-from-upload",
+        "generated-with-a-study",
+        "uploaded-with-a-job",
     ],
 )
 async def test_asset_lineage_must_match_its_origin(
@@ -273,6 +275,22 @@ async def test_asset_lineage_must_match_its_origin(
         "uploaded-id-differs-from-upload": (
             uuid4(),
             {"origin": "uploaded", "upload_id": upload_id, "study_id": study},
+        ),
+        # Readers match studies on COALESCE(assets.study_id, creative's study): a generated row
+        # with its own study_id could show up in a study its creative is not in.
+        "generated-with-a-study": (
+            uuid4(),
+            {
+                "origin": "generated",
+                "creative_id": uuid4(),
+                "creative_version": 1,
+                "job_id": uuid4(),
+                "study_id": study,
+            },
+        ),
+        "uploaded-with-a-job": (
+            upload_id,
+            {"origin": "uploaded", "upload_id": upload_id, "study_id": study, "job_id": uuid4()},
         ),
     }
     asset_id, columns = cases[case]

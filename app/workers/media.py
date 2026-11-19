@@ -177,8 +177,10 @@ async def _kept_leased(run: _Run, upload_id: UUID, tenant_id: UUID) -> AsyncIter
 
     A slow object read (the S3 client retries) or a real scanner can outlast one lease; without
     renewal another worker would take the upload over and count a failure, and enough of those
-    reject a valid file. Renewal stops on a lost lease or a database error; the fenced writes
-    afterwards then fail safely instead of acting on a lease this worker no longer holds.
+    reject a valid file. Renewal stops on a lost lease (the fenced writes afterwards then fail
+    safely); after any other error it logs and tries again at the next interval, so one
+    database blip does not cost the lease. It ends when the examination does, which the scan
+    timeout and the storage client's timeouts bound.
     """
 
     async def renew() -> None:
@@ -193,9 +195,10 @@ async def _kept_leased(run: _Run, upload_id: UUID, tenant_id: UUID) -> AsyncIter
                 return
             except Exception:
                 logger.exception(
-                    "upload lease renewal failed upload=%s tenant=%s", upload_id, tenant_id
+                    "upload lease renewal failed, retrying upload=%s tenant=%s",
+                    upload_id,
+                    tenant_id,
                 )
-                return
 
     task = asyncio.create_task(renew())
     try:
@@ -243,10 +246,12 @@ async def _examine(run: _Run, upload: MediaUpload) -> _Found:
     if info.mime_type not in settings.upload_image_types:
         return _Found(reject="MEDIA_UNSUPPORTED_TYPE")
     try:
-        verdict = await run.scanner.scan(
-            content, bucket=upload.bucket, key=upload.s3_key, version_id=upload.s3_version_id
-        )
-    except ScanUnavailableError:
+        # The lease is renewed while this runs, so only this timeout ends a scan that hangs.
+        async with asyncio.timeout(settings.malware_scan_timeout_seconds):
+            verdict = await run.scanner.scan(
+                content, bucket=upload.bucket, key=upload.s3_key, version_id=upload.s3_version_id
+            )
+    except ScanUnavailableError, TimeoutError:
         return _Found(retry="SCAN_UNAVAILABLE")
     return _Found(info=info, verdict=verdict)
 
