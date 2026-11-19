@@ -111,6 +111,11 @@ class ObjectStorage:
             config=client_config,
         )
 
+    @property
+    def bucket(self) -> str:
+        # Recorded on rows that point at an object, so a key is never read from another bucket.
+        return self._bucket
+
     async def save_generated_image(
         self, content: bytes, *, ext: str, content_type: str
     ) -> StoredObject:
