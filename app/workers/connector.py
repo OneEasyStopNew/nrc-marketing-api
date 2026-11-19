@@ -80,6 +80,7 @@ from app.workers.common import (
     stop_on_signals,
     worker_database_url,
 )
+from app.workers.limits import guard_providers, submit_slot_free
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +297,17 @@ class ImageGenerationHandler:
             values["provider_cost_estimate_usd_micros"] = micros
             set_committed_value(job, "provider_cost_estimate_usd_micros", micros)
         await step.heartbeat(db)
+        if not await submit_slot_free(db, str(job.provider), step.settings):
+            # The provider is at its concurrency cap: wait without counting a failure. The guarded
+            # no-op move keeps a fresh estimate, so the job is never priced twice.
+            await transition(
+                db,
+                job.id,
+                allowed_from={ExecutionState.QUEUED, ExecutionState.RUNNING},
+                to=job.state,
+                **values,
+            )
+            return backoff_seconds(step.event_attempts, step.settings)
         moved = await transition(
             db,
             job.id,
@@ -1060,7 +1072,8 @@ async def run_forever(settings: Settings) -> None:
     settings = await asyncio.to_thread(load_provider_secrets, settings)
     providers = build_providers(settings)
     try:
-        await _serve(settings, providers, database_url)
+        # The originals are closed below; the guarded ones only add the circuit breaker.
+        await _serve(settings, guard_providers(providers, settings), database_url)
     finally:
         await close_providers(providers)
     logger.info("connector worker stopped")
