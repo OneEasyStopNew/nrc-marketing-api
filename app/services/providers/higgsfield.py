@@ -23,7 +23,6 @@ import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal
 from urllib.parse import urlsplit
 
@@ -61,6 +60,9 @@ from app.services.providers.base import (
     StatusResult,
     SubmitResult,
 )
+from app.services.providers.pinned_models import (
+    PINNED_MODELS,
+)
 
 # Type stubs are a dev dependency only; never import them at runtime.
 if TYPE_CHECKING:
@@ -70,16 +72,7 @@ logger = logging.getLogger(__name__)
 
 # The Secrets Manager secret's JSON entry; the same name as the setting it fills.
 KEY_ENTRY_NAME: Final = "HIGGSFIELD_API_KEY"
-# Aspect ratios each model accepts, by model id, from a free live /estimate probe; any other
-# ratio is a 400. Probe a new HIGGSFIELD_MODEL with the smoke script's estimate before adding it.
-SUPPORTED_ASPECT_RATIOS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
-    {
-        # 10 Nov 2026.
-        "higgsfield-ai/soul/v2/standard": frozenset(
-            {"9:16", "16:9", "4:3", "3:4", "1:1", "2:3", "3:2"}
-        ),
-    }
-)
+
 
 # Protocol facts from the Higgsfield docs, not tunable: header and id formats.
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[\x21-\x7e]{1,255}$")
@@ -266,9 +259,9 @@ class HiggsfieldProvider:
         # Refused rather than left to Higgsfield: a model that silently ignores a parameter (as
         # every probed one does with width/height) would bill for an image of the wrong shape.
         # The free estimate stays allowed, since it is how a model's ratios are probed.
-        if self.model not in SUPPORTED_ASPECT_RATIOS:
+        if self.model not in PINNED_MODELS:
             raise ProviderConfigError(
-                f"Model {self.model!r} has no probed aspect ratios in SUPPORTED_ASPECT_RATIOS"
+                f"Model {self.model!r} has no approved settings in PINNED_MODELS"
             )
         response = await self._send(
             "POST",
@@ -295,16 +288,24 @@ class HiggsfieldProvider:
     def _body(self, request: ImageRequest) -> dict[str, str]:
         # Checked here so neither the estimate nor the submit is sent for an unsupported ratio.
         # An unprobed model only estimates (submit refuses it), so Higgsfield validates that.
-        supported = SUPPORTED_ASPECT_RATIOS.get(self.model)
-        if supported is not None and request.aspect_ratio not in supported:
+        pinned = PINNED_MODELS.get(self.model)
+        if pinned is None:
+            # Unpinned models are only ever estimated (the smoke script's probe).
+            body = {"prompt": request.prompt, "aspect_ratio": request.aspect_ratio}
+            if self._resolution is not None:
+                body["resolution"] = self._resolution
+            return body
+        if request.aspect_ratio not in pinned.aspect_ratios:
             raise ProviderRejectedError(
                 f"The model does not accept aspect ratio {request.aspect_ratio!r}"
             )
-        body = {"prompt": request.prompt, "aspect_ratio": request.aspect_ratio}
-        if self._resolution is not None:
-            body["resolution"] = self._resolution
-        # The API takes no width/height; sizing is by aspect_ratio (and resolution).
-        return body
+        if len(request.prompt) > pinned.max_prompt_chars:
+            raise ProviderRejectedError(
+                f"The prompt is longer than the model's {pinned.max_prompt_chars} characters"
+            )
+        # Pinned settings last, so nothing can override them. The API takes no width/height;
+        # sizing is by aspect_ratio (and the pinned resolution).
+        return {"prompt": request.prompt, "aspect_ratio": request.aspect_ratio, **pinned.params}
 
     async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
         # Not a submission: no Idempotency-Key, and nothing billable can happen.
@@ -527,9 +528,13 @@ def missing_live_settings(settings: Settings) -> list[str]:
     ]
     if missing:
         problems.append(f"missing {', '.join(missing)}")
-    elif settings.higgsfield_model not in SUPPORTED_ASPECT_RATIOS:
-        # Submit refuses such a model, so start-up refuses it before any job is estimated.
-        problems.append("HIGGSFIELD_MODEL is not in SUPPORTED_ASPECT_RATIOS (probe it first)")
+        return problems
+    # Submit refuses an unpinned model, so start-up refuses it before any job is estimated.
+    unpinned = [model for model in settings.enabled_image_models if model not in PINNED_MODELS]
+    if unpinned:
+        problems.append(f"not in PINNED_MODELS (probe them first): {', '.join(unpinned)}")
+    if settings.higgsfield_model not in settings.enabled_image_models:
+        problems.append("HIGGSFIELD_MODEL (the default) is not listed in HIGGSFIELD_MODELS")
     return problems
 
 

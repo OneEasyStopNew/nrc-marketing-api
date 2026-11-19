@@ -1202,7 +1202,7 @@
             }
           },
           "422": {
-            "description": "Invalid fields; see details.fields.",
+            "description": "Invalid fields, or GENERATION_REQUEST_INVALID: details.reason is MODEL_NOT_ENABLED, IMAGE_TEXT_REQUIRED or BRIEF_TOO_LONG (with max_brief_chars).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1243,6 +1243,76 @@
           },
           "429": {
             "description": "GENERATION_LIMIT_REACHED: active jobs or daily credits (retryable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/generation-models": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Image models a job may choose, with the brief room each leaves (F24)",
+        "operationId": "list_generation_models",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationModelList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1851,6 +1921,19 @@
           },
           "kind": {
             "$ref": "#/components/schemas/JobKind"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model",
+            "description": "One of GET /generation-models; omitted means that list's default."
           }
         },
         "additionalProperties": false,
@@ -2427,6 +2510,85 @@
         ],
         "title": "GenerationEligibility",
         "description": "Whether image generation may start. Only a brief that passed validation is eligible."
+      },
+      "GenerationModel": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "text_in_image": {
+            "type": "boolean",
+            "title": "Text In Image",
+            "description": "True: used only for drafts with text to show in the image."
+          },
+          "aspect_ratios": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aspect Ratios"
+          },
+          "max_brief_chars": {
+            "type": "integer",
+            "title": "Max Brief Chars",
+            "description": "Longest brief this model accepts; the rest is kept for the style template."
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "Name to show in the model picker."
+          },
+          "estimated_usd_per_image": {
+            "type": "string",
+            "title": "Estimated Usd Per Image",
+            "description": "Provider estimate in USD for one image at 1:1 with a typical prompt, as a decimal string. An estimate, not the billed amount; each job is estimated exactly before it is submitted."
+          },
+          "price_checked_at": {
+            "type": "string",
+            "format": "date",
+            "title": "Price Checked At",
+            "description": "Day the estimate was last checked."
+          },
+          "price_is_fixed": {
+            "type": "boolean",
+            "title": "Price Is Fixed",
+            "description": "False: token-priced, so the estimate varies with the prompt and ratio."
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "is_default",
+          "text_in_image",
+          "aspect_ratios",
+          "max_brief_chars",
+          "label",
+          "estimated_usd_per_image",
+          "price_checked_at",
+          "price_is_fixed"
+        ],
+        "title": "GenerationModel"
+      },
+      "GenerationModelList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GenerationModel"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "GenerationModelList"
       },
       "ImageRegion": {
         "properties": {

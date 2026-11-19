@@ -12,14 +12,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
 from app.core.config import Settings
-from app.core.errors import DependencyUnavailableError, GenerationLimitError, NotFoundError
+from app.core.errors import (
+    DependencyUnavailableError,
+    GenerationLimitError,
+    GenerationRequestError,
+    NotFoundError,
+)
 from app.db.session import bind_tenant
 from app.models import Creative, CreativeVersion, CreditReservation, Job, OutboxEvent, Tenant
 from app.models.enums import FORMAT_SPECS, ExecutionState, FormatSpec, JobStage
 from app.models.jobs import ReservationState
-from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobKind, JobRead
+from app.schemas.jobs import (
+    CreativeJobCreate,
+    GenerationModel,
+    GenerationModelList,
+    JobAccepted,
+    JobKind,
+    JobRead,
+)
 from app.services import generation_checks, idempotency
 from app.services.providers.base import HIGGSFIELD_NAME
+from app.services.providers.pinned_models import PINNED_MODELS, max_brief_chars
 from app.services.providers.simulator import SIMULATOR_MODEL, SIMULATOR_NAME
 
 logger = logging.getLogger(__name__)
@@ -70,10 +83,13 @@ async def accept_creative_job(
         ).scalar_one()
         return JobAccepted(job_id=existing_id, state=state), True
 
-    provider, model = _provider_for(settings)
+    chosen = _choose_model(settings, data.model)
+    provider, model = _provider_for(settings, chosen)
     eligible = await generation_checks.assert_generation_eligible(
         db, ctx, data.creative_id, data.creative_version
     )
+    if chosen is not None:
+        await _check_request_fits(db, ctx.tenant_id, data, chosen)
     # Serialise admission per tenant, so two requests cannot both take the last slot.
     await db.execute(
         select(func.pg_advisory_xact_lock(func.hashtextextended(f"generation:{ctx.tenant_id}", 0)))
@@ -274,13 +290,71 @@ async def jobs_awaiting_review(db: AsyncSession) -> list[tuple[UUID, UUID]]:
     return found
 
 
-def _provider_for(settings: Settings) -> tuple[str, str]:
-    # Live mode never falls back to the simulator.
+def list_generation_models(settings: Settings) -> GenerationModelList:
+    # The enabled models with their approved settings, default first as configured.
+    return GenerationModelList(
+        items=[
+            GenerationModel(
+                model=model,
+                is_default=model == settings.higgsfield_model,
+                text_in_image=PINNED_MODELS[model].text_in_image,
+                aspect_ratios=sorted(PINNED_MODELS[model].aspect_ratios),
+                max_brief_chars=max_brief_chars(model),
+                label=PINNED_MODELS[model].label,
+                estimated_usd_per_image=PINNED_MODELS[model].estimated_usd_per_image,
+                price_checked_at=PINNED_MODELS[model].price_checked_at,
+                price_is_fixed=PINNED_MODELS[model].price_is_fixed,
+            )
+            for model in settings.enabled_image_models
+            if model in PINNED_MODELS
+        ]
+    )
+
+
+def _choose_model(settings: Settings, requested: str | None) -> str | None:
+    # The requested model, or the default; only enabled, pinned models. Never another model.
+    model = requested or settings.higgsfield_model
+    if model is None:
+        return None
+    if model not in settings.enabled_image_models or model not in PINNED_MODELS:
+        raise GenerationRequestError(
+            "This image model is not available.", details={"reason": "MODEL_NOT_ENABLED"}
+        )
+    return model
+
+
+def _provider_for(settings: Settings, model: str | None) -> tuple[str, str]:
+    # Live mode never falls back to the simulator; the simulator runs whichever model was chosen.
     if settings.generation_mode == "simulator":
         return SIMULATOR_NAME, SIMULATOR_MODEL
-    if settings.higgsfield_model is None:
+    if model is None:
         raise DependencyUnavailableError("Image generation is not configured.")
-    return HIGGSFIELD_NAME, settings.higgsfield_model
+    return HIGGSFIELD_NAME, model
+
+
+async def _check_request_fits(
+    db: AsyncSession, tenant_id: UUID, data: CreativeJobCreate, model: str
+) -> None:
+    # Drafts have no image-text field yet (drafts are Dinesh's), so every draft is no-text mode:
+    # the text-in-image model needs that field and its validation first.
+    if PINNED_MODELS[model].text_in_image:
+        raise GenerationRequestError(
+            "This model is only for images with text; add the text to show in the image first.",
+            details={"reason": "IMAGE_TEXT_REQUIRED"},
+        )
+    brief = await db.scalar(
+        select(func.char_length(CreativeVersion.prompt)).where(
+            CreativeVersion.tenant_id == tenant_id,
+            CreativeVersion.creative_id == data.creative_id,
+            CreativeVersion.version == data.creative_version,
+        )
+    )
+    limit = max_brief_chars(model)
+    if brief is not None and brief > limit:
+        raise GenerationRequestError(
+            f"The brief is longer than this model's {limit} characters.",
+            details={"reason": "BRIEF_TOO_LONG", "max_brief_chars": limit},
+        )
 
 
 async def _check_limits(db: AsyncSession, tenant_id: UUID, settings: Settings) -> None:

@@ -1,0 +1,74 @@
+{
+  "_note": "F24 sample responses for frontend mocks (choosing an image model). All data is synthetic. Validated against the API schemas by tests/test_contract.py.",
+  "generation_models": {
+    "request": "GET /v1/marketing/generation-models",
+    "status": 200,
+    "schema": "GenerationModelList",
+    "body": {
+      "items": [
+        {
+          "model": "higgsfield-ai/soul/v2/standard",
+          "is_default": true,
+          "text_in_image": false,
+          "aspect_ratios": [
+            "1:1",
+            "16:9",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "9:16"
+          ],
+          "max_brief_chars": 3800,
+          "label": "Soul 2",
+          "estimated_usd_per_image": "0.006",
+          "price_checked_at": "2026-11-18",
+          "price_is_fixed": true
+        },
+        {
+          "model": "marketing-studio/image",
+          "is_default": false,
+          "text_in_image": false,
+          "aspect_ratios": [
+            "1:1",
+            "16:9",
+            "3:4",
+            "4:3",
+            "9:16"
+          ],
+          "max_brief_chars": 3800,
+          "label": "Marketing Studio",
+          "estimated_usd_per_image": "0.028",
+          "price_checked_at": "2026-11-18",
+          "price_is_fixed": false
+        },
+        {
+          "model": "ideogram/v4.0",
+          "is_default": false,
+          "text_in_image": true,
+          "aspect_ratios": [
+            "16:9",
+            "1:1",
+            "3:4",
+            "4:5",
+            "9:16"
+          ],
+          "max_brief_chars": 1448,
+          "label": "Ideogram 4.0",
+          "estimated_usd_per_image": "0.060",
+          "price_checked_at": "2026-11-18",
+          "price_is_fixed": true
+        }
+      ]
+    }
+  },
+  "job_with_model": {
+    "request": "POST /v1/marketing/creative-jobs  {\"creative_id\": \"...\", \"creative_version\": 1, \"kind\": \"image_generation\", \"model\": \"marketing-studio/image\"}",
+    "status": 202,
+    "schema": "JobAccepted",
+    "body": {
+      "job_id": "5d2f9a7e-1c3b-4e8a-9f60-2b7c4d8e1a35",
+      "state": "QUEUED"
+    }
+  }
+}
