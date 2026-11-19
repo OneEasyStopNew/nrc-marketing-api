@@ -139,6 +139,9 @@ class Settings(BaseSettings):
     # Failed inspection attempts (a crash, an expired lease) before an upload is rejected as
     # INSPECTION_FAILED. Retryable scanner and storage outages are bounded separately.
     media_inspection_max_attempts: int = Field(default=3, ge=1, le=10)
+    # How long after completion temporary scanner or storage outages may keep an upload waiting
+    # before it is rejected as INSPECTION_FAILED (the uploader can then upload again).
+    media_inspection_retry_window_seconds: int = Field(default=86_400, ge=600, le=604_800)
 
     @field_validator(
         "cognito_client_ids",
