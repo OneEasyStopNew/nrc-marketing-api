@@ -308,7 +308,7 @@ async def test_unapproved_labels_stop_the_run(connection: AsyncConnection, world
     async with as_tenant_owner(connection, world.a.tenant_id):
         await connection.execute(
             text(
-                "UPDATE policy_nodes SET approved = false"
+                "UPDATE policy_nodes SET approved = false, review_state = 'PROPOSED'"
                 " WHERE policy_bundle_id = :b AND node_key = 'CL-FDA-1'"
             ),
             {"b": bundle_id},

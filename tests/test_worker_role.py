@@ -173,6 +173,18 @@ async def test_worker_role_has_exactly_the_table_privileges_it_uses(
         "provider_spend": {"SELECT", "UPDATE"},
         # The media worker (NRC-3) moves uploads through inspection; the API creates them.
         "media_uploads": {"SELECT", "UPDATE"},
+        # The policy worker (NRC-4) reads the graph, writes clauses, embeddings and builds, and
+        # records audit events; its UPDATEs are column-level (next test).
+        "policy_bundles": {"SELECT"},
+        "policy_nodes": {"SELECT"},
+        "policy_edges": {"SELECT"},
+        "policy_rules": {"SELECT"},
+        "policy_rule_wordings": {"SELECT"},
+        "policy_sources": {"SELECT"},
+        "policy_source_clauses": {"SELECT", "INSERT"},
+        "policy_node_embeddings": {"SELECT", "INSERT"},
+        "policy_index_builds": {"SELECT", "INSERT", "UPDATE"},
+        "policy_audit_events": {"INSERT"},
     }
     rows = (
         await connection.execute(
@@ -185,6 +197,37 @@ async def test_worker_role_has_exactly_the_table_privileges_it_uses(
     granted: dict[str, set[str]] = {}
     for row in rows:
         granted.setdefault(row.table_name, set()).add(row.privilege_type)
+
+    assert granted == expected
+
+
+async def test_worker_updates_only_the_queue_columns_of_bundles_and_sources(
+    connection: AsyncConnection,
+) -> None:
+    # Column-level UPDATE: the worker moves work through its queue and changes nothing else (not
+    # the rules, the approver or the version).
+    lease = {"available_at", "leased_until", "lease_owner", "attempts", "failed_attempts"}
+    expected = {
+        "policy_bundles": {"lifecycle_state", "updated_at", "last_error_code", *lease},
+        "policy_sources": {
+            "extraction_state",
+            "extraction_error_code",
+            "extracted_at",
+            "page_count",
+            *lease,
+        },
+    }
+    granted: dict[str, set[str]] = {}
+    for table in expected:
+        rows = await connection.scalars(
+            text(
+                "SELECT a.attname FROM pg_attribute AS a WHERE a.attrelid = CAST(:t AS regclass)"
+                " AND a.attnum > 0 AND NOT a.attisdropped"
+                " AND has_column_privilege('marketing_worker', a.attrelid, a.attnum, 'UPDATE')"
+            ),
+            {"t": table},
+        )
+        granted[table] = set(rows.all())
 
     assert granted == expected
 

@@ -116,6 +116,11 @@ class OutboxEvent(Base):
     __tablename__ = "outbox_events"
     __table_args__ = (
         ForeignKeyConstraint(["tenant_id", "job_id"], ["jobs.tenant_id", "jobs.id"]),
+        # Only policy bundle events (NRC-4) have no job. left() rather than LIKE: no escaping.
+        CheckConstraint(
+            "job_id IS NOT NULL OR left(event_type, 14) = 'policy_bundle.'",
+            name="job_id_unless_policy_bundle",
+        ),
         # The lease filters by event type first, so unhandled types are never scanned.
         Index(
             "ix_outbox_events_due",
@@ -127,7 +132,8 @@ class OutboxEvent(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID]
-    job_id: Mapped[UUID]
+    # NULL only for policy_bundle.* events (CHECK job_id_unless_policy_bundle).
+    job_id: Mapped[UUID | None]
     event_type: Mapped[str] = mapped_column(String(64))
     # Ids only: never prompts, URLs or provider responses.
     payload: Mapped[dict[str, object]] = mapped_column(JSONB)

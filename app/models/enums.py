@@ -96,6 +96,53 @@ class PolicyNodeType(StrEnum):
     EXAMPLE = "EXAMPLE"
 
 
+class ReviewState(StrEnum):
+    """Review decision on one node, edge or wording. APPROVED rows are the ones retrieval reads."""
+
+    PROPOSED = "PROPOSED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class ProposalOrigin(StrEnum):
+    """Who produced a graph row. LLM_SIMULATED is a labelled stand-in, never a real model."""
+
+    HUMAN = "HUMAN"
+    IMPORT = "IMPORT"
+    LLM_SIMULATED = "LLM_SIMULATED"
+    LLM = "LLM"
+
+
+class PolicyAuditAction(StrEnum):
+    CREATE = "CREATE"
+    EDIT = "EDIT"
+    SUBMIT = "SUBMIT"
+    REVIEW = "REVIEW"
+    APPROVE = "APPROVE"
+    REJECT = "REJECT"
+    RETURN_TO_DRAFT = "RETURN_TO_DRAFT"
+    BUILD_STARTED = "BUILD_STARTED"
+    BUILD_READY = "BUILD_READY"
+    BUILD_FAILED = "BUILD_FAILED"
+    ACTIVATE = "ACTIVATE"
+    ROLLBACK = "ROLLBACK"
+    RETIRE = "RETIRE"
+
+
+class SourceExtractionState(StrEnum):
+    """Where a policy source is in text extraction; one that arrives with clauses is EXTRACTED."""
+
+    PENDING = "PENDING"
+    EXTRACTING = "EXTRACTING"
+    EXTRACTED = "EXTRACTED"
+    FAILED = "FAILED"
+
+
+class WordingKind(StrEnum):
+    EXACT_WORDING = "EXACT_WORDING"
+    PROHIBITED_PHRASE = "PROHIBITED_PHRASE"
+
+
 class PolicyEdgeType(StrEnum):
     SUPPORTED_BY = "supported_by"
     REQUIRES_DISCLOSURE = "requires_disclosure"
@@ -179,8 +226,9 @@ class UploadState(StrEnum):
 
 
 class UploadPurpose(StrEnum):
-    # Policy-source documents (PDF, text) are added by NRC-4.
     CREATIVE_MEDIA = "creative_media"
+    # A policy-source document (PDF or text) uploaded for NRC-4 ingestion; it has no study.
+    POLICY_SOURCE = "policy_source"
 
 
 class IdentifiablePerson(StrEnum):

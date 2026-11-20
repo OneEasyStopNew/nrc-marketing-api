@@ -31,7 +31,7 @@ from jwt.algorithms import RSAAlgorithm
 from PIL import Image
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import Connection, Row, event, func, insert, select, text
+from sqlalchemy import Connection, Row, event, func, insert, select, text, update
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncSession,
@@ -357,7 +357,18 @@ async def add_policy_bundle(
     version: int,
     state: BundleLifecycleState = BundleLifecycleState.ACTIVE,
 ) -> UUID:
-    # An empty synthetic bundle (no JSONB rules), written as the owner by the caller.
+    # An empty synthetic bundle (no JSONB rules), written as the owner by the caller. A tenant has
+    # at most one ACTIVE bundle, so a new ACTIVE one retires the current one first (as activation
+    # does).
+    if state is BundleLifecycleState.ACTIVE:
+        await conn.execute(
+            update(PolicyBundle)
+            .where(
+                PolicyBundle.tenant_id == tenant_id,
+                PolicyBundle.lifecycle_state == BundleLifecycleState.ACTIVE,
+            )
+            .values(lifecycle_state=BundleLifecycleState.RETIRED)
+        )
     bundle_id = uuid4()
     await conn.execute(
         insert(PolicyBundle).values(

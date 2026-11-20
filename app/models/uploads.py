@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     ARRAY,
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
     Index,
@@ -45,12 +46,17 @@ class MediaUpload(Base):
             postgresql_where=text("state IN ('QUARANTINED', 'SCANNING')"),
         ),
         Index("ix_media_uploads_tenant_id_created_at", "tenant_id", "created_at"),
+        # Policy-source uploads (NRC-4) belong to a tenant, not a study.
+        CheckConstraint(
+            "purpose <> 'creative_media' OR study_id IS NOT NULL", name="creative_media_has_study"
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID]
-    # The study scopes who may see the upload; the creative is optional (library uploads).
-    study_id: Mapped[UUID]
+    # The study scopes who may see the upload; the creative is optional (library uploads). Only
+    # policy-source uploads have no study (CHECK creative_media_has_study).
+    study_id: Mapped[UUID | None]
     creative_id: Mapped[UUID | None]
     purpose: Mapped[UploadPurpose] = mapped_column(enum_column(UploadPurpose))
     state: Mapped[UploadState] = mapped_column(enum_column(UploadState))

@@ -164,6 +164,11 @@ async def test_pass_under_an_older_policy_is_not_eligible(
     creative_id = await _creative(client, auth, world.a)  # passes against policy v1
     # A new policy version is approved after the brief passed: it must validate again.
     await connection.execute(text("RESET ROLE"))
+    # One ACTIVE bundle per tenant: the new version replaces v1, as activation does.
+    await connection.execute(
+        text("UPDATE policy_bundles SET lifecycle_state = 'RETIRED' WHERE tenant_id = :t"),
+        {"t": world.a.tenant_id},
+    )
     await connection.execute(
         insert(PolicyBundle).values(
             id=uuid4(),

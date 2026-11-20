@@ -5190,7 +5190,8 @@
       "UploadPurpose": {
         "type": "string",
         "enum": [
-          "creative_media"
+          "creative_media",
+          "policy_source"
         ],
         "title": "UploadPurpose"
       },

@@ -30,6 +30,7 @@ from app.models.enums import (
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
+    ReviewState,
     Severity,
 )
 from app.models.policy_graph import EMBEDDING_DIMENSIONS
@@ -155,6 +156,17 @@ async def _add_rule(
     )
 
 
+def _review(approved: bool) -> dict[str, object]:
+    # The CHECKs tie approved to review_state, and a decided row names its reviewer.
+    if not approved:
+        return {"review_state": ReviewState.PROPOSED}
+    return {
+        "review_state": ReviewState.APPROVED,
+        "reviewed_by": "synthetic-fixture",
+        "reviewed_at": datetime(2026, 11, 17, tzinfo=UTC),
+    }
+
+
 async def _add_edge(
     connection: AsyncConnection,
     tenant_id: UUID,
@@ -174,6 +186,7 @@ async def _add_edge(
             from_node_id=from_id,
             to_node_id=to_id,
             approved=approved,
+            **_review(approved),
             provenance_note=note,
             provenance_clause_id=clause_id,
         )
@@ -274,9 +287,23 @@ async def test_other_tenant_sees_none_of_the_graph(
     assert other == [0] * len(GRAPH_MODELS)
 
 
-@pytest.mark.parametrize("role", [APP_ROLE, WORKER_ROLE])
-@pytest.mark.parametrize("model", GRAPH_MODELS, ids=lambda m: m.__tablename__)
-async def test_api_and_worker_roles_cannot_write_the_graph(
+# NRC-4 lets the API write sources, nodes, rules and edges, and the worker the clauses,
+# embeddings and builds (exact privileges: tests/test_worker_role.py). Writes that stay refused:
+NOT_WRITABLE = [
+    (APP_ROLE, PolicySourceClause),
+    (APP_ROLE, PolicyNodeEmbedding),
+    (APP_ROLE, PolicyIndexBuild),
+    (WORKER_ROLE, PolicySource),
+    (WORKER_ROLE, PolicyNode),
+    (WORKER_ROLE, PolicyRuleRecord),
+    (WORKER_ROLE, PolicyEdge),
+]
+
+
+@pytest.mark.parametrize(
+    ("role", "model"), NOT_WRITABLE, ids=lambda v: v if isinstance(v, str) else v.__tablename__
+)
+async def test_roles_cannot_write_the_graph_tables_they_do_not_own(
     connection: AsyncConnection, world: World, role: str, model: type[Any]
 ) -> None:
     await as_role(connection, role)

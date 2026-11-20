@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.errors import PolicyIndexError
 from app.models import PolicyIndexBuild, PolicyNode, PolicyNodeEmbedding
-from app.models.enums import IndexBuildState
+from app.models.enums import IndexBuildState, ReviewState
 from app.models.policy_graph import EMBEDDING_DIMENSIONS, SEARCHABLE_NODE_TYPES
 from app.services.policy_index import (
     EMBED_BATCH_SIZE,
@@ -148,7 +148,7 @@ async def test_unapproved_nodes_are_not_indexed(connection: AsyncConnection, wor
         await db.execute(
             update(PolicyNode)
             .where(PolicyNode.policy_bundle_id == bundle_id, PolicyNode.node_key == "DISC-01-ES")
-            .values(approved=False)
+            .values(approved=False, review_state=ReviewState.PROPOSED)
         )
         result = await build_policy_index(db, tenant_id, bundle_id, SimulatedEmbeddingProvider())
 

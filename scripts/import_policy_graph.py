@@ -17,7 +17,7 @@ import json
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Final
 from uuid import UUID, uuid4
@@ -34,6 +34,7 @@ from app.models import (
     PolicyEdge,
     PolicyNode,
     PolicyRuleRecord,
+    PolicyRuleWording,
     PolicySource,
     PolicySourceClause,
 )
@@ -43,7 +44,10 @@ from app.models.enums import (
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
+    ProposalOrigin,
+    ReviewState,
     Severity,
+    WordingKind,
 )
 from app.models.policy_graph import RULE_ID_PATTERN
 from app.schemas.tenancy import StudyFacts
@@ -53,6 +57,9 @@ SYNTHETIC_GRAPH_PATH: Final = (
 )
 # Recorded as created_by on imported sources.
 IMPORT_ACTOR: Final = "import_policy_graph"
+# Recorded as reviewed_by on imported rows that the file marks approved (same value the NRC-4
+# migration backfilled).
+IMPORT_REVIEWER: Final = "system:import"
 
 _N = PolicyNodeType
 # Which node types an edge type may join: (from, to). Mirrors the table in the design note.
@@ -301,6 +308,40 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _review_fields(approved: bool, reviewed_at: datetime) -> dict[str, object]:
+    # An approved row in the file is approved by the import; the rest wait for a reviewer.
+    fields: dict[str, object] = {
+        "origin": ProposalOrigin.IMPORT,
+        "review_state": ReviewState.APPROVED if approved else ReviewState.PROPOSED,
+    }
+    if approved:
+        fields |= {"reviewed_by": IMPORT_REVIEWER, "reviewed_at": reviewed_at}
+    return fields
+
+
+def _wordings(
+    rule: RuleImport, owner: tuple[UUID, UUID, UUID], node: NodeImport, reviewed_at: datetime
+) -> list[PolicyRuleWording]:
+    # The rule's exact wording and each distinct prohibited phrase as wording rows (F40), as
+    # reviewed as the rule's node. A blank exact wording is skipped, like the migration backfill.
+    tenant_id, bundle_id, rule_row_id = owner
+    texts = [(WordingKind.EXACT_WORDING, rule.exact_wording)] if rule.exact_wording else []
+    texts += [(WordingKind.PROHIBITED_PHRASE, p) for p in dict.fromkeys(clean_phrases(rule))]
+    return [
+        PolicyRuleWording(
+            tenant_id=tenant_id,
+            policy_bundle_id=bundle_id,
+            policy_rule_id=rule_row_id,
+            language=node.language,
+            kind=kind,
+            text=text,
+            **_review_fields(node.approved, reviewed_at),
+        )
+        for kind, text in texts
+        if text.strip()
+    ]
+
+
 async def import_policy_graph(
     db: AsyncSession, tenant_id: UUID, bundle_id: UUID, graph: PolicyGraphImport
 ) -> ImportResult:
@@ -339,6 +380,7 @@ async def import_policy_graph(
         return ImportResult(skipped=True)
 
     clause_ids, created = await _ensure_source(db, tenant_id, graph.source)
+    reviewed_at = datetime.now(UTC)
     node_ids = {node.node_key: uuid4() for node in graph.nodes}
     db.add_all(
         PolicyNode(
@@ -347,12 +389,16 @@ async def import_policy_graph(
             policy_bundle_id=bundle_id,
             source_clause_id=clause_ids[node.clause_ref] if node.clause_ref else None,
             **node.model_dump(exclude={"clause_ref"}),
+            **_review_fields(node.approved, reviewed_at),
         )
         for node in graph.nodes
     )
     await db.flush()
+    nodes_by_key = {node.node_key: node for node in graph.nodes}
+    rule_row_ids = {rule.rule_id: uuid4() for rule in graph.rules}
     db.add_all(
         PolicyRuleRecord(
+            id=rule_row_ids[rule.rule_id],
             tenant_id=tenant_id,
             policy_bundle_id=bundle_id,
             node_id=node_ids[rule.node_key],
@@ -360,6 +406,17 @@ async def import_policy_graph(
             **rule.model_dump(exclude={"node_key", "prohibited_phrases"}),
         )
         for rule in graph.rules
+    )
+    await db.flush()
+    db.add_all(
+        wording
+        for rule in graph.rules
+        for wording in _wordings(
+            rule,
+            (tenant_id, bundle_id, rule_row_ids[rule.rule_id]),
+            nodes_by_key[rule.node_key],
+            reviewed_at,
+        )
     )
     db.add_all(
         PolicyEdge(
@@ -373,6 +430,7 @@ async def import_policy_graph(
                 clause_ids[edge.provenance_clause_ref] if edge.provenance_clause_ref else None
             ),
             provenance_note=edge.provenance_note,
+            **_review_fields(edge.approved, reviewed_at),
         )
         for edge in graph.edges
     )
