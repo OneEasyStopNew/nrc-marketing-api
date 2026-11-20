@@ -19,12 +19,15 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+import boto3
 import httpx
 import jwt
 import pytest
 from alembic import command
 from alembic.config import Config
 from asgi_lifespan import LifespanManager
+from botocore.config import Config as BotoConfig
+from botocore.exceptions import ClientError
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from jwt.algorithms import RSAAlgorithm
@@ -81,6 +84,8 @@ KID = "test-key"
 # Local SeaweedFS from docker compose, and the versioned test bucket in it.
 ENDPOINT = "http://127.0.0.1:8333"
 BUCKET = "nrc-test-media"
+# Policy source files (NRC-4) live in their own bucket, never the media one.
+POLICY_BUCKET = "nrc-test-policy"
 APP_ROLE = "marketing_app"
 WORKER_ROLE = "marketing_worker"
 
@@ -700,3 +705,31 @@ needs_seaweedfs = pytest.mark.skipif(
     "CI" not in os.environ and not _seaweedfs_reachable(),
     reason=f"SeaweedFS is not reachable at {ENDPOINT}",
 )
+
+
+@pytest.fixture(scope="session")
+def policy_bucket() -> str:
+    # The versioned policy-source test bucket, created on first use. Tests that store objects
+    # in it are skipped (needs_seaweedfs) when SeaweedFS is down, so then nothing is created.
+    if _seaweedfs_reachable():
+        client = boto3.client(
+            "s3",
+            endpoint_url=ENDPOINT,
+            region_name="us-east-1",
+            # Local-only dummy values that open the SeaweedFS container (docker/seaweedfs-s3.json).
+            aws_access_key_id="localdev",
+            aws_secret_access_key="localdev-password",  # noqa: S106
+            config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
+        )
+        try:
+            client.create_bucket(Bucket=POLICY_BUCKET)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") not in {
+                "BucketAlreadyOwnedByYou",
+                "BucketAlreadyExists",
+            }:
+                raise
+        client.put_bucket_versioning(
+            Bucket=POLICY_BUCKET, VersioningConfiguration={"Status": "Enabled"}
+        )
+    return POLICY_BUCKET

@@ -16,7 +16,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import Settings
-from app.core.media_types import IMAGE_EXTENSIONS
+from app.core.media_types import IMAGE_EXTENSIONS, UPLOAD_EXTENSIONS
 
 # Type stubs are a dev dependency only; never import them at runtime.
 if TYPE_CHECKING:
@@ -92,7 +92,7 @@ def _full_object_sha256(checksum: str | None) -> str | None:
 
 def new_upload_key(content_type: str) -> str:
     # Callers validate the type first; this guards a programming error, not a job path.
-    ext = IMAGE_EXTENSIONS.get(content_type)
+    ext = UPLOAD_EXTENSIONS.get(content_type)
     if ext is None:
         raise ValueError(f"No upload extension for content type {content_type!r}")
     now = datetime.now(UTC)
@@ -100,10 +100,16 @@ def new_upload_key(content_type: str) -> str:
 
 
 class ObjectStorage:
-    def __init__(self, settings: Settings) -> None:
-        if not settings.aws_s3_bucket:
+    def __init__(
+        self, settings: Settings, *, bucket: str | None = None, max_read_bytes: int | None = None
+    ) -> None:
+        # bucket overrides AWS_S3_BUCKET for a purpose with its own bucket (policy sources).
+        # max_read_bytes bounds the memory one read() can take (None: unbounded, as before).
+        name = bucket or settings.aws_s3_bucket
+        if not name:
             raise StorageNotConfiguredError("AWS_S3_BUCKET is not configured")
-        self._bucket = settings.aws_s3_bucket
+        self._bucket = name
+        self._max_read_bytes = max_read_bytes
         self._max_url_ttl = settings.asset_url_ttl_seconds
         self._max_upload_url_ttl = settings.upload_url_ttl_seconds
         # Credentials come from the profile or environment locally, and the IAM role on servers.
@@ -191,7 +197,9 @@ class ObjectStorage:
                 response = self._client.get_object(Bucket=self._bucket, Key=key)
             body = response["Body"]
             try:
-                return body.read()
+                # With a cap, an object over it comes back one byte too long, not whole.
+                cap = self._max_read_bytes
+                return body.read(None if cap is None else cap + 1)
             finally:
                 body.close()
         except BotoCoreError, ClientError:

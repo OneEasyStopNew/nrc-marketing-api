@@ -1,5 +1,6 @@
-# Client uploads (NRC-3): issue an upload URL, accept the completed file into quarantine, and
-# read upload status. Inspection (type, size, malware) runs in the media worker.
+# Client uploads (NRC-3, and policy sources for NRC-4): issue an upload URL, accept the completed
+# file into quarantine, and read upload status. Inspection (type, size, malware) runs in the media
+# worker. What differs per purpose lives in app.services.upload_purposes.
 
 import logging
 from collections.abc import Collection, Mapping
@@ -28,6 +29,8 @@ from app.models.uploads import UPLOAD_REASON_MAX_CHARS
 from app.schemas.uploads import (
     AuthorizationStatus,
     MediaAuthorization,
+    PolicyUploadCreate,
+    PolicyUploadRead,
     UploadCreate,
     UploadLimits,
     UploadPage,
@@ -39,10 +42,12 @@ from app.schemas.uploads import (
 from app.services import idempotency
 from app.services.paging import newest_first_page
 from app.services.storage import ObjectStorage, PresignedUpload, StorageError, new_upload_key
+from app.services.upload_purposes import UPLOAD_PURPOSES
 
 logger = logging.getLogger(__name__)
 
 CREATE_ROUTE: Final = "POST /assets/uploads"
+POLICY_CREATE_ROUTE: Final = "POST /policy-sources/uploads"
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,62 +144,102 @@ def reason_columns(code: str) -> dict[str, object]:
     return {"reason_code": code, "reason_message": REASONS[code].message[:UPLOAD_REASON_MAX_CHARS]}
 
 
-def _visible(ctx: TenantContext) -> tuple[ColumnElement[bool], ...]:
-    # RLS already hides other tenants; the study check hides studies the caller cannot use.
-    return (MediaUpload.tenant_id == ctx.tenant_id, MediaUpload.study_id.in_(ctx.study_ids))
+def _visible(
+    ctx: TenantContext, purpose: UploadPurpose = UploadPurpose.CREATIVE_MEDIA
+) -> tuple[ColumnElement[bool], ...]:
+    # RLS already hides other tenants. Each purpose sees only its own uploads, so a creative
+    # route never lists a policy file. Creative media also needs a study the caller can use.
+    scope = (MediaUpload.tenant_id == ctx.tenant_id, MediaUpload.purpose == purpose)
+    if purpose is UploadPurpose.CREATIVE_MEDIA:
+        return (*scope, MediaUpload.study_id.in_(ctx.study_ids))
+    return scope
+
+
+def _reason(upload: MediaUpload) -> UploadReason | None:
+    if upload.reason_code is None:
+        return None
+    known = REASONS.get(upload.reason_code)
+    return UploadReason(
+        code=upload.reason_code,
+        message=upload.reason_message or "",
+        retryable=known.retryable if known else False,
+    )
+
+
+def _scan(upload: MediaUpload) -> UploadScan | None:
+    if upload.scan_engine is None or upload.scanned_at is None:
+        return None
+    return UploadScan(
+        engine=upload.scan_engine,
+        simulated=bool(upload.scan_simulated),
+        scanned_at=upload.scanned_at,
+    )
+
+
+def _upload_target(target: PresignedUpload | None) -> UploadTarget | None:
+    if target is None:
+        return None
+    return UploadTarget(
+        url=target.url, method="PUT", headers=dict(target.headers), expires_at=target.expires_at
+    )
+
+
+def _to_policy_read(upload: MediaUpload, target: PresignedUpload | None = None) -> PolicyUploadRead:
+    return PolicyUploadRead(
+        upload_id=upload.id,
+        purpose=upload.purpose,
+        status=upload.state,
+        reason=_reason(upload),
+        name=upload.name,
+        mime_type=upload.declared_mime_type,
+        size_bytes=upload.declared_size_bytes,
+        checksum_sha256=upload.declared_checksum_sha256,
+        scan=_scan(upload),
+        created_by=upload.created_by,
+        created_at=upload.created_at,
+        completed_at=upload.completed_at,
+        upload=_upload_target(target),
+    )
 
 
 def _to_read(
     upload: MediaUpload, now: datetime, target: PresignedUpload | None = None
 ) -> UploadRead:
-    reason = None
-    if upload.reason_code is not None:
-        known = REASONS.get(upload.reason_code)
-        reason = UploadReason(
-            code=upload.reason_code,
-            message=upload.reason_message or "",
-            retryable=known.retryable if known else False,
-        )
-    scan = None
-    if upload.scan_engine is not None and upload.scanned_at is not None:
-        scan = UploadScan(
-            engine=upload.scan_engine,
-            simulated=bool(upload.scan_simulated),
-            scanned_at=upload.scanned_at,
-        )
+    # Creative media always has a study (CHECK creative_media_has_study), and only the creative
+    # routes build this read.
+    if upload.study_id is None:
+        raise NotFoundError("Upload not found.")
     return UploadRead(
         asset_id=upload.id,
         study_id=upload.study_id,
         creative_id=upload.creative_id,
         purpose=upload.purpose,
         status=upload.state,
-        reason=reason,
+        reason=_reason(upload),
         name=upload.name,
         mime_type=upload.declared_mime_type,
         size_bytes=upload.declared_size_bytes,
         checksum_sha256=upload.declared_checksum_sha256,
         width_px=upload.width_px,
         height_px=upload.height_px,
-        scan=scan,
+        scan=_scan(upload),
         authorization=media_authorization(upload, now),
         created_by=upload.created_by,
         created_at=upload.created_at,
         completed_at=upload.completed_at,
-        upload=(
-            UploadTarget(
-                url=target.url,
-                method="PUT",
-                headers=dict(target.headers),
-                expires_at=target.expires_at,
-            )
-            if target is not None
-            else None
-        ),
+        upload=_upload_target(target),
     )
 
 
-async def _load(db: AsyncSession, ctx: TenantContext, asset_id: UUID) -> MediaUpload:
-    upload = await db.scalar(select(MediaUpload).where(*_visible(ctx), MediaUpload.id == asset_id))
+async def _load(
+    db: AsyncSession,
+    ctx: TenantContext,
+    asset_id: UUID,
+    purpose: UploadPurpose = UploadPurpose.CREATIVE_MEDIA,
+) -> MediaUpload:
+    upload = await db.scalar(
+        select(MediaUpload).where(*_visible(ctx, purpose), MediaUpload.id == asset_id)
+    )
     if upload is None:
         raise NotFoundError("Upload not found.")
     return upload
@@ -206,16 +251,21 @@ def _check_uploader(ctx: TenantContext, upload: MediaUpload) -> None:
         raise PermissionDeniedError("Only the person who started this upload can do this.")
 
 
-def _check_limits(body: UploadCreate, settings: Settings) -> None:
-    if body.mime_type not in settings.upload_image_types:
+def _check_limits(
+    purpose: UploadPurpose, body: UploadCreate | PolicyUploadCreate, settings: Settings
+) -> None:
+    spec = UPLOAD_PURPOSES[purpose]
+    accepted = spec.allowed_types(settings)
+    if body.mime_type not in accepted:
         raise UploadNotAcceptedError(
             "This file type is not accepted.",
-            details={"field": "mime_type", "accepted": list(settings.upload_image_types)},
+            details={"field": "mime_type", "accepted": list(accepted)},
         )
-    if body.size_bytes > settings.upload_image_max_bytes:
+    max_bytes = spec.max_bytes(settings)
+    if body.size_bytes > max_bytes:
         raise UploadNotAcceptedError(
             "This file is larger than the upload limit.",
-            details={"field": "size_bytes", "max_bytes": settings.upload_image_max_bytes},
+            details={"field": "size_bytes", "max_bytes": max_bytes},
         )
 
 
@@ -251,7 +301,8 @@ async def _presign(
             expires_in=settings.upload_url_ttl_seconds,
         )
     except StorageError:
-        raise DependencyUnavailableError("Image storage is temporarily unavailable.") from None
+        message = UPLOAD_PURPOSES[upload.purpose].storage_unavailable
+        raise DependencyUnavailableError(message) from None
 
 
 async def _fresh_target(
@@ -305,7 +356,7 @@ async def create_upload(
             target = await _fresh_target(db, upload, storage, settings)
         return _to_read(upload, datetime.now(UTC), target), True
 
-    _check_limits(body, settings)
+    _check_limits(UploadPurpose.CREATIVE_MEDIA, body, settings)
     await _check_scope(db, ctx, body)
     authorization = body.authorization
     upload = MediaUpload(
@@ -339,6 +390,24 @@ async def create_upload(
     return _to_read(upload, datetime.now(UTC), target), False
 
 
+async def _reissue(
+    db: AsyncSession,
+    ctx: TenantContext,
+    asset_id: UUID,
+    purpose: UploadPurpose,
+    storage: ObjectStorage,
+    settings: Settings,
+) -> tuple[MediaUpload, PresignedUpload]:
+    upload = await _load(db, ctx, asset_id, purpose)
+    _check_uploader(ctx, upload)
+    if upload.state is not UploadState.PENDING_UPLOAD:
+        raise UploadNotPendingError(details={"status": upload.state.value})
+    target = await _fresh_target(db, upload, storage, settings)
+    if target is None:
+        raise UploadNotPendingError(details={"status": upload.state.value})
+    return upload, target
+
+
 async def reissue_upload_url(
     db: AsyncSession,
     ctx: TenantContext,
@@ -347,36 +416,28 @@ async def reissue_upload_url(
     settings: Settings,
 ) -> UploadRead:
     """A fresh URL for a pending upload whose URL expired or was lost. Same object and owner."""
-    upload = await _load(db, ctx, asset_id)
-    _check_uploader(ctx, upload)
-    if upload.state is not UploadState.PENDING_UPLOAD:
-        raise UploadNotPendingError(details={"status": upload.state.value})
-    target = await _fresh_target(db, upload, storage, settings)
-    if target is None:
-        raise UploadNotPendingError(details={"status": upload.state.value})
+    upload, target = await _reissue(
+        db, ctx, asset_id, UploadPurpose.CREATIVE_MEDIA, storage, settings
+    )
     return _to_read(upload, datetime.now(UTC), target)
 
 
-async def complete_upload(
-    db: AsyncSession, ctx: TenantContext, asset_id: UUID, storage: ObjectStorage
-) -> UploadRead:
-    """Check the stored file against the declaration and queue it for inspection.
-
-    Idempotent: a repeated or concurrent call returns the current status, and only one call
-    moves the upload to QUARANTINED, so it is inspected once.
-
-    Raises:
-        UploadNotReceivedError: the file is not in storage yet (retryable).
-        DependencyUnavailableError: storage could not be reached.
-    """
-    upload = await _load(db, ctx, asset_id)
+async def _complete(
+    db: AsyncSession,
+    ctx: TenantContext,
+    asset_id: UUID,
+    purpose: UploadPurpose,
+    storage: ObjectStorage,
+) -> MediaUpload:
+    upload = await _load(db, ctx, asset_id, purpose)
     _check_uploader(ctx, upload)
     if upload.state is not UploadState.PENDING_UPLOAD:
-        return _to_read(upload, datetime.now(UTC))
+        return upload
     try:
         head = await storage.head(upload.s3_key)
     except StorageError:
-        raise DependencyUnavailableError("Image storage is temporarily unavailable.") from None
+        message = UPLOAD_PURPOSES[purpose].storage_unavailable
+        raise DependencyUnavailableError(message) from None
     if head is None:
         raise UploadNotReceivedError()
 
@@ -421,6 +482,22 @@ async def complete_upload(
             values["state"],
         )
     await db.refresh(upload)
+    return upload
+
+
+async def complete_upload(
+    db: AsyncSession, ctx: TenantContext, asset_id: UUID, storage: ObjectStorage
+) -> UploadRead:
+    """Check the stored file against the declaration and queue it for inspection.
+
+    Idempotent: a repeated or concurrent call returns the current status, and only one call
+    moves the upload to QUARANTINED, so it is inspected once.
+
+    Raises:
+        UploadNotReceivedError: the file is not in storage yet (retryable).
+        DependencyUnavailableError: storage could not be reached.
+    """
+    upload = await _complete(db, ctx, asset_id, UploadPurpose.CREATIVE_MEDIA, storage)
     return _to_read(upload, datetime.now(UTC))
 
 
@@ -454,3 +531,90 @@ async def list_uploads(
     )
     now = datetime.now(UTC)
     return UploadPage(items=[_to_read(row[0], now) for row in page], next_cursor=next_cursor)
+
+
+# ---- Policy sources (NRC-4): the same table and checks, scoped to the tenant instead of a study.
+
+
+async def create_policy_upload(
+    db: AsyncSession,
+    ctx: TenantContext,
+    body: PolicyUploadCreate,
+    idempotency_key: str,
+    storage: ObjectStorage,
+    settings: Settings,
+) -> tuple[PolicyUploadRead, bool]:
+    """Record a pending policy source upload and sign a URL for exactly the declared file.
+
+    Returns the upload and whether this was a replay (which gets a fresh URL while pending).
+
+    Raises:
+        UploadNotAcceptedError: the declared type or size breaks a configured limit.
+        IdempotencyKeyReusedError: the key was used before with a different payload.
+        DependencyUnavailableError: storage could not sign the URL.
+    """
+    purpose = UploadPurpose.POLICY_SOURCE
+    fingerprint = idempotency.request_hash(ctx.principal.sub, body)
+    existing_id = await idempotency.claim(
+        db, ctx.tenant_id, POLICY_CREATE_ROUTE, idempotency_key, fingerprint
+    )
+    if existing_id is not None:
+        upload = await _load(db, ctx, existing_id, purpose)
+        target = None
+        if upload.state is UploadState.PENDING_UPLOAD and upload.created_by == ctx.principal.sub:
+            target = await _fresh_target(db, upload, storage, settings)
+        return _to_policy_read(upload, target), True
+
+    _check_limits(purpose, body, settings)
+    upload = MediaUpload(
+        id=uuid4(),
+        tenant_id=ctx.tenant_id,
+        study_id=None,
+        creative_id=None,
+        purpose=purpose,
+        state=UploadState.PENDING_UPLOAD,
+        name=body.name,
+        declared_mime_type=body.mime_type,
+        declared_size_bytes=body.size_bytes,
+        declared_checksum_sha256=body.checksum_sha256,
+        bucket=storage.bucket,
+        s3_key=new_upload_key(body.mime_type),
+        # Media authorization does not apply to a policy document; the column has no default.
+        identifiable_person=IdentifiablePerson.UNKNOWN,
+        created_by=ctx.principal.sub,
+    )
+    target = await _presign(storage, upload, settings)
+    upload.upload_url_expires_at = target.expires_at
+    db.add(upload)
+    await db.flush()
+    await idempotency.complete(db, ctx.tenant_id, POLICY_CREATE_ROUTE, idempotency_key, upload.id)
+    await db.commit()
+    await db.refresh(upload)
+    logger.info("policy upload created upload=%s tenant=%s", upload.id, upload.tenant_id)
+    return _to_policy_read(upload, target), False
+
+
+async def reissue_policy_upload_url(
+    db: AsyncSession,
+    ctx: TenantContext,
+    upload_id: UUID,
+    storage: ObjectStorage,
+    settings: Settings,
+) -> PolicyUploadRead:
+    upload, target = await _reissue(
+        db, ctx, upload_id, UploadPurpose.POLICY_SOURCE, storage, settings
+    )
+    return _to_policy_read(upload, target)
+
+
+async def complete_policy_upload(
+    db: AsyncSession, ctx: TenantContext, upload_id: UUID, storage: ObjectStorage
+) -> PolicyUploadRead:
+    upload = await _complete(db, ctx, upload_id, UploadPurpose.POLICY_SOURCE, storage)
+    return _to_policy_read(upload)
+
+
+async def get_policy_upload(
+    db: AsyncSession, ctx: TenantContext, upload_id: UUID
+) -> PolicyUploadRead:
+    return _to_policy_read(await _load(db, ctx, upload_id, UploadPurpose.POLICY_SOURCE))

@@ -195,6 +195,12 @@ class Settings(RetrievalSettings):
     # before it is rejected as INSPECTION_FAILED (the uploader can then upload again).
     media_inspection_retry_window_seconds: int = Field(default=86_400, ge=600, le=604_800)
 
+    # Policy source files (NRC-4) go to their own bucket, never the media bucket. Unset: the policy
+    # upload endpoints answer 503 and the media worker defers policy uploads (no fallback).
+    policy_source_bucket: str | None = None
+    # The worker holds the whole file in memory while inspecting it.
+    policy_source_max_bytes: int = Field(default=52_428_800, ge=1024, le=104_857_600)
+
     @field_validator(
         "cognito_client_ids",
         "cors_origins",
@@ -221,6 +227,14 @@ class Settings(RetrievalSettings):
                 f"supported: {', '.join(sorted(SUPPORTED_UPLOAD_IMAGE_TYPES))}"
             )
         return types
+
+    @field_validator("policy_source_bucket", mode="before")
+    @classmethod
+    def _blank_bucket_means_unset(cls, value: object) -> object:
+        # `POLICY_SOURCE_BUCKET=` (as in .env.example) means "not configured".
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("dev_jwks_file", mode="before")
     @classmethod

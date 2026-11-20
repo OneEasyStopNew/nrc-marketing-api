@@ -141,6 +141,14 @@ class DependencyUnavailableError(AppError):
     retryable = True
 
 
+class PolicySourceStorageUnavailableError(DependencyUnavailableError):
+    # POLICY_SOURCE_BUCKET is not set: policy uploads never fall back to the media bucket. An
+    # operator fixes it; waiting does not help.
+    code = "POLICY_STORAGE_UNAVAILABLE"
+    default_message = "Policy file storage is not available."
+    retryable = False
+
+
 class FeatureNotAvailableError(AppError):
     code = "NOT_IMPLEMENTED"
     default_message = "This endpoint is part of the agreed contract but is not implemented yet."

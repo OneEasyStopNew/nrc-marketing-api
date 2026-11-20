@@ -2397,6 +2397,434 @@
           }
         }
       }
+    },
+    "/v1/marketing/policy-sources/uploads": {
+      "post": {
+        "tags": [
+          "policy"
+        ],
+        "summary": "Start a policy source upload: a short-lived URL for one PUT of the declared file",
+        "description": "Declare the type (application/pdf, text/plain or text/markdown), exact size and SHA-256. PUT the file to upload.url with upload.headers, then call POST /policy-sources/uploads/{upload_id}/complete. The URL is secret and short-lived: never store or log it. A retry with the same Idempotency-Key and body returns the same upload.",
+        "operationId": "create_policy_upload",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "New value per intended command; resend the same value only when retrying it.",
+              "title": "Idempotency-Key"
+            },
+            "description": "New value per intended command; resend the same value only when retrying it."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyUploadCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyUploadRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key reused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Policy file storage is not configured or temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/policy-sources/uploads/{upload_id}/upload-url": {
+      "post": {
+        "tags": [
+          "policy"
+        ],
+        "summary": "A fresh upload URL for a pending policy upload (same file, same owner)",
+        "description": "Use when the URL expired or was lost before the file was sent.",
+        "operationId": "reissue_policy_upload_url",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Upload Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyUploadRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or not the person who started this upload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The upload is no longer waiting for its file.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Policy file storage is not configured or temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/policy-sources/uploads/{upload_id}/complete": {
+      "post": {
+        "tags": [
+          "policy"
+        ],
+        "summary": "Tell the API the file was sent; it is checked and queued for inspection",
+        "description": "Safe to repeat: returns the current status and queues inspection once. 409 UPLOAD_NOT_RECEIVED (retryable) means the file has not arrived yet.",
+        "operationId": "complete_policy_upload",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Upload Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyUploadRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or not the person who started this upload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The file has not been received yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Policy file storage is not configured or temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/policy-sources/uploads/{upload_id}": {
+      "get": {
+        "tags": [
+          "policy"
+        ],
+        "summary": "One policy source upload and its status",
+        "description": "Poll this after completing an upload until status is READY or REJECTED.",
+        "operationId": "get_policy_upload",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Upload Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyUploadRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4468,6 +4896,149 @@
           "rule_count"
         ],
         "title": "PolicySummary"
+      },
+      "PolicyUploadCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "description": "File name to show in the policy library."
+          },
+          "mime_type": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Mime Type",
+            "description": "application/pdf, text/plain or text/markdown."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Size Bytes",
+            "description": "Exact size of the file in bytes."
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Checksum Sha256",
+            "description": "SHA-256 of the file, lower-case hex.",
+            "examples": [
+              "9f86d00000000000000000000000000000000000000000000000000000000000"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "mime_type",
+          "size_bytes",
+          "checksum_sha256"
+        ],
+        "title": "PolicyUploadCreate",
+        "description": "A policy source file (PDF, plain text or Markdown) for the tenant's policy library."
+      },
+      "PolicyUploadRead": {
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Upload Id"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/UploadPurpose"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UploadState"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type",
+            "description": "As declared; inspection checks the real type."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "title": "Checksum Sha256"
+          },
+          "scan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadScan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "upload": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadTarget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only in the create and upload-url responses while the file is awaited."
+          }
+        },
+        "type": "object",
+        "required": [
+          "upload_id",
+          "purpose",
+          "status",
+          "reason",
+          "name",
+          "mime_type",
+          "size_bytes",
+          "checksum_sha256",
+          "scan",
+          "created_by",
+          "created_at",
+          "completed_at"
+        ],
+        "title": "PolicyUploadRead",
+        "description": "A policy source upload. READY means it passed the checks; it is never an asset."
       },
       "PostFormat": {
         "type": "string",

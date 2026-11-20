@@ -1,0 +1,127 @@
+{
+  "_note": "Synthetic examples for NRC-4 policy source uploads (policy:manage only). URLs are placeholders, never real signed links.",
+  "policy_upload_created": {
+    "request": "POST /v1/marketing/policy-sources/uploads",
+    "status": 201,
+    "schema": "PolicyUploadRead",
+    "body": {
+      "upload_id": "b2c7e9a4-6d13-4f85-a0e2-3c9d1b7f5e68",
+      "purpose": "policy_source",
+      "status": "PENDING_UPLOAD",
+      "reason": null,
+      "name": "ipb-policy-v3.pdf",
+      "mime_type": "application/pdf",
+      "size_bytes": 482133,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "scan": null,
+      "created_by": "policy.admin.demo",
+      "created_at": "2026-11-20T10:00:00Z",
+      "completed_at": null,
+      "upload": {
+        "url": "https://storage.example/uploads/2026/11/b2c7e9a4-6d13-4f85-a0e2-3c9d1b7f5e68.pdf?X-Amz-Signature=placeholder",
+        "method": "PUT",
+        "headers": {
+          "Content-Type": "application/pdf",
+          "x-amz-checksum-sha256": "n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=",
+          "x-amz-tagging": "doc-type=upload&retention=operational"
+        },
+        "expires_at": "2026-11-20T10:10:00Z"
+      }
+    }
+  },
+  "policy_upload_quarantined": {
+    "request": "POST /v1/marketing/policy-sources/uploads/b2c7e9a4-6d13-4f85-a0e2-3c9d1b7f5e68/complete",
+    "status": 202,
+    "schema": "PolicyUploadRead",
+    "body": {
+      "upload_id": "b2c7e9a4-6d13-4f85-a0e2-3c9d1b7f5e68",
+      "purpose": "policy_source",
+      "status": "QUARANTINED",
+      "reason": null,
+      "name": "ipb-policy-v3.pdf",
+      "mime_type": "application/pdf",
+      "size_bytes": 482133,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "scan": null,
+      "created_by": "policy.admin.demo",
+      "created_at": "2026-11-20T10:00:00Z",
+      "completed_at": "2026-11-20T10:01:00Z",
+      "upload": null
+    }
+  },
+  "policy_upload_ready_simulated_scan": {
+    "request": "GET /v1/marketing/policy-sources/uploads/b2c7e9a4-6d13-4f85-a0e2-3c9d1b7f5e68",
+    "status": 200,
+    "schema": "PolicyUploadRead",
+    "body": {
+      "upload_id": "b2c7e9a4-6d13-4f85-a0e2-3c9d1b7f5e68",
+      "purpose": "policy_source",
+      "status": "READY",
+      "reason": null,
+      "name": "ipb-policy-v3.pdf",
+      "mime_type": "application/pdf",
+      "size_bytes": 482133,
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "scan": {
+        "engine": "SIMULATED",
+        "simulated": true,
+        "scanned_at": "2026-11-20T10:01:05Z"
+      },
+      "created_by": "policy.admin.demo",
+      "created_at": "2026-11-20T10:00:00Z",
+      "completed_at": "2026-11-20T10:01:00Z",
+      "upload": null
+    }
+  },
+  "policy_upload_rejected_forged_pdf": {
+    "request": "GET /v1/marketing/policy-sources/uploads/c4d8f1b6-2a97-4e30-b5c1-7e6a0d3f9b25",
+    "status": 200,
+    "schema": "PolicyUploadRead",
+    "body": {
+      "upload_id": "c4d8f1b6-2a97-4e30-b5c1-7e6a0d3f9b25",
+      "purpose": "policy_source",
+      "status": "REJECTED",
+      "reason": {
+        "code": "TYPE_MISMATCH",
+        "message": "The file's real type does not match the type declared for it.",
+        "retryable": false
+      },
+      "name": "renamed-notes.pdf",
+      "mime_type": "application/pdf",
+      "size_bytes": 2048,
+      "checksum_sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+      "scan": null,
+      "created_by": "policy.admin.demo",
+      "created_at": "2026-11-20T10:05:00Z",
+      "completed_at": "2026-11-20T10:05:30Z",
+      "upload": null
+    }
+  },
+  "error_policy_storage_unavailable": {
+    "request": "POST /v1/marketing/policy-sources/uploads",
+    "status": 503,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "POLICY_STORAGE_UNAVAILABLE",
+      "message": "Policy file storage is not available.",
+      "request_id": "7f3a9c2e-5b18-4d60-8e41-a2c6d0b97f13",
+      "details": null,
+      "retryable": false
+    }
+  },
+  "error_upload_not_accepted": {
+    "request": "POST /v1/marketing/policy-sources/uploads",
+    "status": 422,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "UPLOAD_NOT_ACCEPTED",
+      "message": "This file type is not accepted.",
+      "request_id": "1d5e8b3a-9c27-4f64-a0b8-6e2f7c4d1a90",
+      "details": {
+        "field": "mime_type",
+        "accepted": ["application/pdf", "text/plain", "text/markdown"]
+      },
+      "retryable": false
+    }
+  }
+}

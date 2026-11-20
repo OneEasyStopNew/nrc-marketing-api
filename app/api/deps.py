@@ -16,6 +16,7 @@ from app.core.errors import (
     DependencyUnavailableError,
     FeatureNotAvailableError,
     PermissionDeniedError,
+    PolicySourceStorageUnavailableError,
 )
 from app.services import tenancy
 from app.services.demo_stubs import DemoStubs
@@ -50,10 +51,19 @@ async def get_storage(request: Request) -> ObjectStorage:
     return require_storage(await get_optional_storage(request))
 
 
+async def get_policy_source_storage(request: Request) -> ObjectStorage:
+    # The policy bucket only: without POLICY_SOURCE_BUCKET there is no fallback to the media one.
+    storage: ObjectStorage | None = request.app.state.policy_source_storage
+    if storage is None:
+        raise PolicySourceStorageUnavailableError
+    return storage
+
+
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 DemoStubsDep = Annotated[DemoStubs | None, Depends(get_demo_stubs)]
 StorageDep = Annotated[ObjectStorage, Depends(get_storage)]
 OptionalStorageDep = Annotated[ObjectStorage | None, Depends(get_optional_storage)]
+PolicySourceStorageDep = Annotated[ObjectStorage, Depends(get_policy_source_storage)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
@@ -128,6 +138,7 @@ def require_capability(capability: Capability) -> Callable[..., Awaitable[Tenant
 
 CreativeReader = Annotated[TenantContext, Depends(require_capability(Capability.CREATIVE_READ))]
 CreativeWriter = Annotated[TenantContext, Depends(require_capability(Capability.CREATIVE_WRITE))]
+PolicyManager = Annotated[TenantContext, Depends(require_capability(Capability.POLICY_MANAGE))]
 ValidationRunner = Annotated[TenantContext, Depends(require_capability(Capability.VALIDATION_RUN))]
 GenerationRunner = Annotated[TenantContext, Depends(require_capability(Capability.GENERATION_RUN))]
 

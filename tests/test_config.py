@@ -95,3 +95,30 @@ def test_malware_scan_simulator_is_allowed_in_development(app_env: str) -> None:
 def test_malware_scan_simulator_is_refused_outside_development(app_env: str) -> None:
     with pytest.raises(ValidationError, match="MALWARE_SCAN_MODE=simulator"):
         _settings(app_env=app_env, malware_scan_mode="simulator")
+
+
+def test_policy_source_defaults() -> None:
+    settings = _settings()
+
+    assert settings.policy_source_bucket is None
+    assert settings.policy_source_max_bytes == 50 * 1024 * 1024
+
+
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_a_blank_policy_source_bucket_means_unset(blank: str) -> None:
+    assert _settings(policy_source_bucket=blank).policy_source_bucket is None
+
+
+def test_policy_source_bucket_is_read_as_given() -> None:
+    assert _settings(policy_source_bucket="nrc-dev-policy").policy_source_bucket == "nrc-dev-policy"
+
+
+@pytest.mark.parametrize("bad_value", [1023, 104_857_601])
+def test_policy_source_max_bytes_is_bounded(bad_value: int) -> None:
+    with pytest.raises(ValidationError, match="policy_source_max_bytes"):
+        _settings(policy_source_max_bytes=bad_value)
+
+
+def test_image_types_do_not_accept_policy_types() -> None:
+    with pytest.raises(ValidationError, match=r"unsupported type\(s\): application/pdf"):
+        _settings(upload_image_types="application/pdf")

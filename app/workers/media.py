@@ -1,12 +1,14 @@
 """Media worker (NRC-3): inspects completed client uploads and turns clean ones into assets.
+Policy source uploads (NRC-4) go through the same checks but stay uploads, with no asset.
 
 Run with `uv run python -m app.workers.media`. It connects as marketing_worker and leases due
 uploads one at a time through lease_media_uploads(), which returns ids only; everything else runs
 in a session bound to the upload's tenant, so row-level security applies.
 
 For each upload it reads exactly the pinned S3 version, then checks, in order: size and SHA-256
-against the declaration, the real image type and dimensions (decoded, with the pixel cap), the
-type against the declaration and the accepted types, and finally the malware scan. Only a clean
+against the declaration, the real file type (images: decoded, with the pixel cap; policy files:
+signature and encoding, see app.services.upload_purposes), the type against the declaration and
+the accepted types, and finally the malware scan. Only a clean
 upload becomes READY, in the same transaction as its immutable assets row; any failed check ends
 it as REJECTED with a safe reason. Nothing reaches validation or generation before that.
 
@@ -35,9 +37,8 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.models import Asset, MediaUpload
-from app.models.enums import UploadState
+from app.models.enums import UploadPurpose, UploadState
 from app.schemas.assets import AssetOrigin
-from app.services import media
 from app.services.media import MediaRejectedError, configure_pillow
 from app.services.scanning import (
     MalwareScanner,
@@ -48,6 +49,7 @@ from app.services.scanning import (
     build_scanner,
 )
 from app.services.storage import ObjectStorage, StorageError
+from app.services.upload_purposes import UPLOAD_PURPOSES, InspectedFile
 from app.services.uploads import reason_columns
 from app.workers.common import (
     DEFAULT_OWNER,
@@ -73,6 +75,9 @@ class LeaseLostError(Exception):
 class _Run:
     sessions: async_sessionmaker[AsyncSession]
     storage: ObjectStorage
+    # None when POLICY_SOURCE_BUCKET is not set: policy uploads then wait, they never fall back
+    # to the media bucket.
+    policy_storage: ObjectStorage | None
     scanner: MalwareScanner
     settings: Settings
     owner: str
@@ -87,12 +92,13 @@ async def run_once(
     *,
     owner: str = DEFAULT_OWNER,
     max_uploads: int | None = None,
+    policy_storage: ObjectStorage | None = None,
 ) -> int:
     # Lease and inspect up to max_uploads (default WORKER_MAX_EVENTS_PER_RUN) due uploads, one
     # lease each. Returns how many were leased.
     if max_uploads is None:
         max_uploads = settings.worker_max_events_per_run
-    run = _Run(sessions, storage, scanner, settings, owner, lease_seconds(settings))
+    run = _Run(sessions, storage, policy_storage, scanner, settings, owner, lease_seconds(settings))
     leased = 0
     while leased < max_uploads:
         async with sessions() as db:
@@ -214,7 +220,7 @@ class _Found:
     # What examining the object found. Exactly one of reject, retry or (info and verdict) is set.
     reject: str | None = None
     retry: str | None = None
-    info: media.ImageInfo | None = None
+    info: InspectedFile | None = None
     verdict: ScanVerdict | None = None
 
 
@@ -225,25 +231,30 @@ def _sha256_hex(content: bytes) -> str:
 async def _examine(run: _Run, upload: MediaUpload) -> _Found:
     # No database access here: this part may take long and runs while the lease is renewed.
     settings = run.settings
+    spec = UPLOAD_PURPOSES[upload.purpose]
+    storage = run.policy_storage if upload.purpose is UploadPurpose.POLICY_SOURCE else run.storage
+    # Only the bucket recorded on the row is read: if it is not the configured one, the upload
+    # waits (retryable) until the configuration is fixed, then expires like any outage.
+    if storage is None or storage.bucket != upload.bucket:
+        return _Found(retry="STORAGE_UNAVAILABLE")
     try:
-        content = await run.storage.read(upload.s3_key, version_id=upload.s3_version_id)
+        # The policy storage caps a read at POLICY_SOURCE_MAX_BYTES: a longer object comes back
+        # one byte too long and fails the size check below.
+        content = await storage.read(upload.s3_key, version_id=upload.s3_version_id)
     except StorageError:
         return _Found(retry="STORAGE_UNAVAILABLE")
     if len(content) != upload.declared_size_bytes:
         return _Found(reject="SIZE_MISMATCH")
-    # CPU-bound on files up to UPLOAD_IMAGE_MAX_BYTES: off the event loop, like the decode.
+    # CPU-bound on files up to the purpose limit: off the event loop, like the inspection.
     if await asyncio.to_thread(_sha256_hex, content) != upload.declared_checksum_sha256:
         return _Found(reject="CHECKSUM_MISMATCH")
     try:
-        # The real type comes from decoding the file, never from its name or declared type.
-        info = await asyncio.to_thread(
-            media.inspect_image, content, max_pixels=settings.max_image_pixels
-        )
+        info = await asyncio.to_thread(spec.inspect, content, upload.declared_mime_type, settings)
     except MediaRejectedError as error:
         return _Found(reject=error.code)
     if info.mime_type != upload.declared_mime_type:
         return _Found(reject="TYPE_MISMATCH")
-    if info.mime_type not in settings.upload_image_types:
+    if info.mime_type not in spec.allowed_types(settings):
         return _Found(reject="MEDIA_UNSUPPORTED_TYPE")
     try:
         # The lease is renewed while this runs, so only this timeout ends a scan that hangs.
@@ -283,7 +294,7 @@ async def _ready(
     db: AsyncSession,
     run: _Run,
     upload: MediaUpload,
-    info: media.ImageInfo,
+    info: InspectedFile,
     verdict: ScanVerdict,
     scan: Mapping[str, object],
 ) -> None:
@@ -303,27 +314,9 @@ async def _ready(
             **_RELEASE,
         },
     )
-    # The asset is what later steps use; it exists only for a READY upload, with the same id.
-    db.add(
-        Asset(
-            id=upload.id,
-            tenant_id=upload.tenant_id,
-            creative_id=upload.creative_id,
-            study_id=upload.study_id,
-            upload_id=upload.id,
-            name=upload.name,
-            origin=AssetOrigin.UPLOADED.value,
-            bucket=upload.bucket,
-            s3_key=upload.s3_key,
-            s3_version_id=upload.s3_version_id,
-            mime_type=info.mime_type,
-            width_px=info.width_px,
-            height_px=info.height_px,
-            size_bytes=upload.declared_size_bytes,
-            checksum_sha256=upload.declared_checksum_sha256,
-            created_by=upload.created_by,
-        )
-    )
+    if UPLOAD_PURPOSES[upload.purpose].becomes_asset:
+        # The asset is what later steps use; it exists only for a READY upload, same id.
+        db.add(_asset(upload, info))
     await db.commit()
     logger.info(
         "upload ready upload=%s tenant=%s scan_engine=%s simulated=%s",
@@ -339,6 +332,27 @@ async def _ready(
             upload.id,
             upload.tenant_id,
         )
+
+
+def _asset(upload: MediaUpload, info: InspectedFile) -> Asset:
+    return Asset(
+        id=upload.id,
+        tenant_id=upload.tenant_id,
+        creative_id=upload.creative_id,
+        study_id=upload.study_id,
+        upload_id=upload.id,
+        name=upload.name,
+        origin=AssetOrigin.UPLOADED.value,
+        bucket=upload.bucket,
+        s3_key=upload.s3_key,
+        s3_version_id=upload.s3_version_id,
+        mime_type=info.mime_type,
+        width_px=info.width_px,
+        height_px=info.height_px,
+        size_bytes=upload.declared_size_bytes,
+        checksum_sha256=upload.declared_checksum_sha256,
+        created_by=upload.created_by,
+    )
 
 
 async def _reject(
@@ -408,6 +422,17 @@ def build_dependencies(settings: Settings) -> tuple[ObjectStorage, MalwareScanne
 async def run_forever(settings: Settings) -> None:
     database_url = worker_database_url()
     storage, scanner = build_dependencies(settings)
+    policy_storage = (
+        ObjectStorage(
+            settings,
+            bucket=settings.policy_source_bucket,
+            max_read_bytes=settings.policy_source_max_bytes,
+        )
+        if settings.policy_source_bucket
+        else None
+    )
+    if policy_storage is None:
+        logger.warning("POLICY_SOURCE_BUCKET is not set: policy source uploads will wait")
     engine = create_engine(settings, database_url)
     sessions = create_sessionmaker(engine)
     stop = asyncio.Event()
@@ -418,7 +443,9 @@ async def run_forever(settings: Settings) -> None:
     try:
         while not stop.is_set():
             try:
-                leased = await run_once(sessions, storage, scanner, settings)
+                leased = await run_once(
+                    sessions, storage, scanner, settings, policy_storage=policy_storage
+                )
             except Exception:
                 logger.exception("media worker iteration failed")
                 leased = 0

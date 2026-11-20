@@ -153,6 +153,38 @@ class UploadRead(ApiModel):
     )
 
 
+class PolicyUploadCreate(RequestModel):
+    """A policy source file (PDF, plain text or Markdown) for the tenant's policy library."""
+
+    name: UploadName = Field(description="File name to show in the policy library.")
+    mime_type: str = Field(
+        max_length=64, description="application/pdf, text/plain or text/markdown."
+    )
+    size_bytes: int = Field(ge=1, description="Exact size of the file in bytes.")
+    checksum_sha256: Sha256Hex = Field(description="SHA-256 of the file, lower-case hex.")
+
+
+class PolicyUploadRead(ApiModel):
+    """A policy source upload. READY means it passed the checks; it is never an asset."""
+
+    upload_id: UUID
+    purpose: UploadPurpose
+    status: UploadState
+    reason: UploadReason | None
+    name: str
+    mime_type: str = Field(description="As declared; inspection checks the real type.")
+    size_bytes: int
+    checksum_sha256: str
+    scan: UploadScan | None
+    created_by: str
+    created_at: datetime
+    completed_at: datetime | None
+    upload: UploadTarget | None = Field(
+        default=None,
+        description="Only in the create and upload-url responses while the file is awaited.",
+    )
+
+
 class UploadPage(ApiModel):
     items: list[UploadRead]
     next_cursor: datetime | None = Field(description="Pass as cursor for the next (older) page.")
