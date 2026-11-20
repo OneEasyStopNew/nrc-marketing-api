@@ -2715,6 +2715,8 @@
           "generation:run",
           "approval:decide",
           "policy:manage",
+          "policy:approve",
+          "policy:activate",
           "publication:manage",
           "membership:manage"
         ],
@@ -4528,6 +4530,7 @@
           "creator",
           "reviewer",
           "policy_admin",
+          "policy_approver",
           "publisher",
           "admin"
         ],

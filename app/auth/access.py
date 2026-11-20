@@ -17,6 +17,7 @@ class Role(StrEnum):
     CREATOR = "creator"
     REVIEWER = "reviewer"
     POLICY_ADMIN = "policy_admin"
+    POLICY_APPROVER = "policy_approver"
     PUBLISHER = "publisher"
     ADMIN = "admin"
 
@@ -28,6 +29,8 @@ class Capability(StrEnum):
     GENERATION_RUN = "generation:run"
     APPROVAL_DECIDE = "approval:decide"
     POLICY_MANAGE = "policy:manage"
+    POLICY_APPROVE = "policy:approve"
+    POLICY_ACTIVATE = "policy:activate"
     PUBLICATION_MANAGE = "publication:manage"
     MEMBERSHIP_MANAGE = "membership:manage"
 
@@ -47,6 +50,11 @@ ROLE_CAPABILITIES: Final[Mapping[Role, frozenset[Capability]]] = MappingProxyTyp
             {Capability.CREATIVE_READ, Capability.VALIDATION_RUN, Capability.APPROVAL_DECIDE}
         ),
         Role.POLICY_ADMIN: frozenset({Capability.CREATIVE_READ, Capability.POLICY_MANAGE}),
+        # Approving and activating rules is kept apart from editing them (NRC-4, Q3). Whether one
+        # person may hold both roles (four-eyes) is a governance decision still open (Q5).
+        Role.POLICY_APPROVER: frozenset(
+            {Capability.CREATIVE_READ, Capability.POLICY_APPROVE, Capability.POLICY_ACTIVATE}
+        ),
         Role.PUBLISHER: frozenset({Capability.CREATIVE_READ, Capability.PUBLICATION_MANAGE}),
         Role.ADMIN: frozenset({Capability.CREATIVE_READ, Capability.MEMBERSHIP_MANAGE}),
     }
