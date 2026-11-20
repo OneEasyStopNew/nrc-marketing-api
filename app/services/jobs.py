@@ -329,11 +329,6 @@ class AwaitingReview:
     failure_code: str | None
 
 
-async def jobs_awaiting_review(db: AsyncSession) -> list[tuple[UUID, UUID]]:
-    # (tenant id, job id) of every job awaiting_review_details lists.
-    return [(item.tenant_id, item.job_id) for item in await awaiting_review_details(db)]
-
-
 async def awaiting_review_details(db: AsyncSession) -> list[AwaitingReview]:
     """Jobs whose credits wait for an operator, across tenants, with the reason they stopped.
 

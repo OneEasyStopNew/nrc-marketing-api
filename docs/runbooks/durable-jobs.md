@@ -131,7 +131,7 @@ The commands print ids and codes only; the reason is never logged.
 | Active jobs per tenant | `GENERATION_MAX_ACTIVE_JOBS_PER_TENANT` | 429 `GENERATION_LIMIT_REACHED`, `details.reason=ACTIVE_JOB_LIMIT` |
 | Credits per tenant per 24 h | `GENERATION_DAILY_CREDIT_CEILING_PER_TENANT` | 429, `details.reason=CREDIT_CEILING` |
 | Spend per provider, all tenants | `GENERATION_GLOBAL_BUDGET_USD` | job fails `BUDGET_EXHAUSTED` before submit |
-| Generations per provider at once, all tenants and workers | `GENERATION_MAX_IN_FLIGHT_PER_PROVIDER` | job waits `QUEUED` (no failure counted, estimate kept) |
+| Generations per provider at once, all tenants and workers | `GENERATION_MAX_IN_FLIGHT_PER_PROVIDER` | job waits `QUEUED` (no failure counted, estimate kept); past `GENERATION_DEADLINE_SECONDS` it fails `DEADLINE_EXCEEDED` with credits released |
 | Transient provider failures in a row, per worker | `PROVIDER_CIRCUIT_FAILURE_THRESHOLD`, `PROVIDER_CIRCUIT_OPEN_SECONDS` | new estimates and submits pause for the open period; polls and fetches go on |
 
 A job being cancelled keeps its active slot until the worker finishes the cancel, unless it was
@@ -140,7 +140,8 @@ starts a worker. Adding worker replicas never raises the provider cap, because t
 under a database lock shared by all workers.
 
 `GENERATION_MAX_IN_FLIGHT_PER_PROVIDER` defaults low (4) until the provider confirms its concurrency
-quota. Set it to that quota or lower.
+quota. Set it to that quota or lower. Many `DEADLINE_EXCEEDED` failures on jobs that never left
+`QUEUED` mean the cap (or the deadline) is too low for the load, not a provider fault.
 
 ## Crash recovery (what to expect, nothing to do)
 

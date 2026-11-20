@@ -2,7 +2,7 @@
 # workers, and the per-provider circuit breaker. Every provider here is SIMULATED.
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from decimal import Decimal
 from uuid import UUID
 
@@ -11,6 +11,7 @@ import pytest
 from asgi_lifespan import LifespanManager
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import FastAPI
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import (
@@ -27,6 +28,7 @@ from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.main import create_app
 from app.models.enums import ExecutionState, JobStage
 from app.services.providers.base import (
+    ImageProvider,
     ImageRequest,
     ProviderJobStatus,
     ProviderRejectedError,
@@ -34,6 +36,7 @@ from app.services.providers.base import (
     StatusResult,
 )
 from app.services.providers.simulator import SimulatedImageProvider
+from app.workers import connector
 from app.workers.connector import run_once
 from app.workers.limits import CircuitBreaker, GuardedProvider, guard_providers, submit_slot_free
 from tests.conftest import (
@@ -336,3 +339,49 @@ async def test_two_workers_cannot_both_take_the_last_provider_slot(
         (ExecutionState.QUEUED.value, None),
         (ExecutionState.WAITING_PROVIDER.value, JobStage.WAITING_PROVIDER.value),
     ]
+
+
+async def test_run_forever_serves_guarded_providers_and_closes_the_originals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = SimulatedImageProvider()
+    served: list[Mapping[str, ImageProvider]] = []
+    closed: list[Mapping[str, ImageProvider]] = []
+
+    async def fake_serve(
+        settings: Settings, providers: Mapping[str, ImageProvider], database_url: SecretStr
+    ) -> None:
+        served.append(providers)
+
+    async def fake_close(providers: Mapping[str, ImageProvider]) -> None:
+        closed.append(providers)
+
+    monkeypatch.setattr(connector, "worker_database_url", lambda: SecretStr("unused"))
+    monkeypatch.setattr(connector, "load_provider_secrets", lambda settings: settings)
+    monkeypatch.setattr(connector, "build_providers", lambda settings: {"simulator": original})
+    monkeypatch.setattr(connector, "_serve", fake_serve)
+    monkeypatch.setattr(connector, "close_providers", fake_close)
+
+    await connector.run_forever(get_settings())
+
+    [providers] = served
+    assert isinstance(providers["simulator"], GuardedProvider)
+    assert providers["simulator"].inner is original
+    assert closed == [{"simulator": original}]
+
+
+async def test_a_failed_probe_after_the_open_period_reopens_at_once() -> None:
+    guarded, inner, clock = _guarded(threshold=3, open_seconds=30)
+    inner.error = ProviderUnavailableError("Simulated outage.")
+    for _ in range(3):
+        with pytest.raises(ProviderUnavailableError, match="Simulated outage"):
+            await guarded.estimate_cost_usd(REQUEST)
+    clock.now += 31
+
+    with pytest.raises(ProviderUnavailableError, match="Simulated outage"):
+        await guarded.estimate_cost_usd(REQUEST)
+    with pytest.raises(ProviderUnavailableError, match="paused briefly"):
+        await guarded.estimate_cost_usd(REQUEST)
+
+    # One probe, not another full run of failures.
+    assert inner.calls == 4

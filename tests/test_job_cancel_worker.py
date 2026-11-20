@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.core.config import get_settings
 from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState, SpendState
-from app.services.jobs import jobs_awaiting_review
+from app.services.jobs import awaiting_review_details
 from app.services.providers.base import (
     ProviderConfigError,
     ProviderOutcomeUnknownError,
@@ -83,7 +83,7 @@ async def _cancel_in_flight(connection: AsyncConnection, job_id: UUID) -> None:
 async def _awaiting_review(connection: AsyncConnection) -> list[tuple[UUID, UUID]]:
     # Lists across tenants, so it needs a role that reads tenants (the script uses the owner).
     async with app_session(connection) as db:
-        return await jobs_awaiting_review(db)
+        return [(item.tenant_id, item.job_id) for item in await awaiting_review_details(db)]
 
 
 async def _accepted(

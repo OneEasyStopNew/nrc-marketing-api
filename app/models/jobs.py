@@ -79,6 +79,12 @@ class Job(Base):
             use_alter=True,
         ),
         Index("ix_jobs_tenant_id_state", "tenant_id", "state"),
+        # provider_in_flight() runs under a lock every submit waits on: never a full scan.
+        Index(
+            "ix_jobs_provider_in_flight",
+            "provider",
+            postgresql_where=text("state IN ('RUNNING', 'WAITING_PROVIDER', 'CANCEL_REQUESTED')"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)

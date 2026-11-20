@@ -298,15 +298,16 @@ class ImageGenerationHandler:
             set_committed_value(job, "provider_cost_estimate_usd_micros", micros)
         await step.heartbeat(db)
         if not await submit_slot_free(db, str(job.provider), step.settings):
-            # The provider is at its concurrency cap: wait without counting a failure. The guarded
-            # no-op move keeps a fresh estimate, so the job is never priced twice.
-            await transition(
-                db,
-                job.id,
-                allowed_from={ExecutionState.QUEUED, ExecutionState.RUNNING},
-                to=job.state,
-                **values,
-            )
+            # The provider is at its concurrency cap: wait without counting a failure. A fresh
+            # estimate is kept (guarded, same state), so the job is never priced twice.
+            if values:
+                await transition(
+                    db,
+                    job.id,
+                    allowed_from={ExecutionState.QUEUED, ExecutionState.RUNNING},
+                    to=job.state,
+                    **values,
+                )
             return backoff_seconds(step.event_attempts, step.settings)
         moved = await transition(
             db,

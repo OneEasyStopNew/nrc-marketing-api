@@ -8,11 +8,18 @@ has the request and is still working on it: submitting, or waiting at the provid
 job whose cancel is waiting for that outcome). UNKNOWN jobs are not counted: the outcome is not
 known, and counting them could block every new job until an operator settles them.
 
+The count runs under a lock every submit waits on, so a partial index on the in-flight states
+keeps it off a full scan of all jobs ever run.
+
 Deployment requirements, the same as for lease_outbox_events() (20261109_ffd6ebe6b868):
 - The function's owner (the role running this migration) must own jobs. FORCE RLS applies to
   the owner too, so the provider_in_flight policy lets only that role read every tenant's jobs.
 - Neither marketing_app nor marketing_worker may be a member of the owner role, or they would
   inherit that policy. Only marketing_worker gets EXECUTE.
+- Consequence: the owner role (MIGRATION_DATABASE_URL: migrations, operator listing scripts)
+  sees every tenant's jobs whatever app.tenant_id says, as it already does for outbox_events.
+  Owner-run code that reads jobs must filter by tenant_id explicitly (awaiting_review_details
+  does).
 
 Revision ID: 4b7d2e9f1a63
 Revises: 9e4c2b7a5d18
@@ -21,6 +28,7 @@ Create Date: 2026-11-19 22:00:00.000000
 
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = "4b7d2e9f1a63"
@@ -32,6 +40,8 @@ APP_ROLE = "marketing_app"
 WORKER_ROLE = "marketing_worker"
 FUNCTION = "provider_in_flight(text)"
 POLICY = "provider_in_flight"
+INDEX = "ix_jobs_provider_in_flight"
+IN_FLIGHT_STATES = "state IN ('RUNNING', 'WAITING_PROVIDER', 'CANCEL_REQUESTED')"
 
 # Stage values are JobStage values (app/models/enums.py); states are ExecutionState values.
 CREATE_FUNCTION = """
@@ -51,6 +61,9 @@ $$
 
 
 def upgrade() -> None:
+    op.create_index(
+        INDEX, "jobs", ["provider"], unique=False, postgresql_where=sa.text(IN_FLIGHT_STATES)
+    )
     # Read-only and only for the migration owner, which owns the function.
     op.execute(f"CREATE POLICY {POLICY} ON jobs FOR SELECT TO CURRENT_USER USING (true)")
     op.execute(CREATE_FUNCTION)
@@ -61,3 +74,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute(f"DROP FUNCTION {FUNCTION}")
     op.execute(f"DROP POLICY {POLICY} ON jobs")
+    op.drop_index(INDEX, table_name="jobs", if_exists=True)

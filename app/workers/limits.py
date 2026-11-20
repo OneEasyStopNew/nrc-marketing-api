@@ -69,9 +69,13 @@ class CircuitBreaker:
         self._clock = clock
         self._failures = 0
         self._open_until = 0.0
+        # Set when the circuit opens and cleared by a success: while set, the first transient
+        # failure (a failed probe after the open period) reopens it at once.
+        self._tripped = False
 
     def check(self) -> None:
-        # Raises while open; after the open period one request is let through to probe.
+        # Raises while open. After the open period requests go through again; the first one
+        # that fails transiently reopens the circuit (half-open).
         remaining = self._open_until - self._clock()
         if remaining > 0:
             raise ProviderUnavailableError(
@@ -80,15 +84,14 @@ class CircuitBreaker:
             )
 
     def record(self, error: ProviderError | None) -> None:
-        if error is None:
+        if error is None or not (error.retryable or isinstance(error, ProviderOutcomeUnknownError)):
+            # A success, or a refusal (400, 402, ...): the provider is up.
             self._failures = 0
-            return
-        if not (error.retryable or isinstance(error, ProviderOutcomeUnknownError)):
-            # A refusal (400, 402, ...) says the provider is up.
-            self._failures = 0
+            self._tripped = False
             return
         self._failures += 1
-        if self._failures >= self._threshold:
+        if self._tripped or self._failures >= self._threshold:
+            self._tripped = True
             self._open_until = self._clock() + self._open_seconds
             self._failures = 0
             logger.warning(
