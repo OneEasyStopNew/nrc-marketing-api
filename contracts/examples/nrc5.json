@@ -34,6 +34,7 @@
               "image"
             ],
             "channels": [],
+            "post_formats": [],
             "languages": [],
             "audiences": [],
             "jurisdictions": [],
@@ -81,6 +82,7 @@
               "image"
             ],
             "channels": [],
+            "post_formats": [],
             "languages": [],
             "audiences": [],
             "jurisdictions": [],
@@ -110,6 +112,7 @@
               "applicability": {
                 "input_kinds": [],
                 "channels": [],
+                "post_formats": [],
                 "languages": [],
                 "audiences": [],
                 "jurisdictions": [],
@@ -136,6 +139,7 @@
               "text"
             ],
             "channels": [],
+            "post_formats": [],
             "languages": [],
             "audiences": [],
             "jurisdictions": [],
@@ -177,6 +181,7 @@
               "text"
             ],
             "channels": [],
+            "post_formats": [],
             "languages": [],
             "audiences": [],
             "jurisdictions": [],
@@ -212,6 +217,7 @@
       "study_snapshot_version": 1,
       "input_kind": "brief",
       "channel": "facebook",
+      "post_format": "feed_image",
       "language": "en",
       "audience": null,
       "jurisdiction": null,

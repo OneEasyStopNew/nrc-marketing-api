@@ -47,6 +47,7 @@ from app.models.enums import (
     BundleLifecycleState,
     Channel,
     PolicyLanguage,
+    PostFormat,
     RetrievalMode,
     ValidationInputKind,
 )
@@ -87,6 +88,8 @@ class EvalCase(BaseModel):
     language: PolicyLanguage
     input_kind: ValidationInputKind
     channel: Channel
+    # Optional: rules restricted by post format are UNRESOLVED (still selected) without it.
+    post_format: PostFormat | None = None
     text: str = Field(min_length=1, max_length=MAX_STATEMENT_CHARS)
     required_rules: tuple[str, ...]
     relevant_evidence: tuple[str, ...] = ()
@@ -320,6 +323,7 @@ async def evaluate(
             scope=ContextScope(
                 input_kind=case.input_kind,
                 channel=case.channel,
+                post_format=case.post_format,
                 language=case.language,
                 evaluated_at=evaluated_at,
             ),

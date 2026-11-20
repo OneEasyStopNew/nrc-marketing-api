@@ -675,6 +675,7 @@ async def _load_nodes(db: AsyncSession, bundle_id: UUID) -> dict[UUID, GraphNode
             PolicySourceClause.clause_ref,
             PolicyNode.input_kinds,
             PolicyNode.channels,
+            PolicyNode.post_formats,
             PolicyNode.languages,
             PolicyNode.audiences,
             PolicyNode.jurisdictions,
@@ -707,6 +708,7 @@ async def _load_nodes(db: AsyncSession, bundle_id: UUID) -> dict[UUID, GraphNode
             conditions=Conditions(
                 input_kinds=tuple(row.input_kinds),
                 channels=tuple(row.channels),
+                post_formats=tuple(row.post_formats),
                 languages=tuple(row.languages),
                 audiences=tuple(row.audiences),
                 jurisdictions=tuple(row.jurisdictions),

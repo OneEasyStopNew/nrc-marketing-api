@@ -37,5 +37,7 @@ class ContextManifestRecord(Base):
     retrieval_config_version: Mapped[int]
     # Validated by app.services.policy_context.ContextManifest on write and on read.
     manifest: Mapped[dict[str, object]] = mapped_column(JSONB)
+    # sha256 of the manifest's canonical JSON; NULL on rows stored before it was recorded.
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
     created_by: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

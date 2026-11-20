@@ -36,6 +36,7 @@ from app.models.enums import (
     Language,
     Outcome,
     PolicyLanguage,
+    PostFormat,
     ValidationInputKind,
 )
 from app.schemas.common import ApiModel
@@ -247,6 +248,7 @@ class _Target:
     caption: str | None
     language: Language
     channel: Channel
+    post_format: PostFormat
     facts: StudyFacts
     snapshot_id: UUID
     snapshot_version: int
@@ -261,6 +263,7 @@ async def _target(db: AsyncSession, ctx: TenantContext, creative_id: UUID, versi
                 CreativeVersion.caption,
                 CreativeVersion.language,
                 CreativeVersion.channel,
+                CreativeVersion.post_format,
                 StudySnapshot.facts,
                 StudySnapshot.id.label("snapshot_id"),
                 StudySnapshot.version,
@@ -293,6 +296,7 @@ async def _target(db: AsyncSession, ctx: TenantContext, creative_id: UUID, versi
         caption=row.caption,
         language=row.language,
         channel=row.channel,
+        post_format=row.post_format,
         facts=StudyFacts.model_validate(row.facts),
         snapshot_id=row.snapshot_id,
         snapshot_version=row.version,
@@ -367,6 +371,7 @@ async def _gather_context(
             scope=ContextScope(
                 input_kind=kind,
                 channel=target.channel,
+                post_format=target.post_format,
                 language=language,
                 evaluated_at=evaluated_at,
             ),

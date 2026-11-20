@@ -17,6 +17,7 @@ from app.models.enums import (
     MissingContextCode,
     PolicyLanguage,
     PolicyNodeType,
+    PostFormat,
     RetrievalMode,
     Severity,
     ValidationInputKind,
@@ -34,6 +35,7 @@ class RuleApplicabilityRead(ApiModel):
 
     input_kinds: list[str]
     channels: list[str]
+    post_formats: list[str]
     languages: list[str]
     audiences: list[str]
     jurisdictions: list[str]
@@ -169,6 +171,9 @@ class ValidationContextRead(ApiModel):
     study_snapshot_version: int
     input_kind: ValidationInputKind
     channel: Channel
+    post_format: PostFormat | None = Field(
+        description="Null when the run's manifest predates recording it."
+    )
     language: PolicyLanguage
     audience: str | None
     jurisdiction: str | None

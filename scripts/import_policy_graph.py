@@ -105,6 +105,7 @@ class NodeImport(_ImportModel):
     approved: bool = False
     input_kinds: list[_Tag] = Field(default_factory=list)
     channels: list[_Tag] = Field(default_factory=list)
+    post_formats: list[_Tag] = Field(default_factory=list)
     languages: list[_Tag] = Field(default_factory=list)
     audiences: list[_Tag] = Field(default_factory=list)
     jurisdictions: list[_Tag] = Field(default_factory=list)

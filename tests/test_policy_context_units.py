@@ -8,6 +8,7 @@ from app.models.enums import (
     Channel,
     PolicyEdgeType,
     PolicyLanguage,
+    PostFormat,
     ValidationInputKind,
 )
 from app.schemas.tenancy import StudyFacts
@@ -45,6 +46,14 @@ def test_a_failed_condition_wins_over_an_unknown_one() -> None:
     assert verdict.applies is Applicability.FALSE
     assert verdict.reasons == ("CHANNEL_NOT_MATCHED",)
     assert verdict.unresolved == ("audience",)
+
+
+def test_post_format_restriction_matches_or_stays_unresolved() -> None:
+    story_only = Conditions(post_formats=("story_image",))
+    feed = SCOPE.model_copy(update={"post_format": PostFormat.FEED_IMAGE})
+
+    assert evaluate(story_only, feed, STUDY, FACTS).reasons == ("POST_FORMAT_NOT_MATCHED",)
+    assert evaluate(story_only, SCOPE, STUDY, FACTS).unresolved == ("post_format",)
 
 
 def test_unknown_study_fact_name_is_unresolved_not_dropped() -> None:

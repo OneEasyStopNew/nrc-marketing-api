@@ -3681,6 +3681,13 @@
             "type": "array",
             "title": "Channels"
           },
+          "post_formats": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Post Formats"
+          },
           "languages": {
             "items": {
               "type": "string"
@@ -3736,6 +3743,7 @@
         "required": [
           "input_kinds",
           "channels",
+          "post_formats",
           "languages",
           "audiences",
           "jurisdictions",
@@ -4244,6 +4252,17 @@
           "channel": {
             "$ref": "#/components/schemas/Channel"
           },
+          "post_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the run's manifest predates recording it."
+          },
           "language": {
             "$ref": "#/components/schemas/PolicyLanguage"
           },
@@ -4348,6 +4367,7 @@
           "study_snapshot_version",
           "input_kind",
           "channel",
+          "post_format",
           "language",
           "audience",
           "jurisdiction",

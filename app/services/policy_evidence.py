@@ -169,6 +169,7 @@ def context_read(validation_run_id: UUID, manifest: ContextManifest) -> Validati
         study_snapshot_version=manifest.study_snapshot.version,
         input_kind=scope.input_kind,
         channel=scope.channel,
+        post_format=scope.post_format,
         language=scope.language,
         audience=scope.audience,
         jurisdiction=scope.jurisdiction,
@@ -322,6 +323,7 @@ def _applicability(node: PolicyNode) -> RuleApplicabilityRead:
     return RuleApplicabilityRead(
         input_kinds=list(node.input_kinds),
         channels=list(node.channels),
+        post_formats=list(node.post_formats),
         languages=list(node.languages),
         audiences=list(node.audiences),
         jurisdictions=list(node.jurisdictions),

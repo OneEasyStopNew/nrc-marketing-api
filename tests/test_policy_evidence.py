@@ -125,11 +125,8 @@ async def test_brief_run_stores_lexical_context(
     assert context["validation_run_id"] == run_id
     assert context["policy_bundle_id"] == str(world.a.policy_bundle_id)
     assert context["study_snapshot_id"] == str(world.a.snapshot_id)
-    assert (context["input_kind"], context["channel"], context["language"]) == (
-        "brief",
-        "facebook",
-        "en",
-    )
+    scope = ("input_kind", "channel", "post_format", "language")
+    assert tuple(context[name] for name in scope) == ("brief", "facebook", "feed_image", "en")
     # Inside a request there's no embedder: full-text only, and the manifest says so.
     assert context["retrieval_mode"] == "lexical_only"
     assert context["embedding_model_id"] is None

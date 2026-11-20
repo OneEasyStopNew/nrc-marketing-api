@@ -15,6 +15,7 @@ class Conditions:
     # A node's applicability columns. An empty tuple means "no restriction".
     input_kinds: tuple[str, ...] = ()
     channels: tuple[str, ...] = ()
+    post_formats: tuple[str, ...] = ()
     languages: tuple[str, ...] = ()
     audiences: tuple[str, ...] = ()
     jurisdictions: tuple[str, ...] = ()
@@ -47,6 +48,11 @@ def evaluate(
     dimensions: Sequence[tuple[str, tuple[str, ...], str | None]] = (
         ("input_kind", conditions.input_kinds, scope.input_kind.value),
         ("channel", conditions.channels, scope.channel.value),
+        (
+            "post_format",
+            conditions.post_formats,
+            scope.post_format.value if scope.post_format else None,
+        ),
         ("language", conditions.languages, scope.language.value),
         ("audience", conditions.audiences, scope.audience),
         ("jurisdiction", conditions.jurisdictions, scope.jurisdiction),

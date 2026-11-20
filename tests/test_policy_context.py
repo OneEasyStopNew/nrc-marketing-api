@@ -20,6 +20,7 @@ from app.models.enums import (
     Language,
     PolicyLanguage,
     PolicyNodeType,
+    PostFormat,
     RecruitmentStatus,
     RetrievalMode,
     ValidationInputKind,
@@ -70,11 +71,13 @@ def _scope(
     kind: ValidationInputKind = ValidationInputKind.TEXT,
     *,
     audience: str | None = None,
+    post_format: PostFormat | None = None,
     at: datetime = NOW,
 ) -> ContextScope:
     return ContextScope(
         input_kind=kind,
         channel=Channel.FACEBOOK,
+        post_format=post_format,
         language=PolicyLanguage.EN,
         audience=audience,
         evaluated_at=at,
@@ -446,6 +449,31 @@ async def test_hitting_the_node_limit_is_recorded(
     assert len(manifest.evidence) == 10
     assert (MissingContextCode.TRAVERSAL_TRUNCATED, None) in _codes(manifest)
     assert _ids(manifest.required_rules) == ["R-1"]
+
+
+async def test_rule_for_another_post_format_is_dropped_and_unknown_format_flagged(
+    connection: AsyncConnection, world: World
+) -> None:
+    # A story-only rule doesn't apply to a feed image; with the format unknown it is kept.
+    graph = _graph(
+        [_rule_node("R-STORY", post_formats=["story_image"]), _rule_node("R-ALL")],
+        [_rule("R-STORY"), _rule("R-ALL")],
+        [],
+    )
+    bundle_id = await _custom(connection, world, graph)
+    tenant, snapshot = world.a.tenant_id, world.a.snapshot_id
+
+    feed = await _build(
+        connection, tenant, bundle_id, snapshot, _scope(post_format=PostFormat.FEED_IMAGE)
+    )
+    unknown = await _build(connection, tenant, bundle_id, snapshot)
+
+    assert _ids(feed.manifest.required_rules) == ["R-ALL"]
+    assert feed.manifest.missing_context == ()
+    assert _ids(unknown.manifest.required_rules) == ["R-ALL", "R-STORY"]
+    assert _codes(unknown.manifest) == [(MissingContextCode.APPLICABILITY_UNRESOLVED, "R-STORY")]
+    # The format is part of the cache key: the second request built its own manifest.
+    assert (unknown.reused, unknown.id != feed.id) == (False, True)
 
 
 async def test_rule_restricted_by_an_unknown_audience_is_kept_and_flagged(

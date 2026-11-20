@@ -13,6 +13,7 @@ from app.models.enums import (
     MissingContextCode,
     PolicyLanguage,
     PolicyNodeType,
+    PostFormat,
     RetrievalMode,
     Severity,
     ValidationInputKind,
@@ -21,8 +22,8 @@ from app.schemas.validations import TextSpan
 
 # Bumped whenever the selection, walk or search logic changes, so cached manifests built by older
 # logic are never reused (the version is part of every cache key). 2: search added.
-RETRIEVAL_CONFIG_VERSION: Final = 2
-MANIFEST_SCHEMA_VERSION: Final = 2
+RETRIEVAL_CONFIG_VERSION: Final = 3
+MANIFEST_SCHEMA_VERSION: Final = 3
 # Evidence quotes node text; long clauses are cut so a manifest stays a bounded size.
 EXCERPT_MAX_CHARS: Final = 1000
 # The common reciprocal rank fusion constant: a high rank in either search list counts, and
@@ -39,6 +40,9 @@ class _Frozen(BaseModel):
 class ContextScope(_Frozen):
     input_kind: ValidationInputKind
     channel: Channel
+    # None means unknown (and keeps manifests from before it was recorded readable): rules
+    # restricted by post format are then flagged, not dropped.
+    post_format: PostFormat | None = None
     # Policy language (en or es), wider than the public Language enum until Spanish ships (F33).
     language: PolicyLanguage
     # Not on creatives yet: None means unknown, so rules restricted by it are flagged, not dropped.
