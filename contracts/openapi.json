@@ -4224,6 +4224,18 @@
             "format": "uuid",
             "title": "Validation Run Id"
           },
+          "manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Sha256",
+            "description": "sha256 of the stored context's canonical JSON (sorted keys, no whitespace) when the run used it. Null for runs stored before it was recorded."
+          },
           "policy_bundle_id": {
             "type": "string",
             "format": "uuid",
@@ -4360,6 +4372,7 @@
         "type": "object",
         "required": [
           "validation_run_id",
+          "manifest_sha256",
           "policy_bundle_id",
           "policy_bundle_version",
           "is_synthetic",

@@ -164,6 +164,12 @@ class ValidationContextRead(ApiModel):
     """
 
     validation_run_id: UUID
+    manifest_sha256: str | None = Field(
+        description=(
+            "sha256 of the stored context's canonical JSON (sorted keys, no whitespace) when the"
+            " run used it. Null for runs stored before it was recorded."
+        )
+    )
     policy_bundle_id: UUID
     policy_bundle_version: int
     is_synthetic: bool

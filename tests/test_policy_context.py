@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert, select, text
+from sqlalchemy import insert, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -35,6 +35,7 @@ from app.services.policy_context import (
     StoredManifest,
 )
 from app.services.policy_context.manifest import Statement
+from app.services.policy_context.provider import manifest_sha256
 from app.services.policy_index import build_policy_index
 from app.services.providers.embeddings import (
     EmbeddingProvider,
@@ -715,8 +716,45 @@ async def test_same_request_reuses_the_stored_manifest(
     assert (first.reused, second.reused) == (False, True)
     assert second.id == first.id
     assert second.manifest == first.manifest
+    assert second.sha256 == first.sha256
     await bind_test_tenant(connection, world.a.tenant_id)
     assert await count_rows(connection, ContextManifestRecord) == 1
+
+
+async def test_stored_hash_matches_the_stored_json(
+    connection: AsyncConnection, world: World
+) -> None:
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+
+    stored = await _build(connection, world.a.tenant_id, bundle_id, snapshot_id)
+
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        row = (
+            await connection.execute(
+                select(ContextManifestRecord.manifest, ContextManifestRecord.content_sha256).where(
+                    ContextManifestRecord.id == stored.id
+                )
+            )
+        ).one()
+    assert row.content_sha256 == stored.sha256 == manifest_sha256(row.manifest)
+
+
+async def test_reused_manifest_without_a_stored_hash_is_hashed_from_its_json(
+    connection: AsyncConnection, world: World
+) -> None:
+    # A row stored before the hash column existed.
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+    first = await _build(connection, world.a.tenant_id, bundle_id, snapshot_id)
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        await connection.execute(
+            update(ContextManifestRecord)
+            .where(ContextManifestRecord.id == first.id)
+            .values(content_sha256=None)
+        )
+
+    second = await _build(connection, world.a.tenant_id, bundle_id, snapshot_id)
+
+    assert (second.reused, second.sha256) == (True, first.sha256)
 
 
 async def test_any_changed_dependency_builds_a_new_manifest(

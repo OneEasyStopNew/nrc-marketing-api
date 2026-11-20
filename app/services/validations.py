@@ -54,7 +54,12 @@ from app.schemas.validations import (
 )
 from app.services import idempotency, policies, rules
 from app.services.creatives import visible_to
-from app.services.policy_context import ContextRequest, ContextScope, PolicyContextProvider
+from app.services.policy_context import (
+    ContextRequest,
+    ContextScope,
+    PolicyContextProvider,
+    StoredManifest,
+)
 from app.services.policy_context.manifest import MAX_STATEMENT_CHARS, Statement
 
 VALIDATE_ROUTE: Final = "POST /validations"
@@ -116,7 +121,7 @@ async def create_validation(
     text = target.prompt if body.input_kind is ValidationInputKind.BRIEF else target.caption or ""
     evaluation = rules.evaluate_text(body.input_kind, text, policy, target.facts)
     evaluated_at = datetime.now(tz=UTC)
-    manifest_id, context_gaps = await _gather_context(
+    stored, context_gaps = await _gather_context(
         db,
         ctx,
         context_provider,
@@ -127,13 +132,11 @@ async def create_validation(
         policy,
         evaluated_at,
     )
-    if manifest_id is None:
+    if stored is None:
         # Without its policy context a run can't be shown to pass (17 Nov decision superseded on
         # 20 Nov, Dinesh's review): PASS becomes NEEDS_REVIEW; FAIL is already stricter.
         evaluation = without_pass(evaluation)
-    run = _new_run(
-        ctx, body, text, target, policy, evaluation, evaluated_at, manifest_id, context_gaps
-    )
+    run = _new_run(ctx, body, text, target, policy, evaluation, evaluated_at, stored, context_gaps)
     db.add(run)
     await idempotency.complete(db, ctx.tenant_id, VALIDATE_ROUTE, idempotency_key, run.id)
     await db.commit()
@@ -311,7 +314,7 @@ def _new_run(
     policy: PolicyBundleRead,
     evaluation: rules.Evaluation,
     evaluated_at: datetime,
-    context_manifest_id: UUID | None,
+    context: StoredManifest | None,
     context_gaps: list[CoverageGap],
 ) -> ValidationRun:
     return ValidationRun(
@@ -326,7 +329,8 @@ def _new_run(
         policy_bundle_id=policy.policy_bundle_id,
         policy_bundle_version=policy.version,
         study_snapshot_version=target.snapshot_version,
-        context_manifest_id=context_manifest_id,
+        context_manifest_id=context.id if context else None,
+        context_manifest_sha256=context.sha256 if context else None,
         result=_StoredResult(
             gates=evaluation.gates,
             rule_results=evaluation.rule_results,
@@ -348,8 +352,8 @@ async def _gather_context(
     target: _Target,
     policy: PolicyBundleRead,
     evaluated_at: datetime,
-) -> tuple[UUID | None, list[CoverageGap]]:
-    """The stored context's id, or no context and a coverage gap saying why.
+) -> tuple[StoredManifest | None, list[CoverageGap]]:
+    """The stored context, or no context and a coverage gap saying why.
 
     Failing to gather it never fails the request: the run is stored with the gap, and the caller
     makes sure it can't pass. Each of its statements has a time limit
@@ -405,7 +409,7 @@ async def _gather_context(
                     type(error).__name__,
                 )
         else:
-            return stored.id, []
+            return stored, []
     logger.warning(
         "policy context unavailable tenant=%s bundle=%s reason=%s",
         ctx.tenant_id,

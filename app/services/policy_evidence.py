@@ -130,7 +130,11 @@ async def get_validation_context(
     """
     row = (
         await db.execute(
-            select(ValidationRun.id, ValidationRun.context_manifest_id)
+            select(
+                ValidationRun.id,
+                ValidationRun.context_manifest_id,
+                ValidationRun.context_manifest_sha256,
+            )
             .join(
                 Creative,
                 and_(
@@ -154,14 +158,17 @@ async def get_validation_context(
     if stored is None:
         # The foreign key makes this impossible; never answer with someone else's context.
         raise ContextNotAvailableError()
-    return context_read(row.id, ContextManifest.model_validate(stored))
+    return context_read(row.id, ContextManifest.model_validate(stored), row.context_manifest_sha256)
 
 
-def context_read(validation_run_id: UUID, manifest: ContextManifest) -> ValidationContextRead:
+def context_read(
+    validation_run_id: UUID, manifest: ContextManifest, manifest_sha256: str | None
+) -> ValidationContextRead:
     # The stored manifest without statement hashes; field names match, so submodels map directly.
     scope = manifest.scope
     return ValidationContextRead(
         validation_run_id=validation_run_id,
+        manifest_sha256=manifest_sha256,
         policy_bundle_id=manifest.policy_bundle.id,
         policy_bundle_version=manifest.policy_bundle.version,
         is_synthetic=manifest.policy_bundle.is_synthetic,

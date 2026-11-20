@@ -104,6 +104,8 @@ Edge = tuple[PolicyEdgeType, UUID, UUID]
 class StoredManifest:
     id: UUID
     manifest: ContextManifest
+    # manifest_sha256 of the stored JSON; runs record it so later changes to that JSON show.
+    sha256: str
     # True when an identical request had already stored this manifest.
     reused: bool
 
@@ -367,7 +369,16 @@ def cache_key(
         },
         "config": config.model_dump(mode="json"),
     }
-    return _sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    return _sha256(_canonical(payload))
+
+
+def manifest_sha256(manifest_json: Mapping[str, object]) -> str:
+    # Of the JSON as stored, in canonical form, so anyone can recompute it from the row.
+    return _sha256(_canonical(manifest_json))
+
+
+def _canonical(value: Mapping[str, object]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def graph_fingerprint(loaded: LoadedContext) -> str:
@@ -757,7 +768,11 @@ async def _find(db: AsyncSession, key: str) -> StoredManifest | None:
     tenant_id = bound_tenant(db)
     row = (
         await db.execute(
-            select(ContextManifestRecord.id, ContextManifestRecord.manifest).where(
+            select(
+                ContextManifestRecord.id,
+                ContextManifestRecord.manifest,
+                ContextManifestRecord.content_sha256,
+            ).where(
                 ContextManifestRecord.tenant_id == tenant_id,
                 ContextManifestRecord.cache_key == key,
             )
@@ -765,7 +780,9 @@ async def _find(db: AsyncSession, key: str) -> StoredManifest | None:
     ).one_or_none()
     if row is None:
         return None
-    return StoredManifest(row.id, ContextManifest.model_validate(row.manifest), reused=True)
+    # Rows stored before the hash was recorded are hashed from their JSON.
+    sha256 = row.content_sha256 or manifest_sha256(row.manifest)
+    return StoredManifest(row.id, ContextManifest.model_validate(row.manifest), sha256, reused=True)
 
 
 async def _store(
@@ -776,6 +793,8 @@ async def _store(
     actor: str,
 ) -> StoredManifest:
     tenant_id = bound_tenant(db)
+    content = manifest.model_dump(mode="json")
+    sha256 = manifest_sha256(content)
     # Two identical requests at once: one insert wins, the other reads the winner's row.
     manifest_id = await db.scalar(
         insert(ContextManifestRecord)
@@ -788,14 +807,15 @@ async def _store(
             study_snapshot_id=loaded.snapshot.id,
             study_snapshot_version=loaded.snapshot.version,
             retrieval_config_version=manifest.retrieval_config.version,
-            manifest=manifest.model_dump(mode="json"),
+            manifest=content,
+            content_sha256=sha256,
             created_by=actor,
         )
         .on_conflict_do_nothing(index_elements=["tenant_id", "cache_key"])
         .returning(ContextManifestRecord.id)
     )
     if manifest_id is not None:
-        return StoredManifest(manifest_id, manifest, reused=False)
+        return StoredManifest(manifest_id, manifest, sha256, reused=False)
     existing = await _find(db, key)
     if existing is None:
         # The conflicting row must exist and be visible to this tenant; anything else is a bug.
