@@ -45,17 +45,14 @@ from app.services.providers.higgsfield import (
 )
 from app.services.providers.simulator import SimulatedImageProvider, SimulatorScenario
 from app.workers import connector
+from app.workers.common import DEFAULT_OWNER, WorkerConfigError, backoff_seconds, process_owner
 from app.workers.connector import (
-    DEFAULT_OWNER,
     EVENT_HANDLERS,
     PROVIDER_STATUS_FAILURE_CODES,
     JobRunHandler,
     LeasedEvent,
     Step,
-    WorkerConfigError,
-    backoff_seconds,
     build_providers,
-    process_owner,
     run_once,
 )
 from tests.conftest import (
