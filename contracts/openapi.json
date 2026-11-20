@@ -1001,7 +1001,7 @@
           "validations"
         ],
         "summary": "Validate a brief, caption or image",
-        "description": "Briefs and captions are checked against the active policy and the study facts before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run. Each brief or caption run also stores the policy context it was checked against (see GET /validations/{validation_run_id}/context); it doesn't change the outcome yet.",
+        "description": "Briefs and captions are checked against the active policy and the study facts before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run. Each brief or caption run also stores the policy context it was checked against (see GET /validations/{validation_run_id}/context). If that context can't be gathered in time, the run is stored as NEEDS_REVIEW (or FAIL), never PASS, with a coverage gap.",
         "operationId": "create_validation",
         "security": [
           {

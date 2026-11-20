@@ -12,6 +12,7 @@ from sqlalchemy import Text, and_, cast, func, literal, select
 from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.session import bound_tenant
 from app.models import PolicyNode, PolicyNodeEmbedding
 from app.models.enums import PolicyLanguage
 from app.models.policy_graph import SEARCHABLE_NODE_TYPES
@@ -28,7 +29,6 @@ Source = Literal["lexical", "semantic"]
 
 async def lexical(
     db: AsyncSession,
-    tenant_id: UUID,
     bundle_id: UUID,
     text: str,
     language: PolicyLanguage,
@@ -41,6 +41,7 @@ async def lexical(
     an OR query, cover density scores one repeated word as high as two different ones, while
     ts_rank ranks a node that shares more distinct terms higher.
     """
+    tenant_id = bound_tenant(db)
     config = cast(literal(TEXT_SEARCH_CONFIG[language]), REGCONFIG)
     terms = cast(func.websearch_to_tsquery(config, text), Text)
     # Negations ("-word") are dropped: ORed, `!word` would match every node without that word.
@@ -66,7 +67,6 @@ async def lexical(
 
 async def semantic(
     db: AsyncSession,
-    tenant_id: UUID,
     bundle_id: UUID,
     model_id: str,
     vector: Sequence[float],
@@ -77,6 +77,7 @@ async def semantic(
     Exact search over one bundle's vectors (no ANN index: a bundle is a few hundred nodes, and a
     filtered approximate scan could return fewer than `limit` rows).
     """
+    tenant_id = bound_tenant(db)
     rows = await db.execute(
         select(PolicyNode.id)
         .join(

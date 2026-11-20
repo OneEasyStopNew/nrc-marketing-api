@@ -41,6 +41,12 @@ GRAPH_MODELS = (PolicySource, PolicySourceClause, PolicyNode, PolicyRuleRecord, 
 EXPECTED_COUNTS = (1, 8, 21, 9, 15)
 
 
+@pytest.fixture
+def seed_graph() -> bool:
+    # These tests write their own graph rows into tenant A's bundle, so it starts without one.
+    return False
+
+
 def _bundle_of(world: World) -> UUID:
     assert world.a.policy_bundle_id is not None
     return world.a.policy_bundle_id

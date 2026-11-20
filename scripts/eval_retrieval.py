@@ -327,7 +327,7 @@ async def evaluate(
         )
         started = time.perf_counter()
         try:
-            stored = await provider.build(db, tenant_id, request, actor="eval_retrieval")
+            stored = await provider.build(db, request, actor="eval_retrieval")
         except PolicyContextUnavailableError as error:
             reason = str((error.details or {}).get("reason", error.code))
             hint = INDEX_HINT if reason in INDEX_REASONS else ""

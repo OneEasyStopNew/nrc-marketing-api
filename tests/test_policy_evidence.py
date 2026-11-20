@@ -12,7 +12,7 @@ from app.models import ContextManifestRecord, ValidationRun
 from app.models.enums import BundleLifecycleState, Language, PolicyLanguage
 from app.services.policy_context.manifest import MAX_STATEMENT_CHARS
 from app.services.validations import policy_language
-from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
+from scripts.import_policy_graph import load_synthetic_graph
 from scripts.seed_demo import demo_policy_rules
 from tests.conftest import (
     AuthHeaders,
@@ -20,7 +20,6 @@ from tests.conftest import (
     add_policy_bundle,
     as_tenant_owner,
     count_rows,
-    owner_session,
 )
 
 API = "/v1/marketing"
@@ -32,13 +31,16 @@ BRIEF_RULES = ["REC-01", "REC-02", "REC-03", "REC-04", "REC-05", "REC-08"]
 GAP_START = "Policy evidence was not gathered for this run"
 
 
+async def _without_graph(connection: AsyncConnection, world: World) -> UUID:
+    # A newer active bundle for tenant A with JSONB rules only (an older kind of bundle): no graph
+    # to retrieve from. The seeded bundle has one.
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        return await add_policy_bundle(connection, world.a.tenant_id, 2, rules=demo_policy_rules())
+
+
 async def _with_graph(connection: AsyncConnection, world: World) -> UUID:
-    # Tenant A's active bundle with the synthetic rulebook imported into its graph.
+    # Tenant A's active bundle: seed_tenant imports the synthetic rulebook into its graph.
     assert world.a.policy_bundle_id is not None
-    async with owner_session(connection, world.a.tenant_id) as db:
-        await import_policy_graph(
-            db, world.a.tenant_id, world.a.policy_bundle_id, load_synthetic_graph()
-        )
     return world.a.policy_bundle_id
 
 
@@ -221,15 +223,15 @@ async def test_context_does_not_change_the_outcome(
 async def test_bundle_without_graph_stores_run_with_gap(
     client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
 ) -> None:
-    # Tenant A's seeded bundle has JSONB rules only (an older bundle): no graph to retrieve from.
+    await _without_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
 
     run_id = await _validate(client, auth, world, creative)
 
     assert (await _run(connection, run_id)).context_manifest_id is None
     run = (await _get(client, auth, f"/validations/{run_id}", world.a.tenant_id)).json()
-    # Unchanged: the context is evidence only, so its absence doesn't change the outcome yet.
-    assert run["outcome"] == "PASS"
+    # Without its policy context a clean brief can't pass: it needs a human decision.
+    assert run["outcome"] == "NEEDS_REVIEW"
     gaps = [gap["reason"] for gap in run["coverage_gaps"]]
     assert any(reason.startswith(GAP_START) and "(GRAPH_MISSING)" in reason for reason in gaps)
     response = await _get(client, auth, f"/validations/{run_id}/context", world.a.tenant_id)
@@ -388,11 +390,11 @@ def test_graph_rule_ids_match_the_stored_rules() -> None:
 
 
 async def test_rules_of_a_bundle_without_graph_are_unavailable(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
 ) -> None:
-    response = await _get(
-        client, auth, f"/policy-bundles/{world.a.policy_bundle_id}/rules", world.a.tenant_id
-    )
+    bundle_id = await _without_graph(connection, world)
+
+    response = await _get(client, auth, f"/policy-bundles/{bundle_id}/rules", world.a.tenant_id)
 
     assert response.status_code == 409
     assert response.json()["code"] == "POLICY_CONTEXT_UNAVAILABLE"

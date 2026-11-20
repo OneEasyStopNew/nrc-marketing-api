@@ -19,6 +19,12 @@ class AppError(Exception):
         super().__init__(self.message)
 
 
+class TenantNotBoundError(AppError):
+    # A programming error: tenant-scoped code ran on a session without bind_tenant. A 500 with the
+    # generic message; never served to a client as anything more specific.
+    pass
+
+
 class AuthenticationError(AppError):
     code = "UNAUTHENTICATED"
     default_message = "Authentication is required."

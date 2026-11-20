@@ -69,6 +69,7 @@ from app.services.providers.base import (
     SubmitResult,
 )
 from app.services.providers.simulator import SimulatedImageProvider
+from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
 from scripts.seed_demo import DEMO_POLICY_NAME, SYNTHETIC_FACTS, demo_policy_rules
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -200,6 +201,7 @@ async def seed_tenant(
     members: dict[str, list[str]],
     with_policy: bool,
     display_names: Mapping[str, str] | None = None,
+    with_graph: bool = True,
 ) -> SeededTenant:
     # Tenant with one recruiting and one closed synthetic study; every member gets both.
     tenant_id, study_id, closed_study_id, snapshot_id = uuid4(), uuid4(), uuid4(), uuid4()
@@ -256,6 +258,11 @@ async def seed_tenant(
                 lifecycle_state=BundleLifecycleState.ACTIVE,
             )
         )
+        await db.flush()
+        # With its rulebook graph, like seed_demo and the staging deploy step: without one every
+        # validation needs review (no policy context), so a clean brief could never pass.
+        if with_graph:
+            await import_policy_graph(db, tenant_id, policy_bundle_id, load_synthetic_graph())
     await db.flush()
     return SeededTenant(tenant_id, study_id, closed_study_id, snapshot_id, policy_bundle_id)
 
@@ -356,8 +363,10 @@ async def add_policy_bundle(
     tenant_id: UUID,
     version: int,
     state: BundleLifecycleState = BundleLifecycleState.ACTIVE,
+    rules: list[dict[str, object]] | None = None,
 ) -> UUID:
-    # An empty synthetic bundle (no JSONB rules), written as the owner by the caller.
+    # A synthetic bundle without a graph (no JSONB rules unless given), written as the owner by
+    # the caller.
     bundle_id = uuid4()
     await conn.execute(
         insert(PolicyBundle).values(
@@ -366,7 +375,7 @@ async def add_policy_bundle(
             version=version,
             name=f"[SYNTHETIC] Policy v{version}",
             source_ref="synthetic:test-fixture",
-            rules=[],
+            rules=rules or [],
             is_synthetic=True,
             approved_by="synthetic-fixture",
             approved_at=datetime(2026, 11, 17, tzinfo=UTC),
@@ -389,7 +398,14 @@ def sessions(connection: AsyncConnection) -> Sessions:
 
 
 @pytest.fixture
-async def world(connection: AsyncConnection) -> World:
+def seed_graph() -> bool:
+    # Whether tenant A's bundle gets the synthetic graph. Modules that write their own graph rows
+    # into that bundle override this with False.
+    return True
+
+
+@pytest.fixture
+async def world(connection: AsyncConnection, seed_graph: bool) -> World:
     async with _session(connection) as seed:
         a = await seed_tenant(
             seed,
@@ -397,6 +413,7 @@ async def world(connection: AsyncConnection) -> World:
             members={"creator-a": ["creator"], "reviewer-a": ["reviewer"]},
             with_policy=True,
             display_names={"creator-a": CREATOR_A_NAME},
+            with_graph=seed_graph,
         )
         b = await seed_tenant(
             seed, name="Tenant B", members={"creator-b": ["creator"]}, with_policy=False

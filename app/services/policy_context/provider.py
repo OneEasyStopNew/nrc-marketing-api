@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import RetrievalSettings
 from app.core.errors import PolicyContextUnavailableError
+from app.db.session import bound_tenant
 from app.models import (
     ContextManifestRecord,
     PolicyBundle,
@@ -111,7 +112,7 @@ class PolicyContextProvider(Protocol):
     """Builds the policy context for one check. Callers depend on this, not on Postgres."""
 
     async def build(
-        self, db: AsyncSession, tenant_id: UUID, request: ContextRequest, *, actor: str
+        self, db: AsyncSession, request: ContextRequest, *, actor: str
     ) -> StoredManifest: ...
 
 
@@ -187,7 +188,7 @@ class AuroraPolicyContextProvider:
         self._embedder = embedder
 
     async def build(
-        self, db: AsyncSession, tenant_id: UUID, request: ContextRequest, *, actor: str
+        self, db: AsyncSession, request: ContextRequest, *, actor: str
     ) -> StoredManifest:
         """Return the stored manifest for this request, building and storing it if new.
 
@@ -201,17 +202,18 @@ class AuroraPolicyContextProvider:
                 (details.reason says which).
             ProviderError: the embedder failed (only with an embedder).
         """
-        loaded = await load_context(db, tenant_id, request)
+        tenant_id = bound_tenant(db)
+        loaded = await load_context(db, request)
         plan = self._plan(request)
         if plan.mode is RetrievalMode.FULL and plan.embedding_model_id is not None:
-            await _require_index(db, tenant_id, loaded, plan.embedding_model_id)
+            await _require_index(db, loaded, plan.embedding_model_id)
         key = cache_key(tenant_id, loaded, request.scope, plan, self._config)
-        existing = await _find(db, tenant_id, key)
+        existing = await _find(db, key)
         if existing is not None:
             return existing
-        matches = await self._search(db, tenant_id, loaded, request.scope.language, plan)
+        matches = await self._search(db, loaded, request.scope.language, plan)
         manifest = assemble(loaded, request.scope, self._config, SearchResult(plan, matches))
-        stored = await _store(db, tenant_id, key, loaded, manifest, actor)
+        stored = await _store(db, key, loaded, manifest, actor)
         logger.info(
             "policy context built manifest=%s tenant=%s bundle=%s reused=%s",
             stored.id,
@@ -244,7 +246,6 @@ class AuroraPolicyContextProvider:
     async def _search(
         self,
         db: AsyncSession,
-        tenant_id: UUID,
         loaded: LoadedContext,
         language: PolicyLanguage,
         plan: SearchPlan,
@@ -266,11 +267,11 @@ class AuroraPolicyContextProvider:
         matches: dict[UUID, list[SearchMatch]] = {}
         for index, text in enumerate(texts):
             ranked: dict[search.Source, Sequence[UUID]] = {
-                "lexical": await search.lexical(db, tenant_id, bundle_id, text, language, top_k)
+                "lexical": await search.lexical(db, bundle_id, text, language, top_k)
             }
             if vectors is not None and plan.embedding_model_id is not None:
                 ranked["semantic"] = await search.semantic(
-                    db, tenant_id, bundle_id, plan.embedding_model_id, vectors[index], top_k
+                    db, bundle_id, plan.embedding_model_id, vectors[index], top_k
                 )
             fused = search.fuse(ranked, names, top_k, self._config.rrf_k)
             for rank, (node_id, found_by) in enumerate(fused, start=1):
@@ -281,7 +282,10 @@ class AuroraPolicyContextProvider:
         return {node_id: tuple(found) for node_id, found in matches.items()}
 
 
-async def load_context(db: AsyncSession, tenant_id: UUID, request: ContextRequest) -> LoadedContext:
+async def load_context(db: AsyncSession, request: ContextRequest) -> LoadedContext:
+    # The tenant comes from the bound session; the explicit filters back up RLS, because owner
+    # scripts may run as a role that bypasses it.
+    tenant_id = bound_tenant(db)
     bundle_row = (
         await db.execute(
             select(
@@ -310,10 +314,8 @@ async def load_context(db: AsyncSession, tenant_id: UUID, request: ContextReques
     ).one_or_none()
     if snapshot_row is None:
         raise _unavailable("SNAPSHOT_NOT_FOUND")
-    nodes = await _load_nodes(db, tenant_id, bundle_row.id)
-    rules = [
-        rule for rule in await _load_rules(db, tenant_id, bundle_row.id) if rule.node_id in nodes
-    ]
+    nodes = await _load_nodes(db, bundle_row.id)
+    rules = [rule for rule in await _load_rules(db, bundle_row.id) if rule.node_id in nodes]
     if not rules:
         # A legacy bundle without a graph (or with none approved): nothing can be selected.
         raise _unavailable("GRAPH_MISSING")
@@ -326,7 +328,7 @@ async def load_context(db: AsyncSession, tenant_id: UUID, request: ContextReques
         facts=StudyFacts.model_validate(snapshot_row.facts),
         nodes=nodes,
         rules=rules,
-        edges=await _load_edges(db, tenant_id, bundle_row.id),
+        edges=await _load_edges(db, bundle_row.id),
     )
 
 
@@ -634,10 +636,9 @@ def _manifest_rule(
     )
 
 
-async def _require_index(
-    db: AsyncSession, tenant_id: UUID, loaded: LoadedContext, model_id: str
-) -> None:
+async def _require_index(db: AsyncSession, loaded: LoadedContext, model_id: str) -> None:
     # Vector search is only trusted on a READY index that covers exactly the approved graph.
+    tenant_id = bound_tenant(db)
     row = (
         await db.execute(
             select(PolicyIndexBuild.node_count, PolicyIndexBuild.content_checksum).where(
@@ -661,8 +662,9 @@ def _unavailable(reason: str, **details: object) -> PolicyContextUnavailableErro
     return PolicyContextUnavailableError(details={"reason": reason, **details})
 
 
-async def _load_nodes(db: AsyncSession, tenant_id: UUID, bundle_id: UUID) -> dict[UUID, GraphNode]:
+async def _load_nodes(db: AsyncSession, bundle_id: UUID) -> dict[UUID, GraphNode]:
     # Approved nodes only: unreviewed proposals never take part in retrieval.
+    tenant_id = bound_tenant(db)
     rows = await db.execute(
         select(
             PolicyNode.id,
@@ -718,7 +720,8 @@ async def _load_nodes(db: AsyncSession, tenant_id: UUID, bundle_id: UUID) -> dic
     }
 
 
-async def _load_rules(db: AsyncSession, tenant_id: UUID, bundle_id: UUID) -> list[GraphRule]:
+async def _load_rules(db: AsyncSession, bundle_id: UUID) -> list[GraphRule]:
+    tenant_id = bound_tenant(db)
     rows = await db.execute(
         select(
             PolicyRuleRecord.node_id,
@@ -735,8 +738,9 @@ async def _load_rules(db: AsyncSession, tenant_id: UUID, bundle_id: UUID) -> lis
     return [GraphRule(*row) for row in rows]
 
 
-async def _load_edges(db: AsyncSession, tenant_id: UUID, bundle_id: UUID) -> list[Edge]:
+async def _load_edges(db: AsyncSession, bundle_id: UUID) -> list[Edge]:
     # Approved edges only; edges to unapproved nodes are dropped when the walk is built.
+    tenant_id = bound_tenant(db)
     rows = await db.execute(
         select(PolicyEdge.edge_type, PolicyEdge.from_node_id, PolicyEdge.to_node_id).where(
             PolicyEdge.tenant_id == tenant_id,
@@ -747,7 +751,8 @@ async def _load_edges(db: AsyncSession, tenant_id: UUID, bundle_id: UUID) -> lis
     return [(row.edge_type, row.from_node_id, row.to_node_id) for row in rows]
 
 
-async def _find(db: AsyncSession, tenant_id: UUID, key: str) -> StoredManifest | None:
+async def _find(db: AsyncSession, key: str) -> StoredManifest | None:
+    tenant_id = bound_tenant(db)
     row = (
         await db.execute(
             select(ContextManifestRecord.id, ContextManifestRecord.manifest).where(
@@ -763,12 +768,12 @@ async def _find(db: AsyncSession, tenant_id: UUID, key: str) -> StoredManifest |
 
 async def _store(
     db: AsyncSession,
-    tenant_id: UUID,
     key: str,
     loaded: LoadedContext,
     manifest: ContextManifest,
     actor: str,
 ) -> StoredManifest:
+    tenant_id = bound_tenant(db)
     # Two identical requests at once: one insert wins, the other reads the winner's row.
     manifest_id = await db.scalar(
         insert(ContextManifestRecord)
@@ -789,7 +794,7 @@ async def _store(
     )
     if manifest_id is not None:
         return StoredManifest(manifest_id, manifest, reused=False)
-    existing = await _find(db, tenant_id, key)
+    existing = await _find(db, key)
     if existing is None:
         # The conflicting row must exist and be visible to this tenant; anything else is a bug.
         raise _unavailable("MANIFEST_STORE_FAILED")

@@ -12,12 +12,13 @@ Image validation (D4) is not built here; the routes answer it from the demo stub
 
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Final
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, select
+from sqlalchemy import text as sql_text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,6 +57,8 @@ from app.services.policy_context import ContextRequest, ContextScope, PolicyCont
 from app.services.policy_context.manifest import MAX_STATEMENT_CHARS, Statement
 
 VALIDATE_ROUTE: Final = "POST /validations"
+# Postgres "query_canceled": a statement hit statement_timeout.
+QUERY_CANCELED_SQLSTATE: Final = "57014"
 # Recorded when the policy context couldn't be gathered; the rule checks still ran. The reason
 # in brackets is a code (e.g. GRAPH_MISSING): CoverageGap has no code field.
 CONTEXT_UNAVAILABLE_GAP: Final = (
@@ -88,6 +91,7 @@ async def create_validation(
     body: ValidationCreate,
     idempotency_key: str,
     context_provider: PolicyContextProvider,
+    context_timeout: float,
 ) -> tuple[ValidationAccepted, bool]:
     """Check a brief or caption and store the run. Returns it and whether this was a replay.
 
@@ -112,8 +116,20 @@ async def create_validation(
     evaluation = rules.evaluate_text(body.input_kind, text, policy, target.facts)
     evaluated_at = datetime.now(tz=UTC)
     manifest_id, context_gaps = await _gather_context(
-        db, ctx, context_provider, body.input_kind, text, target, policy, evaluated_at
+        db,
+        ctx,
+        context_provider,
+        context_timeout,
+        body.input_kind,
+        text,
+        target,
+        policy,
+        evaluated_at,
     )
+    if manifest_id is None:
+        # Without its policy context a run can't be shown to pass (17 Nov decision superseded on
+        # 20 Nov, Dinesh's review): PASS becomes NEEDS_REVIEW; FAIL is already stricter.
+        evaluation = without_pass(evaluation)
     run = _new_run(
         ctx, body, text, target, policy, evaluation, evaluated_at, manifest_id, context_gaps
     )
@@ -322,6 +338,7 @@ async def _gather_context(
     db: AsyncSession,
     ctx: TenantContext,
     provider: PolicyContextProvider,
+    deadline_seconds: float,
     kind: ValidationInputKind,
     text: str,
     target: _Target,
@@ -330,9 +347,10 @@ async def _gather_context(
 ) -> tuple[UUID | None, list[CoverageGap]]:
     """The stored context's id, or no context and a coverage gap saying why.
 
-    The context is evidence only, so failing to gather it never fails the validation: the run is
-    stored with the rule checks' outcome and the gap. Uses the run's pinned bundle and snapshot,
-    and the whole brief or caption as one statement. Inside a request there is no embedder, so
+    Failing to gather it never fails the request: the run is stored with the gap, and the caller
+    makes sure it can't pass. Each of its statements has a time limit
+    (POLICY_CONTEXT_TIMEOUT_SECONDS). Uses the run's pinned bundle and snapshot, and the whole
+    brief or caption as one statement. Inside a request there is no embedder, so
     search is full-text only (flagged in the manifest); an identical earlier request reuses its
     stored manifest.
     """
@@ -355,21 +373,32 @@ async def _gather_context(
             statements=(Statement(text=text),) if text else (),
         )
         try:
-            # A savepoint, so a database error here leaves the run's own transaction usable.
+            # A savepoint, so a database error here leaves the run's own transaction usable. The
+            # deadline is Postgres's statement_timeout, not asyncio.timeout: cancelling asyncpg
+            # mid-query invalidates the connection, and the run could then not be stored.
+            # Rolling back to the savepoint undoes the limit; on success it is reset explicitly.
             async with db.begin_nested():
-                stored = await provider.build(db, ctx.tenant_id, request, actor=ctx.principal.sub)
+                await db.execute(
+                    sql_text("SELECT set_config('statement_timeout', :ms, true)"),
+                    {"ms": str(round(deadline_seconds * 1000))},
+                )
+                stored = await provider.build(db, request, actor=ctx.principal.sub)
+                await db.execute(sql_text("SET LOCAL statement_timeout TO DEFAULT"))
         except PolicyContextUnavailableError as error:
             # E.g. an older bundle without a graph.
             reason = str((error.details or {}).get("reason", error.code))
         except SQLAlchemyError as error:
-            # The class name only: database errors can quote the statement's parameters.
-            reason = "RETRIEVAL_ERROR"
-            logger.error(
-                "policy context failed tenant=%s bundle=%s error=%s",
-                ctx.tenant_id,
-                policy.policy_bundle_id,
-                type(error).__name__,
-            )
+            if getattr(getattr(error, "orig", None), "sqlstate", None) == QUERY_CANCELED_SQLSTATE:
+                reason = "RETRIEVAL_TIMEOUT"
+            else:
+                # The class name only: database errors can quote the statement's parameters.
+                reason = "RETRIEVAL_ERROR"
+                logger.error(
+                    "policy context failed tenant=%s bundle=%s error=%s",
+                    ctx.tenant_id,
+                    policy.policy_bundle_id,
+                    type(error).__name__,
+                )
         else:
             return stored.id, []
     logger.warning(
@@ -379,6 +408,20 @@ async def _gather_context(
         reason,
     )
     return None, [CoverageGap(reason=CONTEXT_UNAVAILABLE_GAP.format(reason=reason))]
+
+
+def without_pass(evaluation: rules.Evaluation) -> rules.Evaluation:
+    # The run's outcome and gates, with every PASS turned into NEEDS_REVIEW.
+    def demote(outcome: Outcome) -> Outcome:
+        return Outcome.NEEDS_REVIEW if outcome is Outcome.PASS else outcome
+
+    return replace(
+        evaluation,
+        outcome=demote(evaluation.outcome),
+        gates=[
+            gate.model_copy(update={"outcome": demote(gate.outcome)}) for gate in evaluation.gates
+        ],
+    )
 
 
 def policy_language(language: Language | str) -> PolicyLanguage | None:

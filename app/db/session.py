@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import Session, SessionTransaction
 
 from app.core.config import Settings
+from app.core.errors import TenantNotBoundError
 
 TENANT_INFO_KEY = "tenant_id"
 _SET_TENANT = text("SELECT set_config('app.tenant_id', :tenant_id, true)")
@@ -31,6 +32,18 @@ def _apply_tenant(
     tenant_id = session.info.get(TENANT_INFO_KEY)
     if tenant_id is not None:
         connection.execute(_SET_TENANT, {"tenant_id": str(tenant_id)})
+
+
+def bound_tenant(db: AsyncSession) -> UUID:
+    """The tenant this session is bound to (bind_tenant), for code that takes the session only.
+
+    Raises:
+        TenantNotBoundError: the session was never bound, so RLS would hide every row.
+    """
+    tenant_id = db.info.get(TENANT_INFO_KEY)
+    if not isinstance(tenant_id, UUID):
+        raise TenantNotBoundError()
+    return tenant_id
 
 
 async def bind_tenant(db: AsyncSession, tenant_id: UUID) -> None:

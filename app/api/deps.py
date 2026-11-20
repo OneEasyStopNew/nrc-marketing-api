@@ -65,6 +65,14 @@ def get_context_provider(settings: SettingsDep) -> PolicyContextProvider:
 ContextProviderDep = Annotated[PolicyContextProvider, Depends(get_context_provider)]
 
 
+def get_context_timeout(settings: SettingsDep) -> float:
+    # Its own dependency, so tests can shorten the deadline without other settings.
+    return settings.policy_context_timeout_seconds
+
+
+ContextTimeoutDep = Annotated[float, Depends(get_context_timeout)]
+
+
 def require_storage(storage: ObjectStorage | None) -> ObjectStorage:
     if storage is None:
         raise DependencyUnavailableError("Image storage is not configured.")

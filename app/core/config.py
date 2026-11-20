@@ -64,6 +64,10 @@ class RetrievalSettings(EmbeddingSettings):
     # searched per request (more are recorded as STATEMENTS_TRUNCATED, not silently dropped).
     policy_retrieval_top_k: int = Field(default=5, ge=1, le=50)
     policy_retrieval_max_statements: int = Field(default=50, ge=1, le=200)
+    # Limit on each database statement (Postgres statement_timeout) while building the policy
+    # context inside a validation request; a run that hits it is stored as NEEDS_REVIEW (never
+    # PASS) with a coverage gap. Per statement, so a build's worst case is a few times this.
+    policy_context_timeout_seconds: float = Field(default=5, gt=0, le=30)
 
 
 class Settings(RetrievalSettings):

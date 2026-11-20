@@ -11,7 +11,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.config import get_settings
-from app.core.errors import PolicyContextUnavailableError
+from app.core.errors import PolicyContextUnavailableError, TenantNotBoundError
 from app.db.session import bind_tenant
 from app.models import ContextManifestRecord, StudySnapshot
 from app.models.enums import (
@@ -48,7 +48,6 @@ from scripts.import_policy_graph import (
     RuleImport,
     SourceImport,
     import_policy_graph,
-    load_synthetic_graph,
 )
 from scripts.seed_demo import SYNTHETIC_FACTS
 from tests.conftest import (
@@ -109,18 +108,14 @@ async def _build(
     )
     async with app_session(connection) as db:
         await bind_tenant(db, tenant_id)
-        stored = await (provider or _provider()).build(db, tenant_id, request, actor="tester")
+        stored = await (provider or _provider()).build(db, request, actor="tester")
         await db.commit()
     return stored
 
 
 async def _synthetic(connection: AsyncConnection, world: World) -> tuple[UUID, UUID]:
-    # Tenant A's seeded bundle with the synthetic rulebook imported.
+    # Tenant A's seeded bundle: seed_tenant imports the synthetic rulebook into its graph.
     assert world.a.policy_bundle_id is not None
-    async with owner_session(connection, world.a.tenant_id) as db:
-        await import_policy_graph(
-            db, world.a.tenant_id, world.a.policy_bundle_id, load_synthetic_graph()
-        )
     return world.a.policy_bundle_id, world.a.snapshot_id
 
 
@@ -604,10 +599,27 @@ async def test_ambiguous_supersedes_is_a_conflict_and_keeps_the_rules(
 async def test_bundle_without_a_graph_is_unavailable(
     connection: AsyncConnection, world: World
 ) -> None:
-    assert world.a.policy_bundle_id is not None
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        bundle_id = await add_policy_bundle(connection, world.a.tenant_id, 2)
     with pytest.raises(PolicyContextUnavailableError, match="could not be built") as raised:
-        await _build(connection, world.a.tenant_id, world.a.policy_bundle_id, world.a.snapshot_id)
+        await _build(connection, world.a.tenant_id, bundle_id, world.a.snapshot_id)
     assert raised.value.details == {"reason": "GRAPH_MISSING"}
+
+
+async def test_build_on_a_session_without_a_tenant_is_refused(
+    connection: AsyncConnection, world: World
+) -> None:
+    # The provider takes the tenant from the session only; an unbound one is a programming error,
+    # not an empty result.
+    assert world.a.policy_bundle_id is not None
+    request = ContextRequest(
+        policy_bundle_id=world.a.policy_bundle_id,
+        study_snapshot_id=world.a.snapshot_id,
+        scope=_scope(),
+    )
+    async with app_session(connection) as db:
+        with pytest.raises(TenantNotBoundError, match="Unexpected error"):
+            await _provider().build(db, request, actor="tester")
 
 
 async def test_retired_bundle_still_builds_for_reproduction(

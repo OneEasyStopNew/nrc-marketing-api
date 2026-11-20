@@ -46,7 +46,7 @@ async def test_parallel_identical_builds_store_one_manifest(
         # Each request on its own API-role connection, as two validation requests would be.
         async with AsyncSession(api, sync_session_class=TenantSession) as db:
             await bind_tenant(db, tenant)
-            stored = await provider.build(db, tenant, request, actor="racer")
+            stored = await provider.build(db, request, actor="racer")
             await db.commit()
             return stored
 
