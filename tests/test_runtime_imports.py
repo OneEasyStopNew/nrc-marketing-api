@@ -26,6 +26,7 @@ class BlockDevOnly(MetaPathFinder):
 sys.meta_path.insert(0, BlockDevOnly())
 import app.main
 import app.workers.connector
+import app.workers.policy
 import app.services.providers.higgsfield
 import app.services.providers.bedrock_embeddings
 import app.services.policy_index
@@ -62,6 +63,17 @@ def test_no_test_module_imports_another() -> None:
 )
 def test_api_process_does_not_load_the_provider_adapter(module: str) -> None:
     # Provider calls run only in the worker; the API never needs an adapter or its client.
+    script = f"import sys, app.main; print({module!r} in sys.modules)"
+    result = subprocess.run(  # noqa: S603  fixed interpreter and script, no user input
+        [sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, check=False
+    )
+
+    assert (result.returncode, result.stdout.strip()) == (0, "False"), result.stderr
+
+
+@pytest.mark.parametrize("module", ["pypdf", "app.services.policy_extraction"])
+def test_api_process_does_not_load_the_pdf_parser(module: str) -> None:
+    # Untrusted files are parsed only in the policy worker (NRC-4), never in an API pod.
     script = f"import sys, app.main; print({module!r} in sys.modules)"
     result = subprocess.run(  # noqa: S603  fixed interpreter and script, no user input
         [sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, check=False

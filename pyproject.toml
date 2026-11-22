@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.12",
     "pydantic-settings>=2.10",
     "pyjwt[crypto]>=2.10",
+    "pypdf>=7.1.1",
     "sqlalchemy[asyncio]>=2.0.40",
     # 1.6 added RequestBodyLimitMiddleware, which app.main relies on.
     "starlette>=1.6",

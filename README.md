@@ -264,6 +264,19 @@ then labelled SIMULATED, in the API (`scan.simulated: true`) and in the logs. Th
 refuses to start because no real scanner is chosen yet, and `simulator` is refused outside local
 and demo. The flow for the frontend and the examples are in `contracts/examples/uploads.md`.
 
+### Policy source extraction (NRC-4)
+
+A policy source is registered from a `READY` policy upload. The policy worker then reads the file
+from `POLICY_SOURCE_BUCKET` (it refuses to start without it, and never reads the media bucket) and
+stores its clauses with page, section and checksum, or marks the source `FAILED` with a code
+(`SOURCE_UNREADABLE`, `SOURCE_EMPTY`, `SOURCE_TOO_MANY_PAGES`, `SOURCE_TOO_MANY_CLAUSES`, ...).
+It connects as `marketing_worker` (`WORKER_DATABASE_URL`) and needs `s3:GetObject` and
+`s3:GetObjectVersion` on the policy bucket:
+
+```powershell
+uv run python -m app.workers.policy
+```
+
 ## Staging prerequisites
 
 - A Postgres login role `marketing_app` that does not own the tables and has no `BYPASSRLS`. The API's

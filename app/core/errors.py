@@ -111,6 +111,12 @@ class UploadNotPendingError(ConflictError):
     default_message = "This upload is no longer waiting for its file."
 
 
+class PolicySourceUploadNotReadyError(ConflictError):
+    # details.status: the upload's current state. Only a READY policy upload can become a source.
+    code = "POLICY_SOURCE_UPLOAD_NOT_READY"
+    default_message = "This upload has not passed its checks yet, so it cannot become a source."
+
+
 class UploadNotAcceptedError(AppError):
     # The declared file breaks a configured limit. details.field names the field; the limits
     # are in GET /assets/upload-limits.

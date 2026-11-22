@@ -122,3 +122,30 @@ def test_policy_source_max_bytes_is_bounded(bad_value: int) -> None:
 def test_image_types_do_not_accept_policy_types() -> None:
     with pytest.raises(ValidationError, match=r"unsupported type\(s\): application/pdf"):
         _settings(upload_image_types="application/pdf")
+
+
+def test_policy_extraction_defaults() -> None:
+    settings = _settings()
+
+    assert settings.policy_source_max_pages == 500
+    assert settings.policy_extraction_max_clauses == 5000
+    assert settings.policy_extraction_timeout_seconds == 30
+    assert settings.policy_worker_max_attempts == 3
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("policy_source_max_pages", 0),
+        ("policy_source_max_pages", 5001),
+        ("policy_extraction_max_clauses", 0),
+        ("policy_extraction_max_clauses", 100_001),
+        ("policy_extraction_timeout_seconds", 0.5),
+        ("policy_extraction_timeout_seconds", 301),
+        ("policy_worker_max_attempts", 0),
+        ("policy_worker_max_attempts", 11),
+    ],
+)
+def test_policy_extraction_settings_are_bounded(field: str, bad_value: float) -> None:
+    with pytest.raises(ValidationError, match=field):
+        _settings(**{field: bad_value})

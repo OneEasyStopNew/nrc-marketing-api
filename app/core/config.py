@@ -200,6 +200,16 @@ class Settings(RetrievalSettings):
     policy_source_bucket: str | None = None
     # The worker holds the whole file in memory while inspecting it.
     policy_source_max_bytes: int = Field(default=52_428_800, ge=1024, le=104_857_600)
+    # Text extraction from policy sources (NRC-4), run by the policy worker. A source over either
+    # cap fails with a typed code instead of exhausting memory or the database.
+    policy_source_max_pages: int = Field(default=500, ge=1, le=5000)
+    policy_extraction_max_clauses: int = Field(default=5000, ge=1, le=100_000)
+    # Reading and extracting one source. It must stay under WORKER_LEASE_SECONDS (the policy worker
+    # refuses to start otherwise), so a source is never extracted while another worker holds it.
+    policy_extraction_timeout_seconds: float = Field(default=30, ge=1, le=300)
+    # Leases that end in a transient failure (storage, timeout) or a crash before a source is
+    # marked FAILED. Polling and lease length are the shared WORKER_* settings.
+    policy_worker_max_attempts: int = Field(default=3, ge=1, le=10)
 
     @field_validator(
         "cognito_client_ids",

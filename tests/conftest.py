@@ -54,6 +54,7 @@ from app.models import (
     Asset,
     CreditReservation,
     Job,
+    MediaUpload,
     Membership,
     MembershipStudy,
     PolicyBundle,
@@ -61,7 +62,14 @@ from app.models import (
     StudySnapshot,
     Tenant,
 )
-from app.models.enums import BundleLifecycleState, Language, RecruitmentStatus
+from app.models.enums import (
+    BundleLifecycleState,
+    IdentifiablePerson,
+    Language,
+    RecruitmentStatus,
+    UploadPurpose,
+    UploadState,
+)
 from app.models.jobs import ReservationState
 from app.services.providers.base import (
     FetchedImage,
@@ -390,6 +398,83 @@ async def add_policy_bundle(
         )
     )
     return bundle_id
+
+
+def make_pdf(pages: list[list[str | None]]) -> bytes:
+    """A small PDF whose pages hold the given lines; None is an empty line (a paragraph gap)."""
+    page_ids = [4 + 2 * index for index in range(len(pages))]
+    objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [{}] /Count {} >>".format(
+            " ".join(f"{page_id} 0 R" for page_id in page_ids), len(pages)
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    for page_id, lines in zip(page_ids, pages, strict=True):
+        operators = ["BT", "/F1 12 Tf", "72 720 Td", "14 TL"]
+        for line in lines:
+            if line is None:
+                operators.append("T*")
+            else:
+                escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+                operators.append(f"({escaped}) '")
+        operators.append("ET")
+        stream = "\n".join(operators)
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {page_id + 1} 0 R"
+            " /Resources << /Font << /F1 3 0 R >> >> >>"
+        )
+        objects.append(f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream")
+    out = b"%PDF-1.4\n"
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n".encode("latin-1")
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += "".join(f"{offset:010d} 00000 n \n" for offset in offsets).encode()
+    out += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return out
+
+
+async def add_policy_upload(
+    conn: AsyncConnection,
+    tenant_id: UUID,
+    *,
+    state: UploadState = UploadState.READY,
+    purpose: UploadPurpose = UploadPurpose.POLICY_SOURCE,
+    mime_type: str = "text/markdown",
+    checksum: str | None = None,
+    bucket: str = "nrc-test-policy",
+    study_id: UUID | None = None,
+) -> UUID:
+    # A synthetic policy-source upload row as the media worker leaves it, written as the owner.
+    # The caller switches the connection back to a login role afterwards.
+    upload_id = uuid4()
+    async with as_tenant_owner(conn, tenant_id):
+        await conn.execute(
+            insert(MediaUpload).values(
+                id=upload_id,
+                tenant_id=tenant_id,
+                purpose=purpose,
+                state=state,
+                name="[SYNTHETIC] policy source",
+                declared_mime_type=mime_type,
+                declared_size_bytes=100,
+                declared_checksum_sha256=checksum or upload_id.hex * 2,
+                mime_type=mime_type if state is UploadState.READY else None,
+                bucket=bucket,
+                s3_key=f"policy/{upload_id}",
+                s3_version_id="v1",
+                upload_url_expires_at=datetime(2026, 11, 20, tzinfo=UTC),
+                identifiable_person=IdentifiablePerson.UNKNOWN,
+                study_id=study_id,
+                created_by="policy-admin-a",
+            )
+        )
+    return upload_id
 
 
 @pytest.fixture
