@@ -96,6 +96,15 @@ class UploadNotAcceptedError(AppError):
     default_message = "This file cannot be uploaded."
 
 
+class UploadLimitError(AppError):
+    # The tenant has UPLOAD_MAX_PENDING_PER_TENANT uploads in progress.
+    code = "UPLOAD_LIMIT_REACHED"
+    default_message = (
+        "Too many uploads are in progress. Try again when one has finished processing."
+    )
+    retryable = True
+
+
 class GenerationLimitError(AppError):
     # details.reason is ACTIVE_JOB_LIMIT or CREDIT_CEILING.
     code = "GENERATION_LIMIT_REACHED"

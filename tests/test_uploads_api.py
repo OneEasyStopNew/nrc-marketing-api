@@ -600,9 +600,10 @@ async def test_idempotency_key_is_required_and_well_formed(
 @pytest.mark.parametrize(
     ("overrides", "field"),
     [
-        pytest.param({"mime_type": "image/webp"}, "mime_type", id="webp"),
+        pytest.param(lambda _: {"mime_type": "image/webp"}, "mime_type", id="webp"),
+        # Settings are read when the test runs: CI has no env file at collection time.
         pytest.param(
-            {"size_bytes": get_settings().upload_image_max_bytes + 1}, "size_bytes", id="too-large"
+            lambda s: {"size_bytes": s.upload_image_max_bytes + 1}, "size_bytes", id="too-large"
         ),
     ],
 )
@@ -610,10 +611,10 @@ async def test_type_or_size_outside_the_limits_is_not_accepted(
     client: httpx.AsyncClient,
     auth: AuthHeaders,
     world: World,
-    overrides: dict[str, Any],
+    overrides: Callable[[Settings], dict[str, Any]],
     field: str,
 ) -> None:
-    response = await _create(client, auth, world, **overrides)
+    response = await _create(client, auth, world, **overrides(get_settings()))
 
     assert response.status_code == 422
     assert response.json()["code"] == "UPLOAD_NOT_ACCEPTED"
@@ -631,6 +632,125 @@ async def test_declared_size_exactly_at_the_limit_is_accepted(
     assert response.json()["size_bytes"] == get_settings().upload_image_max_bytes
 
 
+# ---- Pending uploads per tenant
+
+
+@pytest.fixture
+def pending_cap_of_two(
+    app_overrides: dict[Callable[..., object], Callable[..., object]],
+) -> Settings:
+    changed = get_settings().model_copy(update={"upload_max_pending_per_tenant": 2})
+    app_overrides[get_settings] = lambda: changed
+    return changed
+
+
+async def _set_upload(
+    connection: AsyncConnection, world: World, asset_id: str, assignments: str
+) -> None:
+    # assignments is a literal from the calling test, never input.
+    await _owner_sql(
+        connection,
+        world.a.tenant_id,
+        f"UPDATE media_uploads SET {assignments} WHERE id = :id",  # noqa: S608  literal from the test
+        {"id": UUID(asset_id)},
+    )
+
+
+async def test_pending_uploads_are_capped_per_tenant(
+    pending_cap_of_two: Settings,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+) -> None:
+    # Regression (review, api#23): nothing bounded how many uploads one tenant could start.
+    first = await _created(client, auth, world)
+    await _created(client, auth, world)
+
+    refused = await _create(client, auth, world)
+
+    assert refused.status_code == 429
+    body = refused.json()
+    assert body["code"] == "UPLOAD_LIMIT_REACHED"
+    assert body["retryable"] is True
+    assert BUCKET not in refused.text
+    listed = await client.get(UPLOADS, headers=auth("creator-a", world.a.tenant_id))
+    assert len(listed.json()["items"]) == 2
+
+    # An upload whose link expired unused stops counting, so abandoned uploads can't lock the
+    # tenant out before the cleanup job exists...
+    await _set_upload(
+        connection, world, first["asset_id"], "upload_url_expires_at = now() - interval '1 second'"
+    )
+    assert (await _create(client, auth, world)).status_code == 201
+    # ...and a new link for it is admitted like a new upload.
+    revived = await _reissue(client, auth, world, first["asset_id"])
+    assert revived.status_code == 429
+    assert revived.json()["code"] == "UPLOAD_LIMIT_REACHED"
+
+
+@pytest.mark.parametrize(
+    ("assignments", "holds_a_slot"),
+    [
+        pytest.param("state = 'QUARANTINED', available_at = now()", True, id="quarantined"),
+        pytest.param("state = 'SCANNING'", True, id="scanning"),
+        pytest.param("state = 'REJECTED', reason_code = 'MALWARE_DETECTED'", False, id="rejected"),
+    ],
+)
+async def test_uploads_waiting_for_inspection_hold_a_slot(
+    pending_cap_of_two: Settings,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    assignments: str,
+    holds_a_slot: bool,
+) -> None:
+    first = await _created(client, auth, world)
+    await _created(client, auth, world)
+    # A long-expired link: only the state decides whether it still counts.
+    await _set_upload(
+        connection,
+        world,
+        first["asset_id"],
+        f"{assignments}, upload_url_expires_at = now() - interval '1 day'",
+    )
+
+    response = await _create(client, auth, world)
+
+    assert response.status_code == (429 if holds_a_slot else 201)
+
+
+async def test_the_pending_cap_counts_only_the_callers_tenant(
+    pending_cap_of_two: Settings, client: httpx.AsyncClient, auth: AuthHeaders, world: World
+) -> None:
+    await _created(client, auth, world)
+    await _created(client, auth, world)
+    headers = auth("creator-b", world.b.tenant_id, **{"Idempotency-Key": uuid4().hex})
+
+    other = await client.post(
+        UPLOADS,
+        headers=headers,
+        json=_body(world, _png(), study_id=str(world.b.study_id)),
+    )
+
+    assert other.status_code == 201, other.text
+
+
+async def test_a_replay_is_not_refused_by_the_pending_cap(
+    pending_cap_of_two: Settings, client: httpx.AsyncClient, auth: AuthHeaders, world: World
+) -> None:
+    # The cap admits new uploads; repeating a request that already made one returns it.
+    content = _png()
+    first = await _create(client, auth, world, content, key="cap-replay-1")
+    await _created(client, auth, world)
+
+    replay = await _create(client, auth, world, content, key="cap-replay-1")
+
+    assert replay.status_code == 201
+    assert replay.json()["asset_id"] == first.json()["asset_id"]
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -642,6 +762,24 @@ async def test_declared_size_exactly_at_the_limit_is_accepted(
         pytest.param({"name": "bad\x07name.png"}, id="control-character-in-name"),
         pytest.param({"name": "zero\u200bwidth.png"}, id="format-character-in-name"),
         pytest.param({"name": "n" * 256}, id="name-too-long"),
+        # Regression (review, api#23): 255 raw characters passed the length check, then NFC made
+        # them 510 and the insert into varchar(255) failed with a 500.
+        pytest.param({"name": "क़" * 255}, id="name-too-long-after-nfc"),
+        # Regression (review, api#23): a blank reference read as authorization on record.
+        *(
+            pytest.param(
+                {"authorization": {"identifiable_person": "yes", "usage_authorization_ref": ref}},
+                id=f"authorization-ref-{case}",
+            )
+            for case, ref in (
+                ("blank", "   "),
+                ("newline", "\n"),
+                ("control-character", "REL\x00EASE-1"),
+                ("inner-space", "RELEASE 1"),
+                ("leading-symbol", "-RELEASE-1"),
+                ("too-long", "R" * 201),
+            )
+        ),
         pytest.param({"size_bytes": 0}, id="zero-size"),
         pytest.param({"unexpected": "value"}, id="unknown-field"),
         pytest.param(
@@ -1130,6 +1268,26 @@ async def test_authorization_status_is_derived_from_the_declaration(
         assert returned["identifiable_person"] == authorization["identifiable_person"]
         assert returned["usage_authorization_ref"] == authorization.get("usage_authorization_ref")
         assert returned["permitted_channels"] == authorization.get("permitted_channels", [])
+
+
+async def test_authorization_ref_is_stored_without_surrounding_spaces(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+) -> None:
+    authorization = {"identifiable_person": "yes", "usage_authorization_ref": "  RELEASE-SYNTH-7 "}
+
+    created = await _create(client, auth, world, authorization=authorization)
+
+    assert created.status_code == 201, created.text
+    returned = created.json()["authorization"]
+    assert returned["usage_authorization_ref"] == "RELEASE-SYNTH-7"
+    assert returned["status"] == "RECORDED"
+    rows = await _owner_sql(
+        connection,
+        world.a.tenant_id,
+        "SELECT usage_authorization_ref FROM media_uploads WHERE id = :id",
+        {"id": UUID(created.json()["asset_id"])},
+    )
+    assert rows[0].usage_authorization_ref == "RELEASE-SYNTH-7"
 
 
 async def test_more_channels_than_exist_are_refused(
