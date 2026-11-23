@@ -28,6 +28,7 @@ from app.services.providers.base import (
     StatusResult,
 )
 from app.services.providers.higgsfield import (
+    HiggsfieldEstimateNotPricedError,
     HiggsfieldIdempotencyConflictError,
     HiggsfieldInsufficientBalanceError,
     HiggsfieldProvider,
@@ -572,7 +573,6 @@ async def test_unprobed_model_refuses_to_submit_but_may_estimate() -> None:
 @pytest.mark.parametrize(
     "handler",
     [
-        fixed(200, json={}),
         fixed(200, json={"usd": 0.094}),
         fixed(200, json={"usd": "abc"}),
         fixed(200, json={"usd": "NaN"}),
@@ -581,11 +581,24 @@ async def test_unprobed_model_refuses_to_submit_but_may_estimate() -> None:
         fixed(500, json={"detail": "x"}),
         raising(httpx.ReadTimeout("boom")),
     ],
-    ids=["missing", "number", "garbage", "nan", "negative", "bad-json", "http-500", "read-timeout"],
+    ids=["number", "garbage", "nan", "negative", "bad-json", "http-500", "read-timeout"],
 )
 async def test_estimate_failures_are_unavailable(handler: Handler) -> None:
     with pytest.raises(ProviderUnavailableError):
         await make(handler).estimate_cost_usd(request())
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{}, {"type": "description", "pricing_description": "Per 1M tokens: ..."}],
+    ids=["empty", "pricing-description"],
+)
+async def test_an_estimate_without_a_dollar_price_is_not_retryable(body: dict[str, str]) -> None:
+    # A readable answer with no usd field gives the same answer when asked again.
+    with pytest.raises(HiggsfieldEstimateNotPricedError, match="no dollar price") as raised:
+        await make(fixed(200, json=body)).estimate_cost_usd(request())
+
+    assert raised.value.retryable is False
 
 
 async def test_estimate_classifies_like_status() -> None:

@@ -20,9 +20,12 @@ from app.services.providers.base import (
     FetchedImage,
     ImageRequest,
     ProviderRejectedError,
-    ProviderUnavailableError,
 )
-from app.services.providers.higgsfield import HiggsfieldProvider, missing_live_settings
+from app.services.providers.higgsfield import (
+    HiggsfieldEstimateNotPricedError,
+    HiggsfieldProvider,
+    missing_live_settings,
+)
 from app.services.providers.pinned_models import PINNED_MODELS, max_brief_chars
 from app.workers.connector import WorkerConfigError, build_providers, provider_key
 from tests.conftest import JOBS, AuthHeaders, World, _creative
@@ -140,7 +143,8 @@ async def test_a_ratio_outside_the_pinned_set_is_refused_before_any_request() ->
 
 async def test_a_token_priced_quote_without_a_dollar_price_is_never_usable() -> None:
     # GPT Image Flare/Sunburst answer with a pricing description, not a price: the worker then
-    # never submits (it needs a price first), so they cannot run under the cap.
+    # never submits (it needs a price first), so they cannot run under the cap. Asking again
+    # gives the same answer, so it is not retryable.
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200, json={"type": "description", "pricing_description": "Per 1M tokens: ..."}
@@ -157,8 +161,10 @@ async def test_a_token_priced_quote_without_a_dollar_price_is_never_usable() -> 
         max_output_bytes=1234,
     )
 
-    with pytest.raises(ProviderUnavailableError, match="unreadable cost estimate"):
+    with pytest.raises(HiggsfieldEstimateNotPricedError, match="no dollar price") as raised:
         await hf.estimate_cost_usd(image_request())
+
+    assert (raised.value.code, raised.value.retryable) == ("ESTIMATE_NOT_PRICED", False)
 
 
 def test_the_cost_cap_defaults_to_nine_cents() -> None:

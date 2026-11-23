@@ -53,6 +53,7 @@ from app.services.providers.base import (
     ImageRequest,
     OutputFetcher,
     ProviderConfigError,
+    ProviderError,
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
@@ -171,6 +172,21 @@ class HiggsfieldInsufficientBalanceError(ProviderConfigError):
 class HiggsfieldIdempotencyConflictError(ProviderOutcomeUnknownError):
     # The key was already used with a different body, so the original request may be billed.
     code: ClassVar[str] = "PROVIDER_IDEMPOTENCY_CONFLICT"
+
+
+class HiggsfieldEstimateNotPricedError(ProviderError):
+    # A readable estimate with no usd (token-priced models answer with a pricing description).
+    # Asking again gives the same answer, so the job fails at once, unbilled.
+    code: ClassVar[str] = "ESTIMATE_NOT_PRICED"
+
+
+def _has_no_usd(content: bytes) -> bool:
+    # A JSON object without a usd field, as opposed to a body that can't be read at all.
+    try:
+        body = json.loads(content)
+    except ValueError:
+        return False
+    return isinstance(body, dict) and "usd" not in body
 
 
 class HiggsfieldProvider:
@@ -322,6 +338,11 @@ class HiggsfieldProvider:
         try:
             return _EstimateResponse.model_validate_json(response.content).usd
         except ValidationError:
+            if _has_no_usd(response.content):
+                raise HiggsfieldEstimateNotPricedError(
+                    "Higgsfield quoted no dollar price for this model, so it cannot run under "
+                    "the per-image cost cap"
+                ) from None
             raise ProviderUnavailableError(
                 "Higgsfield returned an unreadable cost estimate"
             ) from None
