@@ -58,7 +58,7 @@ from app.models import (
     StudySnapshot,
     Tenant,
 )
-from app.models.enums import BundleLifecycleState, Language, RecruitmentStatus
+from app.models.enums import BundleLifecycleState, CheckType, Language, RecruitmentStatus
 from app.models.jobs import ReservationState
 from app.services.providers.base import (
     FetchedImage,
@@ -69,7 +69,7 @@ from app.services.providers.base import (
     SubmitResult,
 )
 from app.services.providers.simulator import SimulatedImageProvider
-from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
+from scripts.import_policy_graph import PolicyGraphImport, import_policy_graph, load_synthetic_graph
 from scripts.seed_demo import DEMO_POLICY_NAME, SYNTHETIC_FACTS, demo_policy_rules
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -202,6 +202,7 @@ async def seed_tenant(
     with_policy: bool,
     display_names: Mapping[str, str] | None = None,
     with_graph: bool = True,
+    graph: PolicyGraphImport | None = None,
 ) -> SeededTenant:
     # Tenant with one recruiting and one closed synthetic study; every member gets both.
     tenant_id, study_id, closed_study_id, snapshot_id = uuid4(), uuid4(), uuid4(), uuid4()
@@ -262,7 +263,9 @@ async def seed_tenant(
         # With its rulebook graph, like seed_demo and the staging deploy step: without one every
         # validation needs review (no policy context), so a clean brief could never pass.
         if with_graph:
-            await import_policy_graph(db, tenant_id, policy_bundle_id, load_synthetic_graph())
+            await import_policy_graph(
+                db, tenant_id, policy_bundle_id, graph or load_synthetic_graph()
+            )
     await db.flush()
     return SeededTenant(tenant_id, study_id, closed_study_id, snapshot_id, policy_bundle_id)
 
@@ -405,7 +408,29 @@ def seed_graph() -> bool:
 
 
 @pytest.fixture
-async def world(connection: AsyncConnection, seed_graph: bool) -> World:
+def graph() -> PolicyGraphImport:
+    # The graph tenant A's bundle gets. By default every rule is checked by code, so a clean
+    # brief passes and the generation gate opens (job, worker and media tests need that). Tests
+    # of semantic rules, which can't pass until the model check exists, parametrize "graph" with
+    # load_synthetic_graph().
+    return deterministic_synthetic_graph()
+
+
+def deterministic_synthetic_graph() -> PolicyGraphImport:
+    # Every rule checked by code alone, so a clean brief can pass (the generation gate needs one).
+    base = load_synthetic_graph()
+    return base.model_copy(
+        update={
+            "rules": [
+                rule.model_copy(update={"check_type": CheckType.DETERMINISTIC})
+                for rule in base.rules
+            ]
+        }
+    )
+
+
+@pytest.fixture
+async def world(connection: AsyncConnection, seed_graph: bool, graph: PolicyGraphImport) -> World:
     async with _session(connection) as seed:
         a = await seed_tenant(
             seed,
@@ -414,6 +439,7 @@ async def world(connection: AsyncConnection, seed_graph: bool) -> World:
             with_policy=True,
             display_names={"creator-a": CREATOR_A_NAME},
             with_graph=seed_graph,
+            graph=graph,
         )
         b = await seed_tenant(
             seed, name="Tenant B", members={"creator-b": ["creator"]}, with_policy=False
@@ -475,14 +501,21 @@ def auth(signing_key: RSAPrivateKey) -> AuthHeaders:
 
 
 @pytest.fixture
-async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTenant]:
+async def committed_tenant(
+    test_env: IntegrationEnv, graph: PolicyGraphImport
+) -> AsyncIterator[SeededTenant]:
     # Committed data (no shared test transaction), so parallel requests really race.
     engine = create_async_engine(
         test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
     )
     async with AsyncSession(engine, expire_on_commit=False) as db:
         seeded = await seed_tenant(
-            db, name="Job race tenant", members={"creator-a": ["creator"]}, with_policy=True
+            db,
+            name="Job race tenant",
+            members={"creator-a": ["creator"]},
+            with_policy=True,
+            # The same graph fixture as world (by default every rule is checked by code).
+            graph=graph,
         )
         await db.commit()
     try:

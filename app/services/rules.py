@@ -1,20 +1,26 @@
-"""Deterministic checks of a brief or caption against the active policy and the study facts.
+"""Deterministic checks of a brief or caption against policy rules and the study facts.
 
-Pure functions: no database, no network, no model. Each check covers one policy rule by ID
-(REC-01 to REC-08 in the seeded policy). A rule in the policy with no check here is reported
-as UNABLE_TO_ASSESS with a coverage gap, so an unknown rule can never pass silently.
+Pure functions: no database, no network, no model. There are two paths:
 
-The checks are phrase and fact matches, not a reading of meaning, and every result says so in
-its coverage gaps. Text offsets are Python string indices, which are Unicode code points: the
-contract's unit (see TextSpan).
+- Graph rules (evaluate_graph_rules, NRC-7): the rules the context manifest selected, each
+  checked from its own data (prohibited phrases, exact wording) plus a small registry of
+  study-fact checks keyed by rule id. A semantic rule needs a review of meaning, which is not
+  built yet, so without a phrase hit it is UNABLE_TO_ASSESS with a coverage gap.
+- Legacy (evaluate_text): the hard-coded PHRASE_CHECKS over the bundle's JSONB rules
+  (REC-01 to REC-08). Used only when a run has no context manifest. Each check covers one rule
+  by id, and a rule with no check is UNABLE_TO_ASSESS with a coverage gap.
+
+Either way an unassessed rule can never pass silently. The checks are phrase and fact matches,
+not a reading of meaning. Text offsets are Python string indices, which are Unicode code
+points: the contract's unit (see TextSpan).
 """
 
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
-from app.models.enums import Outcome, ValidationInputKind
+from app.models.enums import CheckType, Outcome, ValidationInputKind
 from app.schemas.policies import PolicyBundleRead, PolicyRule
 from app.schemas.tenancy import StudyFacts
 from app.schemas.validations import (
@@ -25,6 +31,8 @@ from app.schemas.validations import (
     ImageRegion,
     RuleResult,
     RuleResultValue,
+    Severity,
+    SourceReference,
     TextSpan,
 )
 
@@ -32,6 +40,8 @@ PHRASE_AND_FACT_GAP: Final = CoverageGap(
     reason="Phrase and study-fact checks only; a review of meaning (AI or human) has not run."
 )
 NOT_CHECKED: Final = "No automated check exists for this rule yet."
+NEEDS_MEANING: Final = "Needs a review of meaning; the model check has not run."
+RULE_NOT_LOADED: Final = "The rule's text is not in the policy graph, so it could not be checked."
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +127,43 @@ _AMOUNT: Final = re.compile(r"\$\s?[0-9][0-9,]*", _FLAGS)
 _Check = Callable[[str, StudyFacts], list[Hit]]
 
 
+class RuleInfo(Protocol):
+    # What summarise needs of a rule: the legacy PolicyRule and GraphRule both fit.
+    @property
+    def rule_id(self) -> str: ...
+    @property
+    def rule_version(self) -> int: ...
+    @property
+    def mandatory(self) -> bool: ...
+    @property
+    def gate(self) -> Gate: ...
+    @property
+    def severity(self) -> Severity: ...
+    @property
+    def source(self) -> SourceReference: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RuleContent:
+    # What the policy graph stores about a rule that the checks read.
+    title: str
+    exact_wording: str | None
+    prohibited_phrases: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GraphRule:
+    # A rule the manifest selected. content is None when its policy_rules row was not found.
+    rule_id: str
+    rule_version: int
+    mandatory: bool
+    gate: Gate
+    severity: Severity
+    source: SourceReference
+    check_type: CheckType
+    content: RuleContent | None
+
+
 def _phrase_check(check: _PhraseCheck) -> _Check:
     def run(text: str, facts: StudyFacts) -> list[Hit]:
         return [
@@ -181,10 +228,16 @@ def _age_hit(match: re.Match[str], facts: StudyFacts) -> Hit:
     )
 
 
-TEXT_CHECKS: Final[Mapping[str, _Check]] = {
-    **{check.rule_id: _phrase_check(check) for check in PHRASE_CHECKS},
+# shortcut: study-fact checks are keyed by rule id; move to a fact-check field on
+# policy_rules when NRC-4's schema lands.
+FACT_CHECKS: Final[Mapping[str, _Check]] = {
     _DISCLOSURE_RULE: _disclosure,
     _FACTS_RULE: _study_facts,
+}
+# Legacy path only: the graph path reads its phrases from the rules themselves.
+TEXT_CHECKS: Final[Mapping[str, _Check]] = {
+    **{check.rule_id: _phrase_check(check) for check in PHRASE_CHECKS},
+    **FACT_CHECKS,
 }
 
 
@@ -199,22 +252,95 @@ def evaluate_text(
     return summarise(rules, hits, extra_gaps=[PHRASE_AND_FACT_GAP])
 
 
+def evaluate_graph_rules(text: str, rules: Sequence[GraphRule], facts: StudyFacts) -> Evaluation:
+    """Check a text against the rules a context manifest selected, from their stored data.
+
+    A prohibited phrase or missing exact wording FAILs the rule. Otherwise a deterministic rule
+    that had something to check PASSes, and every other rule is UNABLE_TO_ASSESS: a semantic rule
+    needs the model, and a rule with nothing to check or no stored row needs a person.
+    """
+    hits: dict[str, list[Hit]] = {}
+    unassessed: dict[str, str] = {}
+    for rule in rules:
+        outcome = _check_graph_rule(rule, text, facts)
+        if isinstance(outcome, str):
+            unassessed[rule.rule_id] = outcome
+        else:
+            hits[rule.rule_id] = outcome
+    return summarise(
+        {rule.rule_id: rule for rule in rules}, hits, extra_gaps=[], unassessed=unassessed
+    )
+
+
+def _check_graph_rule(rule: GraphRule, text: str, facts: StudyFacts) -> list[Hit] | str:
+    # The rule's hits (empty means checked and clean), or the reason it can't be assessed.
+    content = rule.content
+    if content is None:
+        return RULE_NOT_LOADED
+    hits = _phrase_hits(content, text)
+    fact_check = FACT_CHECKS.get(rule.rule_id)
+    if fact_check is not None:
+        hits.extend(fact_check(text, facts))
+    if content.exact_wording and _normalise(content.exact_wording) not in _normalise(text):
+        hits.append(
+            Hit(
+                f'Does not include the wording required by the rule "{content.title}".',
+                correction=content.exact_wording,
+            )
+        )
+    if hits:
+        return hits
+    if rule.check_type is CheckType.SEMANTIC:
+        return NEEDS_MEANING
+    checked = bool(content.prohibited_phrases or content.exact_wording or fact_check)
+    return [] if checked else NOT_CHECKED
+
+
+def _normalise(value: str) -> str:
+    # Case-insensitive, whitespace runs collapsed.
+    return " ".join(value.split()).casefold()
+
+
+def _phrase_hits(content: RuleContent, text: str) -> list[Hit]:
+    if not content.prohibited_phrases:
+        return []
+    # Whole words by lookaround rather than \b: Unicode-aware (phrases may be Spanish) and right
+    # for a phrase that starts or ends with a symbol. A space in a phrase matches any whitespace
+    # run. Linear: the alternatives are escaped literals.
+    alternatives = "|".join(
+        r"\s+".join(re.escape(word) for word in phrase.split())
+        for phrase in content.prohibited_phrases
+    )
+    pattern = re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)", re.IGNORECASE)
+    return [
+        Hit(
+            f'Uses a phrase the rule "{content.title}" prohibits.',
+            span=TextSpan(start=match.start(), end=match.end()),
+            excerpt=match.group(),
+        )
+        for match in pattern.finditer(text)
+    ]
+
+
 def applicable_rules(policy: PolicyBundleRead, kind: ValidationInputKind) -> dict[str, PolicyRule]:
     return {rule.rule_id: rule for rule in policy.rules if kind in rule.applies_to}
 
 
 def summarise(
-    rules: Mapping[str, PolicyRule],
+    rules: Mapping[str, RuleInfo],
     hits: Mapping[str, list[Hit]],
     *,
     extra_gaps: list[CoverageGap],
     regions: Mapping[str, ImageRegion] | None = None,
+    unassessed: Mapping[str, str] | None = None,
 ) -> Evaluation:
     """Turn per-rule hits into rule results, gates, findings and an outcome.
 
     A rule with hits FAILs, a checked rule without hits PASSes, and a rule with no check is
-    UNABLE_TO_ASSESS (reported as a coverage gap).
+    UNABLE_TO_ASSESS (reported as a coverage gap). `unassessed` gives the reason for such a rule
+    (default NOT_CHECKED).
     """
+    reasons = unassessed or {}
     findings = [
         _finding(rules[rule_id], hit, None if regions is None else regions.get(rule_id))
         for rule_id, rule_hits in hits.items()
@@ -227,14 +353,14 @@ def summarise(
             rule_version=rule.rule_version,
             mandatory=rule.mandatory,
             result=results[rule.rule_id],
-            reason=NOT_CHECKED
+            reason=reasons.get(rule.rule_id, NOT_CHECKED)
             if results[rule.rule_id] is RuleResultValue.UNABLE_TO_ASSESS
             else None,
         )
         for rule in rules.values()
     ]
     gaps = [
-        CoverageGap(rule_id=rule_id, reason=NOT_CHECKED)
+        CoverageGap(rule_id=rule_id, reason=reasons.get(rule_id, NOT_CHECKED))
         for rule_id, result in results.items()
         if result is RuleResultValue.UNABLE_TO_ASSESS
     ]
@@ -257,7 +383,7 @@ def summarise(
     )
 
 
-def outcome_of(results: Iterable[tuple[PolicyRule, RuleResultValue]]) -> Outcome:
+def outcome_of(results: Iterable[tuple[RuleInfo, RuleResultValue]]) -> Outcome:
     """A failed mandatory rule fails; a failed optional rule or an unchecked mandatory rule
     needs a human decision; otherwise the input passes."""
     outcome = Outcome.PASS
@@ -277,7 +403,7 @@ def _result(rule_id: str, hits: Mapping[str, list[Hit]]) -> RuleResultValue:
     return RuleResultValue.FAIL if hits[rule_id] else RuleResultValue.PASS
 
 
-def _finding(rule: PolicyRule, hit: Hit, region: ImageRegion | None) -> Finding:
+def _finding(rule: RuleInfo, hit: Hit, region: ImageRegion | None) -> Finding:
     return Finding(
         rule_id=rule.rule_id,
         rule_version=rule.rule_version,

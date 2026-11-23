@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.models import PolicyBundle
 from app.models.enums import BundleLifecycleState
+from scripts.import_policy_graph import load_synthetic_graph
 from scripts.seed_demo import demo_policy_rules
 from tests.conftest import AuthHeaders, SeededTenant, World
 
@@ -289,3 +290,79 @@ async def test_the_api_role_cannot_change_a_stored_run(
     with pytest.raises(DBAPIError, match="permission denied"):
         async with connection.begin_nested():
             await connection.execute(text("UPDATE validation_runs SET outcome = 'PASS'"))
+
+
+async def _run_of(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, prompt: str
+) -> dict[str, Any]:
+    creative = await _creative(client, auth, world.a, prompt=prompt)
+    accepted = await _validate(client, auth, world.a.tenant_id, creative)
+    run: dict[str, Any] = (
+        await _run(client, auth, world.a.tenant_id, accepted.json()["validation_run_id"])
+    ).json()
+    return run
+
+
+# The real synthetic graph: REC-01 to REC-06 are semantic rules, UNABLE_TO_ASSESS until the model
+# check exists.
+@pytest.mark.parametrize("graph", [load_synthetic_graph()])
+async def test_clean_brief_needs_review_while_semantic_rules_are_unassessed(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    run = await _run_of(client, auth, world, CLEAN_PROMPT)
+    context = (
+        await client.get(
+            f"{API}/validations/{run['validation_run_id']}/context",
+            headers=auth("creator-a", world.a.tenant_id),
+        )
+    ).json()
+
+    # Not PASS: REC-01 to REC-05 are semantic rules, and the model check has not run.
+    assert run["outcome"] == "NEEDS_REVIEW"
+    assert run["findings"] == []
+    results = {r["rule_id"]: r["result"] for r in run["rule_results"]}
+    # The run lists exactly the rules the stored manifest selected (all mandatory for a brief).
+    assert set(results) == {r["rule_id"] for r in context["required_rules"]}
+    assert context["optional_rules"] == []
+    assert results == {
+        **dict.fromkeys(["REC-01", "REC-02", "REC-03", "REC-04", "REC-05"], "UNABLE_TO_ASSESS"),
+        "REC-08": "PASS",
+    }
+    gap_rules = {g["rule_id"] for g in run["coverage_gaps"] if g["rule_id"]}
+    assert gap_rules == {"REC-01", "REC-02", "REC-03", "REC-04", "REC-05"}
+    reasons = {r["reason"] for r in run["rule_results"] if r["result"] == "UNABLE_TO_ASSESS"}
+    assert reasons == {"Needs a review of meaning; the model check has not run."}
+
+
+# The real synthetic graph: REC-01 to REC-06 are semantic rules, UNABLE_TO_ASSESS until the model
+# check exists.
+@pytest.mark.parametrize("graph", [load_synthetic_graph()])
+async def test_guaranteed_fails_the_graph_rule_with_its_span_and_source(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    prompt = f"🙂 Guaranteed relief for adults. {CLEAN_PROMPT}"
+
+    run = await _run_of(client, auth, world, prompt)
+
+    assert run["outcome"] == "FAIL"
+    (finding,) = run["findings"]
+    assert finding["rule_id"] == "REC-04"
+    assert prompt[finding["text_span"]["start"] : finding["text_span"]["end"]] == "Guaranteed"
+    assert finding["text_span"]["start"] == 2
+    # The source is the clause the rule quotes in the policy graph.
+    assert finding["source"]["clause"] == "FDA-4"
+    assert finding["source"]["source_id"].startswith("[SYNTHETIC]")
+
+
+# The real synthetic graph: REC-01 to REC-06 are semantic rules, UNABLE_TO_ASSESS until the model
+# check exists.
+@pytest.mark.parametrize("graph", [load_synthetic_graph()])
+async def test_wrong_age_fails_the_study_facts_rule(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    run = await _run_of(client, auth, world, f"Adults aged 30 to 40 can join. {CLEAN_PROMPT}")
+
+    assert run["outcome"] == "FAIL"
+    assert [f["rule_id"] for f in run["findings"]] == ["REC-08"]
+    gates = {g["gate"]: g["outcome"] for g in run["gates"]}
+    assert gates["study_facts"] == "FAIL"

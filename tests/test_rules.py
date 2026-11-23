@@ -5,10 +5,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.enums import Outcome, ValidationInputKind
+from app.models.enums import CheckType, Gate, Outcome, Severity, ValidationInputKind
 from app.schemas.policies import PolicyBundleRead, PolicyRule
 from app.schemas.tenancy import StudyFacts
-from app.schemas.validations import RuleResultValue
+from app.schemas.validations import RuleResultValue, SourceReference
 from app.services import rules
 from scripts.seed_demo import DEMO_POLICY_NAME, DEMO_POLICY_RULES, SYNTHETIC_FACTS
 
@@ -174,3 +174,147 @@ def test_gates_follow_their_rules() -> None:
         "study_facts": Outcome.FAIL,
         "policy": Outcome.PASS,
     }
+
+
+# Graph rules (evaluate_graph_rules): the rules a context manifest selected, checked from their
+# own data.
+
+
+def _graph_rule(
+    rule_id: str = "R-1",
+    *,
+    check_type: CheckType = CheckType.SEMANTIC,
+    mandatory: bool = True,
+    gate: Gate = Gate.POLICY,
+    phrases: tuple[str, ...] = (),
+    wording: str | None = None,
+    loaded: bool = True,
+) -> rules.GraphRule:
+    content = rules.RuleContent(
+        title="Test rule", exact_wording=wording, prohibited_phrases=phrases
+    )
+    return rules.GraphRule(
+        rule_id=rule_id,
+        rule_version=1,
+        mandatory=mandatory,
+        gate=gate,
+        severity=Severity.MAJOR,
+        source=SourceReference(source_id="synthetic:test", clause=rule_id),
+        check_type=check_type,
+        content=content if loaded else None,
+    )
+
+
+def _result_of(evaluation: rules.Evaluation, rule_id: str = "R-1") -> RuleResultValue:
+    return next(r.result for r in evaluation.rule_results if r.rule_id == rule_id)
+
+
+def test_graph_phrase_hit_fails_with_code_point_span() -> None:
+    text = "🙂 Café: results GUARANTEED for you."
+    evaluation = rules.evaluate_graph_rules(text, [_graph_rule(phrases=("guaranteed",))], FACTS)
+
+    (finding,) = evaluation.findings
+    assert finding.text_span is not None
+    assert text[finding.text_span.start : finding.text_span.end] == "GUARANTEED"
+    assert finding.text_span.start == 16  # the emoji and é are one code point each
+    assert evaluation.outcome is Outcome.FAIL
+
+
+@pytest.mark.parametrize(
+    ("text", "hit"),
+    [
+        ("It is proven.", True),
+        ("It is unproven.", False),
+        ("A proven-ish claim.", True),  # a hyphen is not a word character
+        ("Provená", False),  # a Unicode letter continues the word
+        ("safe   and\neffective", True),  # whitespace runs inside a phrase
+    ],
+)
+def test_graph_phrases_match_whole_words_only(text: str, hit: bool) -> None:
+    rule = _graph_rule(phrases=("proven", "safe and effective"))
+
+    evaluation = rules.evaluate_graph_rules(text, [rule], FACTS)
+
+    assert bool(evaluation.findings) is hit
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("This is a research study. Taking part is voluntary.", RuleResultValue.PASS),
+        ("THIS IS A RESEARCH   STUDY.\nTaking part is voluntary.", RuleResultValue.PASS),
+        ("This is a study. Taking part is voluntary.", RuleResultValue.FAIL),
+    ],
+)
+def test_graph_exact_wording_must_appear(text: str, expected: RuleResultValue) -> None:
+    rule = _graph_rule(
+        check_type=CheckType.DETERMINISTIC, gate=Gate.COMPLETENESS, wording=DISCLOSURE
+    )
+
+    evaluation = rules.evaluate_graph_rules(text, [rule], FACTS)
+
+    assert _result_of(evaluation) is expected
+    if expected is RuleResultValue.FAIL:
+        (finding,) = evaluation.findings
+        assert finding.suggested_correction == DISCLOSURE
+        assert finding.text_span is None
+
+
+def test_graph_semantic_rule_without_a_hit_is_unable_to_assess() -> None:
+    evaluation = rules.evaluate_graph_rules(
+        "A clean text.", [_graph_rule(phrases=("cure",))], FACTS
+    )
+
+    assert _result_of(evaluation) is RuleResultValue.UNABLE_TO_ASSESS
+    assert evaluation.outcome is Outcome.NEEDS_REVIEW
+    (gap,) = evaluation.coverage_gaps
+    assert (gap.rule_id, gap.reason) == ("R-1", rules.NEEDS_MEANING)
+
+
+def test_graph_deterministic_rule_with_nothing_to_check_is_unable_to_assess() -> None:
+    rule = _graph_rule(check_type=CheckType.DETERMINISTIC)
+
+    evaluation = rules.evaluate_graph_rules("A clean text.", [rule], FACTS)
+
+    assert _result_of(evaluation) is RuleResultValue.UNABLE_TO_ASSESS
+    assert evaluation.rule_results[0].reason == rules.NOT_CHECKED
+
+
+def test_graph_rule_without_its_row_is_unable_to_assess_even_if_deterministic() -> None:
+    rule = _graph_rule(check_type=CheckType.DETERMINISTIC, loaded=False)
+
+    evaluation = rules.evaluate_graph_rules("A clean text.", [rule], FACTS)
+
+    assert _result_of(evaluation) is RuleResultValue.UNABLE_TO_ASSESS
+    assert evaluation.rule_results[0].reason == rules.RULE_NOT_LOADED
+
+
+def test_graph_study_fact_rules_use_the_registry() -> None:
+    disclosure = _graph_rule("REC-07", check_type=CheckType.DETERMINISTIC, gate=Gate.COMPLETENESS)
+    facts = _graph_rule("REC-08", check_type=CheckType.DETERMINISTIC, gate=Gate.STUDY_FACTS)
+
+    clean = rules.evaluate_graph_rules(PASSING_CAPTION, [disclosure, facts], FACTS)
+    wrong = rules.evaluate_graph_rules("Adults aged 30 to 40.", [disclosure, facts], FACTS)
+
+    assert clean.outcome is Outcome.PASS
+    assert {r.rule_id: r.result for r in wrong.rule_results} == {
+        "REC-07": RuleResultValue.FAIL,
+        "REC-08": RuleResultValue.FAIL,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mandatory", "hit", "expected"),
+    [
+        (True, True, Outcome.FAIL),
+        (False, True, Outcome.NEEDS_REVIEW),
+        (False, False, Outcome.PASS),  # an unassessed optional rule doesn't block
+        (True, False, Outcome.NEEDS_REVIEW),
+    ],
+)
+def test_graph_outcome_table(mandatory: bool, hit: bool, expected: Outcome) -> None:
+    rule = _graph_rule(mandatory=mandatory, phrases=("cure",))
+
+    evaluation = rules.evaluate_graph_rules("a cure" if hit else "clean", [rule], FACTS)
+
+    assert evaluation.outcome is expected

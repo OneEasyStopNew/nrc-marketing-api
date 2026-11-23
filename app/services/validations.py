@@ -1,11 +1,13 @@
 """Brief and caption validation (NRC-7): rule checks run in the request and are stored.
 
 The checks are fast, deterministic string matches (app.services.rules), so a run finishes
-before POST /validations returns and is stored as SUCCEEDED. Each run also stores the policy
+before POST /validations returns and is stored as SUCCEEDED. Each run first gathers the policy
 context for its text (NRC-5: rules selected by their conditions, their evidence and a full-text
-search, no model call). That context is evidence only: the outcome comes from the rule checks
-until NRC-7's judge uses it. The contract still returns a job_id: until validation moves onto
-the job framework (NRC-6), it equals validation_run_id.
+search, no model call). The outcome comes from exactly the rules that context selected, checked
+from their policy graph data; a semantic rule stays UNABLE_TO_ASSESS until NRC-7's model judge
+exists. A run with no context falls back to the legacy JSONB rules and can't pass. The contract
+still returns a job_id: until validation moves onto the job framework (NRC-6), it equals
+validation_run_id.
 
 Image validation (D4) is not built here; the routes answer it from the demo stubs or with 501.
 """
@@ -48,12 +50,13 @@ from app.schemas.validations import (
     Finding,
     GateResult,
     RuleResult,
+    SourceReference,
     ValidationAccepted,
     ValidationCreate,
     ValidationRunRead,
     ValidationRunSummary,
 )
-from app.services import idempotency, policies, rules
+from app.services import idempotency, policies, policy_evidence, rules
 from app.services.creatives import visible_to
 from app.services.policy_context import (
     ContextRequest,
@@ -61,7 +64,7 @@ from app.services.policy_context import (
     PolicyContextProvider,
     StoredManifest,
 )
-from app.services.policy_context.manifest import MAX_STATEMENT_CHARS, Statement
+from app.services.policy_context.manifest import MAX_STATEMENT_CHARS, ContextManifest, Statement
 
 VALIDATE_ROUTE: Final = "POST /validations"
 # Postgres "query_canceled": a statement hit statement_timeout.
@@ -120,7 +123,6 @@ async def create_validation(
     target = await _target(db, ctx, body.creative_id, body.creative_version)
     policy = await _active_policy(db, ctx)
     text = target.prompt if body.input_kind is ValidationInputKind.BRIEF else target.caption or ""
-    evaluation = rules.evaluate_text(body.input_kind, text, policy, target.facts)
     evaluated_at = datetime.now(tz=UTC)
     stored, context_gaps = await _gather_context(
         db,
@@ -136,7 +138,11 @@ async def create_validation(
     if stored is None:
         # Without its policy context a run can't be shown to pass (17 Nov decision superseded on
         # 20 Nov, Dinesh's review): PASS becomes NEEDS_REVIEW; FAIL is already stricter.
-        evaluation = without_pass(evaluation)
+        evaluation = without_pass(rules.evaluate_text(body.input_kind, text, policy, target.facts))
+    else:
+        evaluation = await _evaluate_manifest_rules(
+            db, ctx, stored.manifest, policy, text, target.facts
+        )
     run = _new_run(ctx, body, text, target, policy, evaluation, evaluated_at, stored, context_gaps)
     db.add(run)
     await idempotency.complete(db, ctx.tenant_id, VALIDATE_ROUTE, idempotency_key, run.id)
@@ -341,6 +347,49 @@ def _new_run(
         created_by=ctx.principal.sub,
         evaluated_at=evaluated_at,
     )
+
+
+async def _evaluate_manifest_rules(
+    db: AsyncSession,
+    ctx: TenantContext,
+    manifest: ContextManifest,
+    policy: PolicyBundleRead,
+    text: str,
+    facts: StudyFacts,
+) -> rules.Evaluation:
+    # Exactly the rules the manifest selected (mandatory and optional), read from the graph with
+    # the sources the policy evidence endpoint shows. A selected rule with no row is not checked.
+    stored = await policy_evidence.get_bundle_rules(db, ctx, policy.policy_bundle_id)
+    rows = {(row.rule_id, row.rule_version): row for row in stored.rules}
+    graph_rules = []
+    for selected in [*manifest.required_rules, *manifest.optional_rules]:
+        row = rows.get((selected.rule_id, selected.rule_version))
+        source = SourceReference(source_id=policy.source_ref, clause=selected.rule_id)
+        content = None
+        if row is not None:
+            if row.sources:
+                first = row.sources[0]
+                source = SourceReference(
+                    source_id=first.source_title, clause=first.clause_ref, excerpt=first.excerpt
+                )
+            content = rules.RuleContent(
+                title=row.title,
+                exact_wording=row.exact_wording,
+                prohibited_phrases=tuple(row.prohibited_phrases),
+            )
+        graph_rules.append(
+            rules.GraphRule(
+                rule_id=selected.rule_id,
+                rule_version=selected.rule_version,
+                mandatory=selected.mandatory,
+                gate=selected.gate,
+                severity=selected.severity,
+                source=source,
+                check_type=selected.check_type,
+                content=content,
+            )
+        )
+    return rules.evaluate_graph_rules(text, graph_rules, facts)
 
 
 async def _gather_context(
