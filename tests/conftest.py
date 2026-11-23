@@ -482,14 +482,17 @@ async def _post_job(
 class FakeSink:
     # Stands in for generated-image storage: a metadata row without any object.
 
-    def __init__(self) -> None:
+    def __init__(self, provider_name: str = "simulator") -> None:
+        self.provider_name = provider_name
         self.stored: list[UUID] = []
+        self.models: list[str] = []
 
     async def store(
         self, db: AsyncSession, job: Job, image: FetchedImage, provider_name: str, model: str
     ) -> UUID:
         assert image.content.startswith(b"\x89PNG")
-        assert provider_name == "simulator"
+        assert provider_name == self.provider_name
+        self.models.append(model)
         # A real row, because jobs.result_asset_id is a foreign key to assets.
         asset = Asset(
             tenant_id=job.tenant_id,

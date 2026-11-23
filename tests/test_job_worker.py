@@ -581,6 +581,65 @@ async def test_reconcile_never_resends_after_a_model_change(
     assert sum(provider.submits.values()) == 1
 
 
+class _HiggsfieldModel(ScriptedProvider):
+    # Stands in for one model's live provider; nothing is sent to Higgsfield.
+    name = HIGGSFIELD_NAME
+
+    def __init__(self, model: str) -> None:
+        super().__init__()
+        self.model = model
+
+
+async def test_a_job_runs_only_on_its_own_models_provider(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    # Registered as build_providers does in live mode: one provider per enabled model.
+    chosen, other = "marketing-studio/image", PROBED_MODEL
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    await connection.execute(
+        text("UPDATE jobs SET provider = :p, model = :m WHERE id = :id"),
+        {"p": HIGGSFIELD_NAME, "m": chosen, "id": job_id},
+    )
+    used, unused = _HiggsfieldModel(chosen), _HiggsfieldModel(other)
+    providers = {
+        provider_key(HIGGSFIELD_NAME, other): unused,
+        provider_key(HIGGSFIELD_NAME, chosen): used,
+    }
+    sink = FakeSink(provider_name=HIGGSFIELD_NAME)
+
+    await run_once(sessions, providers, sink, get_settings())
+
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.SUCCEEDED
+    assert sink.models == [chosen]
+    assert (used.estimates, sum(used.submits.values())) == (1, 1)
+    assert (unused.estimates, sum(unused.submits.values())) == (0, 0)
+
+
+async def test_a_job_whose_model_has_no_provider_is_not_configured(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    # A model that is no longer enabled has no provider: the job fails, never another model.
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    await connection.execute(
+        text("UPDATE jobs SET provider = :p, model = :m WHERE id = :id"),
+        {"p": HIGGSFIELD_NAME, "m": "marketing-studio/image", "id": job_id},
+    )
+    other = _HiggsfieldModel(PROBED_MODEL)
+
+    await run_once(
+        sessions, {provider_key(HIGGSFIELD_NAME, PROBED_MODEL): other}, FakeSink(), get_settings()
+    )
+
+    job, _ = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "PROVIDER_NOT_CONFIGURED")
+    assert other.estimates == 0
+
+
 def _content_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     async def missing(*_: object) -> JobContent:
         raise JobContentMissingError("The job's creative version could not be found.")

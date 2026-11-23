@@ -29,6 +29,7 @@ from tests.conftest import JOBS, AuthHeaders, World, _creative
 SOUL = "higgsfield-ai/soul/v2/standard"
 STUDIO = "marketing-studio/image"
 IDEOGRAM = "ideogram/v4.0"
+MODELS = "/v1/marketing/generation-models"
 # Fake credentials: every provider call here goes to an httpx.MockTransport.
 KEY_ID = "kid-test-123"
 KEY_SECRET = "ksecret-test-456"  # noqa: S105
@@ -244,18 +245,54 @@ def three_models() -> Iterator[None]:
 
 
 async def _start(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, creative_id: str, model: str
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, creative_id: str, model: str | None
 ) -> httpx.Response:
     # Fixed length: the header needs at least 8 characters, whatever the model name.
-    key = f"job-{hashlib.sha256(model.encode()).hexdigest()[:12]}"
+    key = f"job-{hashlib.sha256(str(model).encode()).hexdigest()[:12]}"
     headers = auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": key})
-    body = {
-        "creative_id": creative_id,
-        "creative_version": 1,
-        "kind": "image_generation",
-        "model": model,
-    }
+    body = {"creative_id": creative_id, "creative_version": 1, "kind": "image_generation"}
+    if model is not None:
+        body["model"] = model
     return await client.post(JOBS, headers=headers, json=body)
+
+
+@pytest.mark.usefixtures("three_models")
+@pytest.mark.parametrize("model", [SOUL, None], ids=["chosen", "default"])
+@pytest.mark.parametrize(("extra", "status"), [(0, 202), (1, 422)], ids=["at-limit", "one-over"])
+async def test_a_brief_may_fill_the_model_room_exactly(
+    client: httpx.AsyncClient,
+    world: World,
+    auth: AuthHeaders,
+    model: str | None,
+    extra: int,
+    status: int,
+) -> None:
+    # A job without a model is held to its default model's room (Soul 2: 3,800), which is less
+    # than a draft allows (4,000).
+    limit = max_brief_chars(SOUL)
+    creative_id = await _creative(client, auth, world.a, prompt="b" * (limit + extra))
+
+    response = await _start(client, auth, world, creative_id, model)
+
+    assert response.status_code == status, response.text
+    if status == 422:
+        details = response.json()["details"]
+        assert details == {"reason": "BRIEF_TOO_LONG", "max_brief_chars": limit}
+
+
+async def test_the_model_list_needs_a_token(client: httpx.AsyncClient, world: World) -> None:
+    response = await client.get(MODELS, headers={"X-Tenant-Id": str(world.a.tenant_id)})
+
+    assert response.status_code == 401
+
+
+async def test_the_model_list_is_only_for_members_of_the_tenant(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    # The handler ignores ctx, so the CreativeReader dependency alone keeps the list private.
+    response = await client.get(MODELS, headers=auth("creator-b", world.a.tenant_id))
+
+    assert response.status_code == 403
 
 
 @pytest.mark.usefixtures("three_models")
@@ -336,9 +373,7 @@ async def test_the_text_model_needs_image_text(
 async def test_the_model_list_reports_brief_room_and_mode(
     client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
-    response = await client.get(
-        "/v1/marketing/generation-models", headers=auth("creator-a", world.a.tenant_id)
-    )
+    response = await client.get(MODELS, headers=auth("creator-a", world.a.tenant_id))
 
     assert response.status_code == 200
     models = {item["model"]: item for item in response.json()["items"]}
@@ -356,9 +391,7 @@ async def test_the_model_list_carries_labels_and_estimated_prices(
 ) -> None:
     # The web app builds its model picker and cost note only from this list (no hard-coded names
     # or prices), so each entry says what to show and how current the estimate is.
-    response = await client.get(
-        "/v1/marketing/generation-models", headers=auth("creator-a", world.a.tenant_id)
-    )
+    response = await client.get(MODELS, headers=auth("creator-a", world.a.tenant_id))
 
     models = {item["model"]: item for item in response.json()["items"]}
     for model, item in models.items():
