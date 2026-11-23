@@ -9,6 +9,7 @@ from pydantic import Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.core.media_types import IMAGE_EXTENSIONS
+from app.models.enums import PolicyLanguage
 
 AppEnv = Literal["local", "demo", "staging", "production"]
 # Environments where simulated data and locally signed tokens are allowed.
@@ -210,12 +211,18 @@ class Settings(RetrievalSettings):
     # Leases that end in a transient failure (storage, timeout) or a crash before a source is
     # marked FAILED. Polling and lease length are the shared WORKER_* settings.
     policy_worker_max_attempts: int = Field(default=3, ge=1, le=10)
+    # Languages a policy bundle may contain before it can be approved (NRC-4). Spanish waits for
+    # the product decision on languages (Q6).
+    policy_supported_languages: Annotated[tuple[PolicyLanguage, ...], NoDecode] = Field(
+        default=(PolicyLanguage.EN,), min_length=1
+    )
 
     @field_validator(
         "cognito_client_ids",
         "cors_origins",
         "higgsfield_output_hosts",
         "upload_image_types",
+        "policy_supported_languages",
         mode="before",
     )
     @classmethod
