@@ -9,7 +9,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Row, func, insert, select, text, update
+from sqlalchemy import Row, func, insert, select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
@@ -26,6 +26,7 @@ from tests.conftest import (
     add_policy_upload,
     as_tenant_owner,
     make_pdf,
+    owner_sql,
 )
 
 BUCKET = "nrc-test-policy"
@@ -62,17 +63,6 @@ def settings() -> Settings:
             "policy_extraction_timeout_seconds": 5.0,
         }
     )
-
-
-async def owner_sql(
-    connection: AsyncConnection,
-    tenant_id: UUID,
-    statement: str,
-    params: dict[str, Any] | None = None,
-) -> list[Row[Any]]:
-    async with as_tenant_owner(connection, tenant_id):
-        result = await connection.execute(text(statement), params or {})
-        return list(result.all()) if result.returns_rows else []
 
 
 async def add_source(

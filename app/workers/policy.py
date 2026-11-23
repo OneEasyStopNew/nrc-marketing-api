@@ -1,8 +1,9 @@
-"""Policy worker (NRC-4): extracts clauses from registered policy sources.
+"""Policy worker (NRC-4): extracts clauses from policy sources and builds the index of bundles.
 
 Run with `uv run python -m app.workers.policy`. It connects as marketing_worker and leases due
-sources one at a time through lease_policy_sources(), which returns ids only; everything else
-runs in a session bound to the source's tenant, so row-level security applies.
+sources and bundles one at a time through lease_policy_sources() and lease_policy_builds(), which
+return ids only; everything else runs in a session bound to the item's tenant, so row-level
+security applies.
 
 For each source it reads exactly the pinned object version from the policy bucket, extracts the
 clauses off the event loop (app.services.policy_extraction), and then, in ONE transaction, inserts
@@ -14,6 +15,15 @@ and timeouts send the source back to PENDING with a backoff, up to POLICY_WORKER
 leases, then FAILED. A crash leaves the lease to expire; the lease function counts that as a failed
 attempt, with the same cap. Every change is fenced on this worker's lease, so a slow or duplicate
 worker can never write twice.
+
+Build queue: approval (or the BUILD command) makes an APPROVED bundle due. The worker sets it
+BUILDING (committed, so progress shows), then in ONE transaction builds the embedding index
+(app.services.policy_index; none when EMBEDDING_MODE=off, labelled lexical_only in the audit row),
+marks the bundle READY and writes the BUILD_READY audit row. A crash or failure before that commit
+leaves no READY build and a bundle that is not READY: interrupted indexing never exposes a
+half-built version (AC4). A permanent failure sends the bundle back to APPROVED, not queued, with
+a FAILED build row and a BUILD_FAILED audit row; it is built again only when someone runs BUILD.
+Provider outages back off like extraction, up to the same attempt cap.
 """
 
 import asyncio
@@ -22,23 +32,34 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Final, Protocol
+from enum import Enum
+from typing import Any, Final, Protocol
 from uuid import UUID
 
 from sqlalchemy import TextClause, Update, func, insert, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.config import Settings, get_settings
+from app.core.errors import PolicyIndexError
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
-from app.models import MediaUpload, PolicySource, PolicySourceClause
-from app.models.enums import SourceExtractionState, UploadState
+from app.models import MediaUpload, PolicyAuditEvent, PolicyBundle, PolicySource, PolicySourceClause
+from app.models.enums import (
+    BundleLifecycleState,
+    PolicyAuditAction,
+    SourceExtractionState,
+    UploadState,
+)
 from app.services.policy_extraction import (
     Extraction,
     ExtractionCode,
     ExtractionError,
     extract_clauses,
 )
+from app.services.policy_index import build_policy_index, record_failed_build
+from app.services.providers.base import ProviderConfigError, ProviderError
+from app.services.providers.embeddings import EmbeddingProvider, embedding_provider_from_settings
 from app.services.storage import ObjectStorage, StorageError
 from app.workers.common import (
     DEFAULT_OWNER,
@@ -52,7 +73,14 @@ from app.workers.common import (
 logger = logging.getLogger(__name__)
 
 _LEASE_SOURCES = text("SELECT source_id, tenant_id FROM lease_policy_sources(:owner, 1, :lease)")
+_LEASE_BUILDS = text("SELECT bundle_id, tenant_id FROM lease_policy_builds(:owner, 1, :lease)")
 _IN_PROGRESS: Final = (SourceExtractionState.PENDING, SourceExtractionState.EXTRACTING)
+_BUILD_STATES: Final = (BundleLifecycleState.APPROVED, BundleLifecycleState.BUILDING)
+BUILD_ACTOR: Final = "system:policy-worker"
+# Audit label (Q5): with EMBEDDING_MODE=off the bundle is READY with full-text search only.
+LEXICAL_ONLY: Final = "lexical_only"
+# last_error_code of a bundle whose leases kept expiring unfinished (crashes), up to the cap.
+BUILD_ABANDONED_CODE: Final = "POLICY_BUILD_ABANDONED"
 _RELEASE: Final[Mapping[str, object]] = {
     "leased_until": None,
     "lease_owner": None,
@@ -72,6 +100,19 @@ class _TransientError(Exception):
         self.code = code
 
 
+@dataclass(frozen=True, slots=True)
+class _Queue:
+    # What the lease/fence helpers need to know about one queue: its table, its state column and
+    # the states in which an item is still unfinished.
+    model: type[PolicySource] | type[PolicyBundle]
+    state: InstrumentedAttribute[Any]
+    unfinished: tuple[Enum, ...]
+
+
+_SOURCES: Final = _Queue(PolicySource, PolicySource.extraction_state, _IN_PROGRESS)
+_BUILDS: Final = _Queue(PolicyBundle, PolicyBundle.lifecycle_state, _BUILD_STATES)
+
+
 class ObjectReader(Protocol):
     # What the worker needs of storage (ObjectStorage; tests use a fake).
     @property
@@ -86,6 +127,8 @@ class _Run:
     storage: ObjectReader
     settings: Settings
     owner: str
+    # None is EMBEDDING_MODE=off: bundles become READY with full-text search only.
+    embedder: EmbeddingProvider | None = None
 
 
 type _Handler = Callable[[_Run, UUID, UUID], Awaitable[None]]
@@ -96,14 +139,16 @@ async def run_once(
     storage: ObjectReader,
     settings: Settings,
     *,
+    embedder: EmbeddingProvider | None = None,
     owner: str = DEFAULT_OWNER,
     max_items: int | None = None,
 ) -> int:
-    # Lease and process up to max_items (default WORKER_MAX_EVENTS_PER_RUN) due sources, one lease
-    # each. Returns how many were leased.
+    # Lease and process up to max_items (default WORKER_MAX_EVENTS_PER_RUN) due sources and then
+    # as many due bundles, one lease each. Returns how many were leased.
     limit = settings.worker_max_events_per_run if max_items is None else max_items
-    run = _Run(sessions, storage, settings, owner)
-    return await _drain(run, _LEASE_SOURCES, _extract, limit)
+    run = _Run(sessions, storage, settings, owner, embedder)
+    extracted = await _drain(run, _LEASE_SOURCES, _extract, limit)
+    return extracted + await _drain(run, _LEASE_BUILDS, _build, limit)
 
 
 async def _drain(run: _Run, lease: TextClause, handle: _Handler, limit: int) -> int:
@@ -129,26 +174,31 @@ async def _drain(run: _Run, lease: TextClause, handle: _Handler, limit: int) -> 
     return leased
 
 
-def _fenced(source_id: UUID, owner: str) -> Update:
-    # Only the worker whose lease is still valid may change the source, and only while it is
+def _fenced(queue: _Queue, item_id: UUID, owner: str) -> Update:
+    # Only the worker whose lease is still valid may change the item, and only while it is
     # unfinished: terminal states never change again.
+    model = queue.model
     return (
-        update(PolicySource)
+        update(model)
         .where(
-            PolicySource.id == source_id,
-            PolicySource.lease_owner == owner,
-            PolicySource.leased_until > func.clock_timestamp(),
-            PolicySource.extraction_state.in_(_IN_PROGRESS),
+            model.id == item_id,
+            model.lease_owner == owner,
+            model.leased_until > func.clock_timestamp(),
+            queue.state.in_(queue.unfinished),
         )
         .execution_options(synchronize_session=False)
     )
 
 
 async def _change(
-    db: AsyncSession, run: _Run, source_id: UUID, values: Mapping[str, object]
+    db: AsyncSession,
+    run: _Run,
+    item_id: UUID,
+    values: Mapping[str, object],
+    queue: _Queue = _SOURCES,
 ) -> None:
     changed = await db.scalar(
-        _fenced(source_id, run.owner).values(**values).returning(PolicySource.id)
+        _fenced(queue, item_id, run.owner).values(**values).returning(queue.model.id)
     )
     if changed is None:
         raise LeaseLostError
@@ -295,6 +345,192 @@ async def _retry_later(
     )
 
 
+# ---- Build queue
+
+
+async def _build(run: _Run, bundle_id: UUID, tenant_id: UUID) -> None:
+    async with run.sessions() as db:
+        await bind_tenant(db, tenant_id)
+        bundle = await db.get(PolicyBundle, bundle_id, populate_existing=True)
+        if (
+            bundle is None
+            or bundle.lease_owner != run.owner
+            or bundle.lifecycle_state not in _BUILD_STATES
+        ):
+            raise LeaseLostError
+        attempts = bundle.attempts
+        model_id = run.embedder.model_id if run.embedder else None
+        if bundle.failed_attempts >= run.settings.policy_worker_max_attempts:
+            await _fail_build(db, run, bundle_id, tenant_id, BUILD_ABANDONED_CODE, None)
+            return
+        await _change(
+            db,
+            run,
+            bundle_id,
+            {"lifecycle_state": BundleLifecycleState.BUILDING, "updated_at": func.now()},
+            _BUILDS,
+        )
+        await db.commit()
+        # From here the session holds plain ids and numbers only: a rollback expires the bundle.
+        try:
+            await _index_and_publish(db, run, bundle_id, tenant_id)
+        except PolicyIndexError as error:
+            # A precondition (nothing to index, content changed): no build row, nothing to retry.
+            await db.rollback()
+            await _fail_build(db, run, bundle_id, tenant_id, _failure_code(error), None)
+        except ProviderError as error:
+            await db.rollback()
+            if error.retryable and attempts < run.settings.policy_worker_max_attempts:
+                await _retry_build_later(db, run, bundle_id, tenant_id, attempts, error.code)
+            else:
+                await _fail_build(db, run, bundle_id, tenant_id, _failure_code(error), model_id)
+
+
+def _failure_code(error: PolicyIndexError | ProviderError) -> str:
+    if isinstance(error, PolicyIndexError) and error.details:
+        reason = error.details.get("reason")
+        if isinstance(reason, str):
+            return reason
+    return error.code
+
+
+async def _index_and_publish(db: AsyncSession, run: _Run, bundle_id: UUID, tenant_id: UUID) -> None:
+    # The index rows, READY and its audit row commit together; anything raised before the commit
+    # leaves none of them, and a worker whose lease ran out writes nothing (LeaseLostError).
+    # shortcut: no lease heartbeat, so a build that outlasts WORKER_LEASE_SECONDS is abandoned and
+    # retried until the attempt cap; add a heartbeat if real bundles ever take that long.
+    details: dict[str, object] = {"index": LEXICAL_ONLY}
+    if run.embedder is not None:
+        built = await build_policy_index(db, tenant_id, bundle_id, run.embedder)
+        details = {
+            "build_id": str(built.build_id),
+            "model_id": built.model_id,
+            "node_count": built.node_count,
+        }
+    await _change(
+        db,
+        run,
+        bundle_id,
+        {
+            "lifecycle_state": BundleLifecycleState.READY,
+            "last_error_code": None,
+            "updated_at": func.now(),
+            **_RELEASE,
+        },
+        _BUILDS,
+    )
+    await _audit(
+        db,
+        tenant_id,
+        bundle_id,
+        PolicyAuditAction.BUILD_READY,
+        BundleLifecycleState.BUILDING,
+        BundleLifecycleState.READY,
+        details,
+    )
+    await db.commit()
+    logger.info("policy bundle ready bundle=%s tenant=%s", bundle_id, tenant_id)
+
+
+async def _audit(
+    db: AsyncSession,
+    tenant_id: UUID,
+    bundle_id: UUID,
+    action: PolicyAuditAction,
+    from_state: BundleLifecycleState,
+    to_state: BundleLifecycleState,
+    details: Mapping[str, object],
+) -> None:
+    # Core insert: the worker role may insert audit rows but not read them back (no RETURNING).
+    await db.execute(
+        insert(PolicyAuditEvent).values(
+            tenant_id=tenant_id,
+            policy_bundle_id=bundle_id,
+            action=action,
+            from_state=from_state,
+            to_state=to_state,
+            actor=BUILD_ACTOR,
+            details=dict(details),
+        )
+    )
+
+
+async def _fail_build(
+    db: AsyncSession,
+    run: _Run,
+    bundle_id: UUID,
+    tenant_id: UUID,
+    code: str,
+    failed_model_id: str | None,
+) -> None:
+    # Back to APPROVED and out of the queue (available_at NULL) until BUILD runs again. The
+    # fenced change comes first, so a worker that lost its lease writes nothing.
+    await _change(
+        db,
+        run,
+        bundle_id,
+        {
+            "lifecycle_state": BundleLifecycleState.APPROVED,
+            "last_error_code": code,
+            "updated_at": func.now(),
+            **_RELEASE,
+        },
+        _BUILDS,
+    )
+    if failed_model_id is not None:
+        await record_failed_build(db, tenant_id, bundle_id, failed_model_id, code)
+    await _audit(
+        db,
+        tenant_id,
+        bundle_id,
+        PolicyAuditAction.BUILD_FAILED,
+        BundleLifecycleState.BUILDING,
+        BundleLifecycleState.APPROVED,
+        {"error_code": code},
+    )
+    await db.commit()
+    logger.warning(
+        "policy bundle build failed bundle=%s tenant=%s code=%s", bundle_id, tenant_id, code
+    )
+
+
+async def _retry_build_later(
+    db: AsyncSession, run: _Run, bundle_id: UUID, tenant_id: UUID, attempts: int, code: str
+) -> None:
+    delay = backoff_seconds(attempts, run.settings)
+    await _change(
+        db,
+        run,
+        bundle_id,
+        {
+            "lifecycle_state": BundleLifecycleState.APPROVED,
+            "last_error_code": code,
+            "updated_at": func.now(),
+            "leased_until": None,
+            "lease_owner": None,
+            "available_at": func.clock_timestamp() + timedelta(seconds=delay),
+        },
+        _BUILDS,
+    )
+    await db.commit()
+    logger.warning(
+        "policy bundle build deferred bundle=%s tenant=%s code=%s retry_in=%.0fs",
+        bundle_id,
+        tenant_id,
+        code,
+        delay,
+    )
+
+
+def build_embedder(settings: Settings) -> EmbeddingProvider | None:
+    # None when EMBEDDING_MODE=off. Live mode with missing settings refuses to start; it never
+    # falls back to the simulator.
+    try:
+        return embedding_provider_from_settings(settings)
+    except ProviderConfigError as error:
+        raise WorkerConfigError(error.message) from None
+
+
 def build_storage(settings: Settings) -> ObjectStorage:
     # Refuses to start without the policy bucket: it never falls back to the media bucket.
     if not settings.policy_source_bucket:
@@ -313,6 +549,7 @@ def build_storage(settings: Settings) -> ObjectStorage:
 async def run_forever(settings: Settings) -> None:
     database_url = worker_database_url()
     storage = build_storage(settings)
+    embedder = build_embedder(settings)
     engine = create_engine(settings, database_url)
     sessions = create_sessionmaker(engine)
     stop = asyncio.Event()
@@ -321,7 +558,7 @@ async def run_forever(settings: Settings) -> None:
     try:
         while not stop.is_set():
             try:
-                leased = await run_once(sessions, storage, settings)
+                leased = await run_once(sessions, storage, settings, embedder=embedder)
             except Exception:
                 logger.exception("policy worker iteration failed")
                 leased = 0

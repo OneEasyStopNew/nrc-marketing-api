@@ -4,7 +4,8 @@ Every change locks the bundle row, checks the caller's capability, the If-Match 
 lifecycle state, applies the change, bumps the revision and writes an audit row, all in one
 transaction. The graph can change only while the bundle is DRAFT (edits) or REVIEW (review
 decisions); a database trigger refuses anything else as a backstop. Approval runs the bundle
-checks and writes the JSONB rules that validation reads today. Building, activation and
+checks and writes the JSONB rules that validation reads today, and queues the index build the
+policy worker runs (app.workers.policy); BUILD queues it again after a failed one. Activation and
 retirement extend TRANSITIONS in later steps.
 """
 
@@ -74,6 +75,7 @@ class Command(StrEnum):
     RETURN_TO_DRAFT = "return_to_draft"
     APPROVE = "approve"
     REJECT = "reject"
+    BUILD = "build"
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +115,13 @@ TRANSITIONS: Final[Mapping[Command, Transition]] = {
         PolicyAuditAction.REJECT,
         needs_reason=True,
     ),
+    # Queues the worker's index build again after a failed one (the bundle stays APPROVED).
+    Command.BUILD: Transition(
+        frozenset({State.APPROVED}),
+        State.APPROVED,
+        frozenset({Capability.POLICY_ACTIVATE}),
+        PolicyAuditAction.BUILD_STARTED,
+    ),
 }
 
 
@@ -131,6 +140,14 @@ _REVIEW_MODELS: Final[
 }
 # Interpretations stand in for a source clause; their reference names the node instead.
 INTERPRETATION_SOURCE: Final = "interpretation"
+
+
+def _queue_build(bundle: PolicyBundle) -> None:
+    # What lease_policy_builds() looks for: due now, with a fresh attempt budget.
+    bundle.available_at = func.now()
+    bundle.attempts = 0
+    bundle.failed_attempts = 0
+    bundle.last_error_code = None
 
 
 async def lock_tenant_bundles(db: AsyncSession, tenant_id: UUID) -> None:
@@ -668,6 +685,8 @@ async def transition(
     details: dict[str, object] = {}
     if command is Command.APPROVE:
         details = await _approve(db, ctx, bundle, supported_languages)
+    elif command is Command.BUILD:
+        _queue_build(bundle)
     bundle.lifecycle_state = step.to_state
     await _finish(
         db,
@@ -711,6 +730,7 @@ async def _approve(
     bundle.rules = [rule.model_dump(mode="json") for rule in projection]
     bundle.approved_by = ctx.principal.sub
     bundle.approved_at = func.now()
+    _queue_build(bundle)
     return {"rules": len(projection)}
 
 

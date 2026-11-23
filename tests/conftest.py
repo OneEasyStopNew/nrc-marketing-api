@@ -350,6 +350,19 @@ async def as_tenant_owner(conn: AsyncConnection, tenant_id: UUID) -> AsyncIterat
         await conn.execute(text(f"SET LOCAL ROLE {APP_ROLE}"))
 
 
+async def owner_sql(
+    conn: AsyncConnection,
+    tenant_id: UUID,
+    statement: str,
+    params: dict[str, Any] | None = None,
+) -> list[Row[Any]]:
+    # One raw statement as the owner with the tenant bound (reads that RLS or grants would hide
+    # from the role under test, and setup or time-travel UPDATEs).
+    async with as_tenant_owner(conn, tenant_id):
+        result = await conn.execute(text(statement), params or {})
+        return list(result.all()) if result.returns_rows else []
+
+
 @asynccontextmanager
 async def owner_session(conn: AsyncConnection, tenant_id: UUID) -> AsyncIterator[AsyncSession]:
     # What owner scripts (seed, policy graph import) do: the owner role, the tenant bound, one

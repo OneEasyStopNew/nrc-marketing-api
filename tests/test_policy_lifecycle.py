@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -515,6 +515,9 @@ async def test_the_whole_way_to_approval(env: Env) -> None:
     assert bundle.lifecycle_state is BundleLifecycleState.APPROVED
     assert bundle.approved_by == APPROVER
     assert bundle.approved_at is not None
+    # Approval queues the worker's index build.
+    assert bundle.available_at is not None
+    assert (bundle.attempts, bundle.failed_attempts, bundle.last_error_code) == (0, 0, None)
     assert bundle.rules == [
         {
             "rule_id": "REC-07",
@@ -660,6 +663,70 @@ async def test_commands_refuse_the_wrong_state(env: Env, command: Command, state
         await env.move(draft, command, ctx, TransitionRequest(reason="[SYNTHETIC]"))
     assert error.value.details is not None
     assert error.value.details["state"] == state
+
+
+async def approved_bundle(env: Env) -> Draft:
+    draft = await env.draft()
+    await env.review_all(draft)
+    await env.move(draft, Command.SUBMIT)
+    await env.move(draft, Command.APPROVE, env.approver)
+    return draft
+
+
+async def test_build_queues_an_approved_bundle_again(env: Env) -> None:
+    draft = await approved_bundle(env)
+    # As a failed build leaves it: not queued, with the failure's code.
+    await env.db.execute(
+        update(PolicyBundle)
+        .where(PolicyBundle.id == draft.id)
+        .values(available_at=None, attempts=3, failed_attempts=1, last_error_code="FAILED_CODE")
+    )
+    await env.db.commit()
+
+    bundle = await env.move(draft, Command.BUILD, env.approver)
+
+    assert bundle.lifecycle_state is BundleLifecycleState.APPROVED
+    assert bundle.available_at is not None
+    assert (bundle.attempts, bundle.failed_attempts, bundle.last_error_code) == (0, 0, None)
+    event = await env.db.scalar(
+        select(PolicyAuditEvent).where(
+            PolicyAuditEvent.policy_bundle_id == draft.id,
+            PolicyAuditEvent.action == PolicyAuditAction.BUILD_STARTED,
+        )
+    )
+    assert event is not None
+    assert (event.actor, event.from_state, event.to_state) == (
+        APPROVER,
+        BundleLifecycleState.APPROVED,
+        BundleLifecycleState.APPROVED,
+    )
+
+
+async def test_policy_admins_cannot_run_build(env: Env) -> None:
+    draft = await approved_bundle(env)
+
+    with pytest.raises(PermissionDeniedError, match="cannot do this"):
+        await env.move(draft, Command.BUILD, env.admin)
+
+
+@pytest.mark.parametrize("state", [BundleLifecycleState.DRAFT, BundleLifecycleState.READY])
+async def test_build_refuses_a_bundle_that_is_not_approved(
+    env: Env, state: BundleLifecycleState
+) -> None:
+    draft = await env.draft()
+    if state is BundleLifecycleState.READY:
+        await env.review_all(draft)
+        await env.move(draft, Command.SUBMIT)
+        await env.move(draft, Command.APPROVE, env.approver)
+        # What the worker's READY change does.
+        await env.db.execute(
+            update(PolicyBundle).where(PolicyBundle.id == draft.id).values(lifecycle_state=state)
+        )
+        await env.db.commit()
+
+    with pytest.raises(PolicyBundleStateError, match="not in a state") as error:
+        await env.move(draft, Command.BUILD, env.approver)
+    assert error.value.details == {"state": state.value, "allowed": ["APPROVED"]}
 
 
 async def test_a_bundle_in_review_cannot_be_edited(env: Env) -> None:
