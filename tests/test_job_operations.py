@@ -502,6 +502,46 @@ async def test_one_tenant_cannot_read_or_write_another_tenants_audit_rows(
     await assert_ledger_consistent(connection, world.a.tenant_id, job_id, spend_before=spend_before)
 
 
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [(APP_ROLE, {"SELECT"}), (WORKER_ROLE, {"SELECT", "INSERT"})],
+)
+async def test_audit_table_grants_only_what_each_role_uses(
+    connection: AsyncConnection, role: str, expected: set[str]
+) -> None:
+    rows = await connection.execute(
+        text(
+            "SELECT privilege_type FROM information_schema.role_table_grants"
+            " WHERE table_name = 'job_operator_actions' AND grantee = :role"
+        ),
+        {"role": role},
+    )
+
+    assert {row.privilege_type for row in rows} == expected
+
+
+async def test_api_role_cannot_write_an_audit_row(
+    job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    # No API code path writes audit rows, so the API role must not be able to forge one.
+    insert = text(
+        "INSERT INTO job_operator_actions (id, tenant_id, job_id, action, operator,"
+        " reason, job_state_before, job_state_after, reservation_state_before,"
+        " reservation_state_after) VALUES (:id, :t, :j, 'replay', 'x', 'x',"
+        " 'UNKNOWN', 'UNKNOWN', 'HELD', 'HELD')"
+    )
+    savepoint = await connection.begin_nested()
+    await as_role(connection, APP_ROLE)
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    with pytest.raises(DBAPIError, match="permission denied for table job_operator_actions"):
+        await connection.execute(insert, {"id": uuid4(), "t": world.a.tenant_id, "j": job_id})
+    await savepoint.rollback()
+
+    assert await _audit(connection, world.a.tenant_id, job_id) == []
+
+
 @pytest.mark.parametrize("role", [APP_ROLE, WORKER_ROLE])
 @pytest.mark.parametrize(
     "statement",

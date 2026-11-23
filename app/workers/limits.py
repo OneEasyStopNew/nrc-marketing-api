@@ -142,11 +142,11 @@ def guard_providers(
     providers: Mapping[str, ImageProvider],
     settings: Settings,
     clock: Callable[[], float] = time.monotonic,
-) -> dict[str, ImageProvider]:
+) -> dict[str, GuardedProvider]:
     # One breaker per provider name, shared by its models: an outage is the provider's, not a
     # model's. The originals stay with the caller, which closes them.
     breakers: dict[str, CircuitBreaker] = {}
-    guarded: dict[str, ImageProvider] = {}
+    guarded: dict[str, GuardedProvider] = {}
     for key, provider in providers.items():
         breaker = breakers.setdefault(provider.name, CircuitBreaker(provider.name, settings, clock))
         guarded[key] = GuardedProvider(provider, breaker)

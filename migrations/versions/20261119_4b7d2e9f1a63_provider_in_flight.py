@@ -36,7 +36,6 @@ down_revision: str | None = "9e4c2b7a5d18"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-APP_ROLE = "marketing_app"
 WORKER_ROLE = "marketing_worker"
 FUNCTION = "provider_in_flight(text)"
 POLICY = "provider_in_flight"

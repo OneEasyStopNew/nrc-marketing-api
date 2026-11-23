@@ -124,6 +124,11 @@ which is why `--tenant` is required. Each action writes one row to `job_operator
 the same transaction as the change. The table is insert-only: no role may update or delete a row.
 The commands print ids and codes only; the reason is never logged.
 
+`--operator` is self-declared: nothing checks it against a login. Whoever can use
+`WORKER_DATABASE_URL` (a secret in AWS Secrets Manager; AWS logs reads of it) can replay or settle,
+so access to that secret is the authorization. The audit row records the declared operator plus
+the change. The API role can only read this table.
+
 ## Admission and provider limits
 
 | Limit | Setting | What happens at the limit |

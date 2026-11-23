@@ -18,6 +18,10 @@ Writes connect as marketing_worker (WORKER_DATABASE_URL), the least privilege th
 That role cannot read tenants, so --tenant is required. Every action writes one audit row
 (job_operator_actions) in the same transaction. Exit code 0 on success, 2 when the operation is
 refused or the arguments are invalid. Prints ids and codes only, never the reason.
+
+--operator is self-declared: nothing checks it against a login. Whoever can use
+WORKER_DATABASE_URL (a secret in AWS Secrets Manager; AWS logs reads of it) can act, so access to
+that secret is the authorization. The audit row records the declared operator plus the change.
 """
 
 import argparse
@@ -83,7 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--tenant", type=_uuid, required=True)
         command.add_argument("--job", type=_uuid, required=True)
         command.add_argument(
-            "--operator", type=_text("operator", OPERATOR_MAX_CHARS), required=True
+            "--operator",
+            type=_text("operator", OPERATOR_MAX_CHARS),
+            required=True,
+            help="your operator id; self-declared, not checked against a login",
         )
         command.add_argument("--reason", type=_text("reason", REASON_MAX_CHARS), required=True)
     outcome = settle.add_mutually_exclusive_group(required=True)

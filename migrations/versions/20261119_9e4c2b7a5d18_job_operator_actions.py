@@ -2,8 +2,10 @@
 
 One row per operator replay or settlement (scripts/job_operations.py), written in the same
 transaction as the change. Insert-only: neither role may update or delete a row, so the trail
-cannot be rewritten. The operator script connects as marketing_worker (least privilege); the
-API role gets the standard grant for an immutable tenant table (.claude/rules/migrations.md).
+cannot be rewritten. The operator script connects as marketing_worker, which gets SELECT and
+INSERT. marketing_app gets SELECT only: a role gets only what its code uses, and no API code path
+writes these rows, so the API must not be able to forge audit rows (the repo's usual
+"SELECT, INSERT for immutable tables" grant would allow it).
 
 Revision ID: 9e4c2b7a5d18
 Revises: deb7a7225553
@@ -36,6 +38,7 @@ EXECUTION_STATES = (
     "CANCELLED",
     "UNKNOWN",
 )
+RESERVATION_STATES = ("RESERVED", "HELD", "COMMITTED", "RELEASED")
 OPERATOR_ACTIONS = ("replay", "settle_billed", "settle_not_billed")
 
 
@@ -54,8 +57,16 @@ def upgrade() -> None:
         sa.Column("reason", sa.String(length=500), nullable=False),
         sa.Column("job_state_before", _enum("executionstate", *EXECUTION_STATES), nullable=False),
         sa.Column("job_state_after", _enum("executionstate", *EXECUTION_STATES), nullable=False),
-        sa.Column("reservation_state_before", sa.String(length=16), nullable=False),
-        sa.Column("reservation_state_after", sa.String(length=16), nullable=False),
+        sa.Column(
+            "reservation_state_before",
+            _enum("reservationstate", *RESERVATION_STATES),
+            nullable=False,
+        ),
+        sa.Column(
+            "reservation_state_after",
+            _enum("reservationstate", *RESERVATION_STATES),
+            nullable=False,
+        ),
         sa.Column("outbox_event_id", sa.Uuid(), nullable=True),
         sa.Column(
             "created_at",
@@ -81,8 +92,8 @@ def upgrade() -> None:
         f"CREATE POLICY tenant_isolation ON {TABLE} "
         f"USING (tenant_id = {CURRENT_TENANT}) WITH CHECK (tenant_id = {CURRENT_TENANT})"
     )
-    for role in (APP_ROLE, WORKER_ROLE):
-        op.execute(f"GRANT SELECT, INSERT ON {TABLE} TO {role}")
+    op.execute(f"GRANT SELECT ON {TABLE} TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT, INSERT ON {TABLE} TO {WORKER_ROLE}")
 
 
 def downgrade() -> None:

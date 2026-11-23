@@ -226,9 +226,10 @@ class JobOperatorAction(Base):
     reason: Mapped[str] = mapped_column(String(REASON_MAX_CHARS))
     job_state_before: Mapped[ExecutionState] = mapped_column(enum_column(ExecutionState))
     job_state_after: Mapped[ExecutionState] = mapped_column(enum_column(ExecutionState))
-    # ReservationState values.
-    reservation_state_before: Mapped[str] = mapped_column(String(16))
-    reservation_state_after: Mapped[str] = mapped_column(String(16))
+    reservation_state_before: Mapped[ReservationState] = mapped_column(
+        enum_column(ReservationState)
+    )
+    reservation_state_after: Mapped[ReservationState] = mapped_column(enum_column(ReservationState))
     # The job.run event a replay added; None for a settlement.
     outbox_event_id: Mapped[UUID | None]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

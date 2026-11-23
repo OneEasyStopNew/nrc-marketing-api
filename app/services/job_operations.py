@@ -161,8 +161,8 @@ async def replay(
             reason=reason,
             job_state_before=ExecutionState.UNKNOWN,
             job_state_after=ExecutionState.UNKNOWN,
-            reservation_state_before=reservation.value,
-            reservation_state_after=reservation.value,
+            reservation_state_before=reservation,
+            reservation_state_after=reservation,
             outbox_event_id=event_id,
         )
     )
@@ -259,8 +259,8 @@ async def settle(
             reason=reason,
             job_state_before=state_before,
             job_state_after=state_after,
-            reservation_state_before=reservation.value,
-            reservation_state_after=reservation_after.value,
+            reservation_state_before=reservation,
+            reservation_state_after=reservation_after,
         )
     )
     await db.commit()

@@ -172,9 +172,9 @@ def test_models_of_one_provider_share_one_breaker() -> None:
 
     guarded = guard_providers({"simulator:a": first, "simulator:b": second}, _settings())
 
-    breakers = {id(provider._breaker) for provider in guarded.values()}  # type: ignore[attr-defined]
+    breakers = {id(provider._breaker) for provider in guarded.values()}
     assert len(breakers) == 1
-    assert {provider.inner for provider in guarded.values()} == {first, second}  # type: ignore[attr-defined]
+    assert {provider.inner for provider in guarded.values()} == {first, second}
 
 
 async def test_in_flight_count_spans_tenants_and_returns_only_a_number(
