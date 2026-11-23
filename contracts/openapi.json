@@ -1648,6 +1648,16 @@
               }
             }
           },
+          "429": {
+            "description": "UPLOAD_LIMIT_REACHED (retryable): the tenant has the most uploads in progress it may have. Try again when one has finished processing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Object storage is not configured or temporarily unavailable.",
             "content": {
@@ -1898,7 +1908,7 @@
           "assets"
         ],
         "summary": "A fresh upload URL for a pending upload (same file, same owner)",
-        "description": "Use when the URL expired or was lost before the file was sent.",
+        "description": "Use when the URL expired or was lost before the file was sent. An expired upload is admitted again like a new one, so it can meet the in-progress limit.",
         "operationId": "reissue_upload_url",
         "security": [
           {
@@ -1982,6 +1992,16 @@
           },
           "409": {
             "description": "The upload is no longer waiting for its file.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "UPLOAD_LIMIT_REACHED (retryable): the tenant has the most uploads in progress it may have. Try again when one has finished processing.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3550,7 +3570,8 @@
               {
                 "type": "string",
                 "maxLength": 200,
-                "minLength": 1
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
               },
               {
                 "type": "null"

@@ -525,5 +525,17 @@
       "details": null,
       "retryable": false
     }
+  },
+  "error_upload_limit_reached": {
+    "request": "POST /v1/marketing/assets/uploads",
+    "status": 429,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "UPLOAD_LIMIT_REACHED",
+      "message": "Too many uploads are in progress. Try again when one has finished processing.",
+      "request_id": "req-example-0005",
+      "details": null,
+      "retryable": true
+    }
   }
 }

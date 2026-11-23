@@ -178,6 +178,43 @@ async def test_parallel_duplicate_upload_creates_make_one_upload(
     assert count == 1
 
 
+async def test_parallel_new_uploads_cannot_both_take_the_last_pending_slot(
+    committed_tenant: SeededTenant,
+    signing_key: RSAPrivateKey,
+    test_env: IntegrationEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The cap check is serialised per tenant, like generation's active-job limit.
+    app = _upload_app(signing_key, monkeypatch)
+    one_slot = get_settings().model_copy(update={"upload_max_pending_per_tenant": 1})
+    app.dependency_overrides[get_settings] = lambda: one_slot
+    auth = AuthHeaders(signing_key)
+    body = _upload_body(committed_tenant, _synthetic_png())
+
+    async with (
+        LifespanManager(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http,
+    ):
+        responses = await asyncio.gather(
+            *(
+                http.post(
+                    UPLOADS,
+                    headers=auth(
+                        "racer", committed_tenant.tenant_id, **{"Idempotency-Key": f"slot-race-{n}"}
+                    ),
+                    json=body,
+                )
+                for n in range(5)
+            )
+        )
+
+    assert sorted(r.status_code for r in responses) == [201, 429, 429, 429, 429]
+    count = await _owner_count(
+        test_env, "SELECT count(*) FROM media_uploads WHERE tenant_id = :t", committed_tenant
+    )
+    assert count == 1
+
+
 @needs_seaweedfs
 async def test_parallel_completes_queue_one_inspection(
     committed_tenant: SeededTenant,
