@@ -368,6 +368,23 @@ class ImageGenerationHandler:
             _log_review_stop(job, JOB_CONTENT_MISSING)
             return None
         await step.heartbeat(db)
+        if job.state is ExecutionState.UNKNOWN:
+            # If the provider never got the original, the resend starts a new billed generation,
+            # so it takes a provider slot like a first submit: it waits as UNKNOWN past the cap,
+            # else it is counted in flight (submitting) from before the call, committed.
+            # A RUNNING/submitting job already holds its slot.
+            if not await submit_slot_free(db, str(job.provider), step.settings):
+                return backoff_seconds(step.event_attempts, step.settings)
+            if not await transition(
+                db,
+                job.id,
+                allowed_from={ExecutionState.UNKNOWN},
+                to=ExecutionState.RUNNING,
+                stage=JobStage.SUBMITTING,
+            ):
+                return None
+            await db.commit()
+            await step.heartbeat(db)
         try:
             submitted = await provider.submit(request)
         except ProviderError as error:

@@ -2,9 +2,11 @@
 
 Concurrency: at most GENERATION_MAX_IN_FLIGHT_PER_PROVIDER generations per provider at once,
 across all tenants and worker processes, so autoscaling the worker never exceeds the provider's
-quota. `submit_slot_free` runs in the transaction that moves a job to its submitting stage: a
-per-provider advisory lock held until that transaction commits serialises the check and the move,
-so two workers can never both take the last slot. The lock never spans a provider call.
+quota. `submit_slot_free` runs in the transaction that moves a job to its submitting stage, for
+a first submit and for an UNKNOWN job's same-key resend alike (a resend starts a new generation
+when the provider never got the original): a per-provider advisory lock held until that
+transaction commits serialises the check and the move, so two workers can never both take the
+last slot. The lock never spans a provider call.
 
 Circuit breaker: per provider in each worker process. After PROVIDER_CIRCUIT_FAILURE_THRESHOLD
 transient failures in a row on estimate or submit, new estimates and submits fail fast with a

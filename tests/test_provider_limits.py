@@ -31,6 +31,7 @@ from app.services.providers.base import (
     ImageProvider,
     ImageRequest,
     ProviderJobStatus,
+    ProviderOutcomeUnknownError,
     ProviderRejectedError,
     ProviderUnavailableError,
     StatusResult,
@@ -54,8 +55,10 @@ from tests.conftest import (
     _load,
     _post_job,
     _requeue,
+    _spend,
     as_role,
 )
+from tests.ledger import assert_ledger_consistent
 
 REQUEST = ImageRequest(
     prompt="A synthetic test prompt.",
@@ -385,3 +388,104 @@ async def test_a_failed_probe_after_the_open_period_reopens_at_once() -> None:
 
     # One probe, not another full run of failures.
     assert inner.calls == 4
+
+
+async def _unknown_and_in_flight(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    provider: ScriptedProvider,
+) -> tuple[UUID, UUID]:
+    # One job whose submit outcome is unknown (UNKNOWN, a reconcile is due later), then one
+    # accepted job still in progress at the provider.
+    creative_id = await _creative(client, auth, world.a)
+    unknown = UUID((await _post_job(client, auth, world, creative_id)).json()["job_id"])
+    provider.submit_errors = [ProviderOutcomeUnknownError("Simulated lost response.")]
+    await run_once(sessions, {"simulator": provider}, FakeSink(), get_settings())
+    running = UUID((await _post_job(client, auth, world, creative_id)).json()["job_id"])
+    provider.pending_polls = 1
+    await run_once(sessions, {"simulator": provider}, FakeSink(), get_settings())
+    assert (await _load(sessions, world, unknown))[0].state is ExecutionState.UNKNOWN
+    assert (await _load(sessions, world, running))[0].state is ExecutionState.WAITING_PROVIDER
+    return unknown, running
+
+
+async def test_a_reconcile_resend_waits_at_the_provider_cap(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
+) -> None:
+    # A same-key resend starts a new billed generation when the provider never got the original,
+    # so it may not pass the cap that a first submit respects.
+    spend_before = await _spend(connection)
+    provider = ScriptedProvider()
+    unknown, _ = await _unknown_and_in_flight(client, auth, world, sessions, provider)
+    await _requeue(connection, world)
+    provider.pending_polls = 2
+
+    await run_once(
+        sessions,
+        {"simulator": provider},
+        FakeSink(),
+        _settings(generation_max_in_flight_per_provider=1),
+    )
+
+    job, _ = await _load(sessions, world, unknown)
+    assert job.state is ExecutionState.UNKNOWN
+    assert provider.submits[f"nrc-job-{unknown}"] == 1
+    pending = (
+        await connection.execute(
+            text(
+                "SELECT failed_attempts, processed_at FROM outbox_events"
+                " WHERE job_id = :j AND event_type = 'job.run'"
+            ),
+            {"j": unknown},
+        )
+    ).one()
+    assert (pending.failed_attempts, pending.processed_at) == (0, None)
+    await assert_ledger_consistent(
+        connection, world.a.tenant_id, unknown, spend_before=spend_before
+    )
+
+
+async def test_a_reconcile_resend_with_room_takes_a_slot_while_it_is_sent(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
+) -> None:
+    spend_before = await _spend(connection)
+    provider = ScriptedProvider()
+    unknown, running = await _unknown_and_in_flight(client, auth, world, sessions, provider)
+    during_resend: list[tuple[str, str | None]] = []
+
+    async def record_state() -> None:
+        row = (
+            await connection.execute(
+                text("SELECT state, stage FROM jobs WHERE id = :j"), {"j": unknown}
+            )
+        ).one()
+        during_resend.append((row.state, row.stage))
+
+    provider.before_submit = record_state
+    await _requeue(connection, world)
+
+    await run_once(
+        sessions,
+        {"simulator": provider},
+        FakeSink(),
+        _settings(generation_max_in_flight_per_provider=2),
+    )
+
+    # Counted in flight (RUNNING/submitting) while the resend is out, like a first submit.
+    assert during_resend == [("RUNNING", "submitting")]
+    assert provider.submits[f"nrc-job-{unknown}"] == 2
+    assert (await _load(sessions, world, unknown))[0].state is ExecutionState.SUCCEEDED
+    for job_id in (unknown, running):
+        await assert_ledger_consistent(
+            connection, world.a.tenant_id, job_id, spend_before=spend_before
+        )
