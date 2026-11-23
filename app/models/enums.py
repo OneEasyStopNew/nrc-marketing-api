@@ -25,6 +25,8 @@ class Channel(StrEnum):
 
 class PostFormat(StrEnum):
     FEED_IMAGE = "feed_image"
+    # Drafts and generation only; publishing Stories comes with NRC-32.
+    STORY_IMAGE = "story_image"
 
 
 class ExecutionState(StrEnum):
@@ -78,7 +80,10 @@ class FormatSpec:
 
 
 FORMAT_SPECS: Final[Mapping[PostFormat, FormatSpec]] = MappingProxyType(
-    {PostFormat.FEED_IMAGE: FormatSpec(Channel.FACEBOOK, "1:1", 1080, 1080)}
+    {
+        PostFormat.FEED_IMAGE: FormatSpec(Channel.FACEBOOK, "1:1", 1080, 1080),
+        PostFormat.STORY_IMAGE: FormatSpec(Channel.FACEBOOK, "9:16", 1080, 1920),
+    }
 )
 
 

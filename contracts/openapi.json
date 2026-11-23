@@ -1816,6 +1816,21 @@
             ],
             "title": "Caption"
           },
+          "image_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1,
+                "description": "Exact text to render in the image, one line per line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Text",
+            "description": "Leave out for an image without text."
+          },
           "language": {
             "$ref": "#/components/schemas/Language"
           },
@@ -1899,6 +1914,18 @@
             ],
             "title": "Caption"
           },
+          "image_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Text",
+            "description": "Null when the image has no text."
+          },
           "language": {
             "$ref": "#/components/schemas/Language"
           },
@@ -1960,6 +1987,7 @@
           "original_prompt",
           "current_prompt",
           "caption",
+          "image_text",
           "language",
           "channel",
           "post_format",
@@ -1998,12 +2026,26 @@
               }
             ],
             "title": "Caption"
+          },
+          "image_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1,
+                "description": "Exact text to render in the image, one line per line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Text"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "CreativeUpdate",
-        "description": "Fields to change. Omitted fields keep their value; send caption: null to clear it."
+        "description": "Fields to change. Omitted fields keep their value; send caption or image_text: null to\nclear it."
       },
       "CreativeVersionPage": {
         "properties": {
@@ -2055,6 +2097,17 @@
             ],
             "title": "Caption"
           },
+          "image_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Text"
+          },
           "study_snapshot_id": {
             "type": "string",
             "format": "uuid",
@@ -2096,6 +2149,7 @@
           "version",
           "current_prompt",
           "caption",
+          "image_text",
           "study_snapshot_id",
           "language",
           "channel",
@@ -2953,7 +3007,8 @@
       "PostFormat": {
         "type": "string",
         "enum": [
-          "feed_image"
+          "feed_image",
+          "story_image"
         ],
         "title": "PostFormat"
       },

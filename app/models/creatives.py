@@ -48,6 +48,8 @@ class CreativeVersion(Base):
     version: Mapped[int]
     prompt: Mapped[str] = mapped_column(Text)
     caption: Mapped[str | None] = mapped_column(Text)
+    # Exact text to render in the image, one line per line. Null means no text in the image.
+    image_text: Mapped[str | None] = mapped_column(Text)
     study_snapshot_id: Mapped[UUID]
     language: Mapped[Language] = mapped_column(enum_column(Language))
     channel: Mapped[Channel] = mapped_column(enum_column(Channel))

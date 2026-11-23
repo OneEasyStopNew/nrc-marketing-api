@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from app.models.enums import FORMAT_SPECS, Channel, Language, PostFormat
-from app.schemas.common import ApiModel, CaptionText, PromptText, RequestModel
+from app.schemas.common import ApiModel, CaptionText, ImageText, PromptText, RequestModel
 from app.schemas.validations import ValidationRunSummary
 
 
@@ -15,6 +15,9 @@ class CreativeCreate(RequestModel):
     study_id: UUID
     prompt: PromptText
     caption: CaptionText | None = None
+    image_text: ImageText | None = Field(
+        default=None, description="Leave out for an image without text."
+    )
     language: Language
     channel: Channel
     post_format: PostFormat
@@ -29,10 +32,12 @@ class CreativeCreate(RequestModel):
 
 
 class CreativeUpdate(RequestModel):
-    """Fields to change. Omitted fields keep their value; send caption: null to clear it."""
+    """Fields to change. Omitted fields keep their value; send caption or image_text: null to
+    clear it."""
 
     current_prompt: PromptText | None = None
     caption: CaptionText | None = None
+    image_text: ImageText | None = None
 
     @model_validator(mode="after")
     def _has_changes(self) -> Self:
@@ -50,6 +55,7 @@ class CreativeRead(ApiModel):
     original_prompt: str = Field(description="The first prompt, kept unchanged across versions.")
     current_prompt: str
     caption: str | None
+    image_text: str | None = Field(description="Null when the image has no text.")
     language: Language
     channel: Channel
     post_format: PostFormat
@@ -70,6 +76,7 @@ class CreativeVersionRead(ApiModel):
     version: int
     current_prompt: str
     caption: str | None
+    image_text: str | None
     study_snapshot_id: UUID
     language: Language
     channel: Channel
