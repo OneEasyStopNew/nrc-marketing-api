@@ -22,8 +22,9 @@ from typing import Annotated, Final
 from uuid import UUID, uuid4
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import aliased
 from sqlalchemy.pool import NullPool
 
 from app.core.config import OwnerDatabaseSettings
@@ -257,38 +258,128 @@ def _validate_edge(
         raise PolicyGraphImportError(f"The approved {label} has no provenance.")
 
 
-# What decides whether a stored graph matches a file: every node's key, type, language and text,
-# and every rule's id, check type and phrases.
+# Every node, rule and edge field the importer writes, and the source's checksum. A re-run of the
+# same file matches and is a no-op; any other file for a bundle that has a graph is refused, even
+# one that only changes an edge, a condition or an approval.
 _Fingerprint = tuple[
-    frozenset[tuple[str, str, str, str]], frozenset[tuple[str, str, tuple[str, ...]]]
+    dict[str, NodeImport], dict[str, RuleImport], Counter[tuple[object, ...]], frozenset[str]
 ]
+_NODE_FIELDS: Final = tuple(name for name in NodeImport.model_fields if name != "clause_ref")
+_RULE_FIELDS: Final = tuple(name for name in RuleImport.model_fields if name != "node_key")
+
+
+def _edge_key(edge: EdgeImport) -> tuple[object, ...]:
+    return tuple(edge.model_dump().values())
 
 
 def _fingerprint(graph: PolicyGraphImport) -> _Fingerprint:
-    nodes = frozenset((n.node_key, n.node_type, n.language, n.text) for n in graph.nodes)
-    rules = frozenset((r.rule_id, r.check_type, tuple(clean_phrases(r))) for r in graph.rules)
-    return nodes, rules
+    nodes = {node.node_key: node for node in graph.nodes}
+    # Stored phrases are the cleaned ones.
+    rules = {
+        rule.node_key: rule.model_copy(update={"prohibited_phrases": clean_phrases(rule)})
+        for rule in graph.rules
+    }
+    edges = Counter(_edge_key(edge) for edge in graph.edges)
+    # The stored side can only know the source through a node that quotes one of its clauses.
+    quoted = any(node.clause_ref for node in graph.nodes)
+    return nodes, rules, edges, frozenset({source_checksum(graph.source)} if quoted else ())
 
 
 async def _stored_fingerprint(db: AsyncSession, tenant_id: UUID, bundle_id: UUID) -> _Fingerprint:
     scope = (PolicyNode.tenant_id == tenant_id, PolicyNode.policy_bundle_id == bundle_id)
+    clause = aliased(PolicySourceClause)
     node_rows = await db.execute(
         select(
-            PolicyNode.node_key, PolicyNode.node_type, PolicyNode.language, PolicyNode.text
-        ).where(*scope)
-    )
-    rule_rows = await db.execute(
-        select(
-            PolicyRuleRecord.rule_id,
-            PolicyRuleRecord.check_type,
-            PolicyRuleRecord.prohibited_phrases,
-        ).where(
-            PolicyRuleRecord.tenant_id == tenant_id, PolicyRuleRecord.policy_bundle_id == bundle_id
+            *(getattr(PolicyNode, name) for name in _NODE_FIELDS),
+            clause.clause_ref,
+            PolicySource.checksum_sha256,
         )
+        .outerjoin(
+            clause,
+            and_(
+                clause.tenant_id == PolicyNode.tenant_id, clause.id == PolicyNode.source_clause_id
+            ),
+        )
+        .outerjoin(
+            PolicySource,
+            and_(PolicySource.tenant_id == clause.tenant_id, PolicySource.id == clause.source_id),
+        )
+        .where(*scope)
     )
-    nodes = frozenset((key, kind, lang, text) for key, kind, lang, text in node_rows)
-    rules = frozenset((rid, check, tuple(phrases)) for rid, check, phrases in rule_rows)
-    return nodes, rules
+    nodes: dict[str, NodeImport] = {}
+    checksums: set[str] = set()
+    for row in node_rows:
+        *values, clause_ref, checksum = row
+        node = NodeImport.model_validate(
+            {**dict(zip(_NODE_FIELDS, values, strict=True)), "clause_ref": clause_ref}
+        )
+        nodes[node.node_key] = node
+        if checksum is not None:
+            checksums.add(checksum)
+    rule_rows = await db.execute(
+        select(*(getattr(PolicyRuleRecord, name) for name in _RULE_FIELDS), PolicyNode.node_key)
+        .join(
+            PolicyNode,
+            and_(
+                PolicyNode.tenant_id == PolicyRuleRecord.tenant_id,
+                PolicyNode.id == PolicyRuleRecord.node_id,
+            ),
+        )
+        .where(*scope)
+    )
+    rules: dict[str, RuleImport] = {}
+    for row in rule_rows:
+        *values, node_key = row
+        rules[node_key] = RuleImport.model_validate(
+            {**dict(zip(_RULE_FIELDS, values, strict=True)), "node_key": node_key}
+        )
+    source_node, target_node = aliased(PolicyNode), aliased(PolicyNode)
+    edge_rows = await db.execute(
+        select(
+            PolicyEdge.edge_type,
+            source_node.node_key,
+            target_node.node_key,
+            PolicyEdge.approved,
+            clause.clause_ref,
+            PolicyEdge.provenance_note,
+        )
+        .join(
+            source_node,
+            and_(
+                source_node.tenant_id == PolicyEdge.tenant_id,
+                source_node.id == PolicyEdge.from_node_id,
+            ),
+        )
+        .join(
+            target_node,
+            and_(
+                target_node.tenant_id == PolicyEdge.tenant_id,
+                target_node.id == PolicyEdge.to_node_id,
+            ),
+        )
+        .outerjoin(
+            clause,
+            and_(
+                clause.tenant_id == PolicyEdge.tenant_id,
+                clause.id == PolicyEdge.provenance_clause_id,
+            ),
+        )
+        .where(PolicyEdge.tenant_id == tenant_id, PolicyEdge.policy_bundle_id == bundle_id)
+    )
+    edges = Counter(
+        _edge_key(
+            EdgeImport(
+                edge_type=edge_type,
+                from_node_key=from_key,
+                to_node_key=to_key,
+                approved=approved,
+                provenance_clause_ref=ref,
+                provenance_note=note,
+            )
+        )
+        for edge_type, from_key, to_key, approved, ref, note in edge_rows
+    )
+    return nodes, rules, edges, frozenset(checksums)
 
 
 def source_checksum(source: SourceImport) -> str:
