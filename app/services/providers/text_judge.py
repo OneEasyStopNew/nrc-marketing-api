@@ -202,6 +202,15 @@ def _fake_citation(request: JudgeRequest) -> JudgeAnswer:
     return JudgeAnswer(results=[*results, _pass(FAKE_RULE_ID)])
 
 
+def judge_model_id(settings: Settings) -> str | None:
+    # The model VALIDATION_MODEL_MODE will use; None when it is off.
+    if settings.validation_model_mode == "off":
+        return None
+    if settings.validation_model_mode == "simulator":
+        return SIMULATED_JUDGE_MODEL_ID
+    return settings.bedrock_validation_model_id
+
+
 def missing_live_judge_settings(settings: Settings) -> list[str]:
     # What live mode lacks for the judge; messages name settings, never values. Empty for the
     # other modes.

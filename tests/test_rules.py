@@ -200,6 +200,7 @@ def _graph_rule(
     return rules.GraphRule(
         rule_id=rule_id,
         rule_version=1,
+        node_key=rule_id,
         mandatory=mandatory,
         gate=gate,
         severity=Severity.MAJOR,

@@ -14,6 +14,7 @@ from app.api.deps import (
     DbSession,
     DemoStubsDep,
     IdempotencyKey,
+    SettingsDep,
     ValidationRunner,
     require_stubs,
 )
@@ -48,10 +49,14 @@ _VALIDATIONS: dict[int | str, dict[str, Any]] = {
     tags=["validations"],
     status_code=status.HTTP_202_ACCEPTED,
     summary="Validate a brief, caption or image",
-    description="Briefs and captions are checked against the active policy and the study facts "
-    "before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until "
-    "validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until "
-    "SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run. Each "
+    description="Briefs and captions are checked against the active policy and the study facts. "
+    "Without the model check (VALIDATION_MODEL_MODE=off) the run finishes before this returns "
+    "(state SUCCEEDED; semantic rules stay UNABLE_TO_ASSESS). With it, this queues a job "
+    "(state QUEUED): poll GET /validations/{validation_run_id} until SUCCEEDED (or FAILED). A "
+    "finished PASS or FAIL with identical content, configuration and versions is reused "
+    "(state SUCCEEDED). job_id equals validation_run_id. Images need DEMO_STUBS (501 "
+    "otherwise); poll those until SUCCEEDED. A retry with the same Idempotency-Key and body "
+    "returns the original run. Each "
     "brief or caption run also stores the policy context it was checked against (see "
     "GET /validations/{validation_run_id}/context). If that context can't be gathered (each "
     "of its database queries has a time limit), the run is stored as NEEDS_REVIEW (or FAIL), "
@@ -66,6 +71,7 @@ async def create_validation(
     stubs: DemoStubsDep,
     context_provider: ContextProviderDep,
     context_timeout: ContextTimeoutDep,
+    settings: SettingsDep,
     response: Response,
 ) -> ValidationAccepted:
     if body.input_kind is ValidationInputKind.IMAGE:
@@ -73,7 +79,7 @@ async def create_validation(
         accepted, replayed = await service.start_validation(db, ctx, body, idempotency_key)
     else:
         accepted, replayed = await validations.create_validation(
-            db, ctx, body, idempotency_key, context_provider, context_timeout
+            db, ctx, body, idempotency_key, context_provider, context_timeout, settings
         )
     if replayed:
         response.headers["Idempotent-Replayed"] = "true"

@@ -53,7 +53,7 @@ _DETAIL_EDGES = (
 
 
 async def get_bundle_rules(
-    db: AsyncSession, ctx: TenantContext, policy_bundle_id: UUID
+    db: AsyncSession, tenant_id: UUID, policy_bundle_id: UUID
 ) -> PolicyBundleRulesRead:
     """Return a bundle's approved rules with their sources, disclosures and exceptions.
 
@@ -72,7 +72,7 @@ async def get_bundle_rules(
                 PolicyBundle.name,
                 PolicyBundle.lifecycle_state,
                 PolicyBundle.is_synthetic,
-            ).where(PolicyBundle.tenant_id == ctx.tenant_id, PolicyBundle.id == policy_bundle_id)
+            ).where(PolicyBundle.tenant_id == tenant_id, PolicyBundle.id == policy_bundle_id)
         )
     ).one_or_none()
     if bundle is None or bundle.lifecycle_state not in USABLE_BUNDLE_STATES:
@@ -89,7 +89,7 @@ async def get_bundle_rules(
                 ),
             )
             .where(
-                PolicyRuleRecord.tenant_id == ctx.tenant_id,
+                PolicyRuleRecord.tenant_id == tenant_id,
                 PolicyRuleRecord.policy_bundle_id == bundle.id,
                 PolicyNode.approved.is_(True),
             )
@@ -101,13 +101,13 @@ async def get_bundle_rules(
             "This policy bundle has no rules to show.",
             details={"reason": PolicyContextReason.GRAPH_MISSING},
         )
-    linked = await _linked_nodes(db, ctx.tenant_id, bundle.id, [node.id for _, node in rules])
+    linked = await _linked_nodes(db, tenant_id, bundle.id, [node.id for _, node in rules])
     # Sources are the clauses quoted by rule nodes and by the nodes rules are supported by.
     quoting = [node for _, node in rules] + [
         node for edge, node in _flatten(linked) if edge is PolicyEdgeType.SUPPORTED_BY
     ]
     clauses = await _clauses(
-        db, ctx.tenant_id, {n.source_clause_id for n in quoting if n.source_clause_id is not None}
+        db, tenant_id, {n.source_clause_id for n in quoting if n.source_clause_id is not None}
     )
     return PolicyBundleRulesRead(
         policy_bundle_id=bundle.id,

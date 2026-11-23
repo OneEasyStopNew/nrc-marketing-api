@@ -41,6 +41,9 @@ PHRASE_AND_FACT_GAP: Final = CoverageGap(
     reason="Phrase and study-fact checks only; a review of meaning (AI or human) has not run."
 )
 NOT_CHECKED: Final = "No automated check exists for this rule yet."
+# Recorded on each run. Change it whenever the checks or the merge with the model's answers
+# change, so stored results can be traced and are never reused across a change.
+EVALUATION_VERSION: Final = "checks-v1"
 NEEDS_MEANING: Final = "Needs a review of meaning; the model check has not run."
 RULE_NOT_LOADED: Final = "The rule's text is not in the policy graph, so it could not be checked."
 MODEL_CHECK_FAILED: Final = "The model check failed ({failure}); a person must review this rule."
@@ -162,6 +165,7 @@ class GraphRule:
     # A rule the manifest selected. content is None when its policy_rules row was not found.
     rule_id: str
     rule_version: int
+    node_key: str
     mandatory: bool
     gate: Gate
     severity: Severity

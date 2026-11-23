@@ -46,7 +46,7 @@ from app.models import Job, OutboxEvent
 from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import FAILURE_MESSAGE_MAX_CHARS, ReservationState
 from app.schemas.jobs import JobKind
-from app.services import generation_checks, spend
+from app.services import generation_checks, spend, validation_jobs
 from app.services.assets import StoredImageSink, emit_asset_generated
 from app.services.jobs import (
     NON_TERMINAL_STATES,
@@ -59,6 +59,7 @@ from app.services.jobs import (
     transition,
 )
 from app.services.media import configure_pillow
+from app.services.policy_context import AuroraPolicyContextProvider, PolicyContextProvider
 from app.services.providers.base import (
     HIGGSFIELD_NAME,
     TERMINAL_PROVIDER_STATUSES,
@@ -80,7 +81,13 @@ from app.services.providers.higgsfield import (
     with_higgsfield_key,
 )
 from app.services.providers.simulator import SIMULATOR_NAME, SimulatedImageProvider
+from app.services.providers.text_judge import (
+    TextJudge,
+    missing_live_judge_settings,
+    text_judge_from_settings,
+)
 from app.services.storage import ObjectStorage
+from app.services.validations import INPUT_BY_JOB_KIND
 
 logger = logging.getLogger(__name__)
 
@@ -565,20 +572,65 @@ class ImageGenerationHandler:
         return None
 
 
-JOB_HANDLERS: Final[Mapping[JobKind, JobHandler]] = MappingProxyType(
-    {JobKind.IMAGE_GENERATION: ImageGenerationHandler()}
+class ValidationJobHandler:
+    """Runs a brief or caption validation job (app.services.validation_jobs).
+
+    The judge and the context provider come from the settings unless a test passes its own.
+    """
+
+    def __init__(
+        self,
+        judge: TextJudge | None = None,
+        context_provider: PolicyContextProvider | None = None,
+    ) -> None:
+        self._judge = judge
+        self._context_provider = context_provider
+        self._built: tuple[Settings, TextJudge | None, PolicyContextProvider] | None = None
+
+    async def handle(self, db: AsyncSession, job: Job, step: Step) -> float | None:
+        judge, provider = self._dependencies(step.settings)
+        try:
+            return await validation_jobs.run(
+                db,
+                job,
+                judge=judge,
+                context_provider=provider,
+                settings=step.settings,
+                now=step.now,
+                heartbeat=step.heartbeat,
+                retry_delay=lambda attempt: backoff_seconds(attempt, step.settings),
+            )
+        except validation_jobs.ValidationJobError as error:
+            await _fail_with(db, job.id, error.code, error.message, billed=False)
+            return None
+
+    def _dependencies(self, settings: Settings) -> tuple[TextJudge | None, PolicyContextProvider]:
+        if self._built is None or self._built[0] is not settings:
+            judge = self._judge if self._judge is not None else text_judge_from_settings(settings)
+            provider = self._context_provider or AuroraPolicyContextProvider(settings)
+            self._built = (settings, judge, provider)
+        return self._built[1], self._built[2]
+
+
+_VALIDATION_HANDLER: Final = ValidationJobHandler()
+# Keyed by jobs.kind: a JobKind value, or one of the internal validation kinds.
+JOB_HANDLERS: Final[Mapping[str, JobHandler]] = MappingProxyType(
+    {
+        JobKind.IMAGE_GENERATION: ImageGenerationHandler(),
+        **dict.fromkeys(INPUT_BY_JOB_KIND, _VALIDATION_HANDLER),
+    }
 )
 
 
 class JobRunHandler:
     # "job.run": runs the next step of the event's job with the handler for its kind.
 
-    def __init__(self, job_handlers: Mapping[JobKind, JobHandler]) -> None:
+    def __init__(self, job_handlers: Mapping[str, JobHandler]) -> None:
         self._job_handlers = job_handlers
 
     async def handle(self, db: AsyncSession, event: LeasedEvent, step: Step) -> float | None:
         job = await db.get(Job, event.job_id)
-        handler = self._job_handlers.get(JobKind(job.kind)) if job and job.kind in JobKind else None
+        handler = None if job is None else self._job_handlers.get(job.kind)
         if job is None or handler is None:
             raise NoHandlerError
         return await handler.handle(db, job, step)
@@ -1029,6 +1081,16 @@ def check_worker_settings(settings: Settings) -> None:
     # A provider call must end before the lease that covers it expires.
     if settings.http_timeout_seconds >= lease_seconds(settings):
         raise WorkerConfigError("HTTP_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS.")
+    # The handler renews the lease before each judge call. shortcut: botocore's own retries
+    # (BEDROCK_MAX_RETRIES) can stretch one call past the lease; measure when live access exists.
+    if settings.validation_model_timeout_seconds >= lease_seconds(settings):
+        raise WorkerConfigError(
+            "VALIDATION_MODEL_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS."
+        )
+    problems = missing_live_judge_settings(settings)
+    if problems:
+        # Refused at start, never per job; live never falls back to the simulator.
+        raise WorkerConfigError(f"VALIDATION_MODEL_MODE=live refused: {'; '.join(problems)}")
 
 
 def check_live_mode(settings: Settings) -> None:

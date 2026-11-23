@@ -185,6 +185,8 @@ async def get_job(db: AsyncSession, ctx: TenantContext, job_id: UUID) -> JobRead
             .where(
                 Job.tenant_id == ctx.tenant_id,
                 Job.id == job_id,
+                # Validation jobs are read through GET /validations/{id}.
+                Job.kind.in_([kind.value for kind in JobKind]),
                 Creative.study_id.in_(ctx.study_ids),
             )
         )

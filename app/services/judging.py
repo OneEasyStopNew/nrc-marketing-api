@@ -16,7 +16,7 @@ expert-labelled evaluation set measures what remains.
 import json
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
@@ -229,6 +229,7 @@ async def run_judge(
     *,
     max_output_tokens: int,
     max_attempts: int,
+    before_call: Callable[[], Awaitable[None]] | None = None,
 ) -> Judgement:
     """Ask the judge, retrying only an invalid answer, at most max_attempts times.
 
@@ -239,6 +240,9 @@ async def run_judge(
     suspicious = aimed_at_checker(text)
     failure: JudgeFailure | None = None
     for attempt in range(1, max_attempts + 1):
+        if before_call is not None:
+            # The worker's lease renewal: each call must start inside a live lease.
+            await before_call()
         reply = await judge.judge(request)
         try:
             answers = verify(reply, request, context)
