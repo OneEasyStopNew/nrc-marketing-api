@@ -9,7 +9,6 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Final
 from uuid import UUID
 
@@ -24,26 +23,13 @@ from app.models import (
     PolicySourceClause,
 )
 from app.models.enums import (
+    CheckCode,
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
     ReviewState,
     WordingKind,
 )
-
-
-class CheckCode(StrEnum):
-    EMPTY_BUNDLE = "EMPTY_BUNDLE"
-    UNREVIEWED_ITEM = "UNREVIEWED_ITEM"
-    MISSING_PROVENANCE = "MISSING_PROVENANCE"
-    EDGE_TO_UNAPPROVED_NODE = "EDGE_TO_UNAPPROVED_NODE"
-    SUPERSEDES_CYCLE = "SUPERSEDES_CYCLE"
-    SUPERSEDES_CONFLICT = "SUPERSEDES_CONFLICT"
-    CONTRADICTORY_WORDING = "CONTRADICTORY_WORDING"
-    UNRESOLVED_EXCEPTION = "UNRESOLVED_EXCEPTION"
-    UNSUPPORTED_LANGUAGE = "UNSUPPORTED_LANGUAGE"
-    DUPLICATE_OBLIGATION = "DUPLICATE_OBLIGATION"
-    EXACT_WORDING_NOT_IN_SOURCE = "EXACT_WORDING_NOT_IN_SOURCE"
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.models.enums import (
+    CheckCode,
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
@@ -16,7 +17,6 @@ from app.models.enums import (
 from app.services.policy_checks import (
     CHECKS,
     BundleSnapshot,
-    CheckCode,
     EdgeView,
     NodeView,
     RuleView,

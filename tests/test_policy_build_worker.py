@@ -23,6 +23,7 @@ from app.db.session import bind_tenant
 from app.models import PolicyBundle, PolicyNode
 from app.models.enums import (
     BundleLifecycleState,
+    Command,
     PolicyAuditAction,
     PolicyLanguage,
     PolicyNodeType,
@@ -31,7 +32,6 @@ from app.models.enums import (
 from app.models.policy_graph import SEARCHABLE_NODE_TYPES
 from app.schemas.policy_admin import TransitionRequest
 from app.services import policy_bundles as bundles
-from app.services.policy_bundles import Command
 from app.services.policy_index import index_content_checksum
 from app.services.providers.base import (
     ProviderError,

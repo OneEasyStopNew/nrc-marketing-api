@@ -1,4 +1,5 @@
-# Requests that build, review and move policy bundles through their lifecycle (NRC-4).
+# Requests and responses for policy sources and bundles: build, review and move a bundle through
+# its lifecycle (NRC-4).
 
 from datetime import datetime
 from typing import Annotated, Literal
@@ -7,17 +8,25 @@ from uuid import UUID
 from pydantic import AwareDatetime, Field, StringConstraints
 
 from app.models.enums import (
+    BundleLifecycleState,
+    CheckCode,
     CheckType,
+    Command,
     Gate,
+    PolicyAuditAction,
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
+    ProposalOrigin,
+    ReviewItemKind,
+    ReviewState,
     Severity,
+    SourceExtractionState,
     ValidationInputKind,
     WordingKind,
 )
 from app.models.policy_graph import RULE_ID_PATTERN
-from app.schemas.common import RequestModel
+from app.schemas.common import ApiModel, RequestModel
 
 Text = Annotated[str, StringConstraints(min_length=1, max_length=20_000, pattern=r"\S")]
 Tag = Annotated[str, StringConstraints(min_length=1, max_length=64)]
@@ -123,5 +132,189 @@ class ReviewDecision(RequestModel):
     note: Note | None = None
 
 
+class ReviewDecisionRequest(ReviewDecision):
+    item_kind: ReviewItemKind
+    item_id: UUID
+
+
 class TransitionRequest(RequestModel):
-    reason: Note | None = Field(default=None, description="Required when rejecting a bundle.")
+    reason: Note | None = Field(
+        default=None,
+        description="Required for reject, activate, rollback and retire; kept in the audit trail.",
+    )
+
+
+class TransitionCommandRequest(TransitionRequest):
+    command: Command
+
+
+class PolicySourceCreate(RequestModel):
+    upload_id: UUID = Field(description="A READY policy upload (POST /policy-sources/uploads).")
+    title: str = Field(min_length=1, max_length=300)
+    source_ref: str = Field(min_length=1, max_length=300)
+    language: PolicyLanguage = PolicyLanguage.EN
+    is_synthetic: bool = Field(description="True until the file is the client's real policy.")
+
+
+# ---- Responses
+
+
+class PolicySourceRead(ApiModel):
+    id: UUID
+    title: str
+    source_ref: str
+    checksum_sha256: str
+    language: PolicyLanguage
+    is_synthetic: bool
+    upload_id: UUID | None
+    extraction_state: SourceExtractionState = Field(
+        description="Clauses can be cited once this is EXTRACTED."
+    )
+    extraction_error_code: str | None
+    page_count: int | None
+    extracted_at: datetime | None
+    created_by: str
+    created_at: datetime
+
+
+class PolicySourcePage(ApiModel):
+    items: list[PolicySourceRead]
+    next_cursor: datetime | None = Field(description="Pass as before for the next (older) page.")
+
+
+class PolicyClauseRead(ApiModel):
+    id: UUID
+    clause_ref: str
+    section: str | None
+    page: int | None
+    text: str = Field(description="Verbatim from the source.")
+    checksum_sha256: str
+    language: PolicyLanguage
+
+
+class PolicyClauseList(ApiModel):
+    items: list[PolicyClauseRead]
+
+
+class PolicyBundleDetail(ApiModel):
+    id: UUID
+    version: int
+    name: str
+    source_ref: str
+    is_synthetic: bool
+    lifecycle_state: BundleLifecycleState
+    revision: int = Field(description='Send as If-Match: "<revision>" when editing or moving it.')
+    based_on_bundle_id: UUID | None
+    approved_by: str | None
+    approved_at: datetime | None
+    activated_by: str | None
+    activated_at: datetime | None
+    last_error_code: str | None = Field(description="Why the last index build failed, if it did.")
+    created_at: datetime
+    updated_at: datetime
+    rule_count: int
+
+
+class PolicyBundlePage(ApiModel):
+    items: list[PolicyBundleDetail]
+    next_cursor: int | None = Field(description="Pass as before_version for the next page.")
+
+
+class ReviewRead(ApiModel):
+    review_state: ReviewState
+    origin: ProposalOrigin
+    reviewed_by: str | None
+    reviewed_at: datetime | None
+    review_note: str | None
+
+
+class PolicyNodeRead(ReviewRead):
+    id: UUID
+    node_key: str
+    node_type: PolicyNodeType
+    text: str
+    language: PolicyLanguage
+    source_clause_id: UUID | None
+    # Applicability, as NodeCreate takes it; an empty list means no restriction.
+    input_kinds: list[str]
+    channels: list[str]
+    languages: list[str]
+    audiences: list[str]
+    jurisdictions: list[str]
+    study_ids: list[UUID]
+    effective_from: datetime | None
+    effective_to: datetime | None
+    required_study_fact: str | None
+
+
+class PolicyEdgeRead(ReviewRead):
+    id: UUID
+    edge_type: PolicyEdgeType
+    from_node_id: UUID
+    to_node_id: UUID
+    provenance_clause_id: UUID | None
+    provenance_note: str | None
+
+
+class PolicyWordingRead(ReviewRead):
+    id: UUID
+    policy_rule_id: UUID = Field(description="The rule record id (PolicyRuleRead.id).")
+    language: PolicyLanguage
+    kind: WordingKind
+    text: str = Field(description="Exact required wording, or one prohibited phrase.")
+    source_clause_id: UUID | None
+    translation_of_id: UUID | None
+    created_at: datetime
+
+
+class PolicyRuleRead(ApiModel):
+    id: UUID = Field(description="The rule record id, used in paths (not the rule_id code).")
+    rule_id: str
+    rule_version: int
+    title: str
+    requirement: str
+    gate: Gate
+    severity: Severity
+    mandatory: bool
+    check_type: CheckType
+    node: PolicyNodeRead
+    wordings: list[PolicyWordingRead]
+
+
+class PolicyRuleList(ApiModel):
+    items: list[PolicyRuleRead]
+
+
+class PolicyNodeList(ApiModel):
+    items: list[PolicyNodeRead]
+
+
+class PolicyEdgeList(ApiModel):
+    items: list[PolicyEdgeRead]
+
+
+class PolicyIssueRead(ApiModel):
+    code: CheckCode
+    subject: str = Field(description='What it is about, e.g. "rule:REC-01".')
+    message: str
+
+
+class PolicyBundleChecks(ApiModel):
+    issues: list[PolicyIssueRead] = Field(description="Empty when the bundle can be approved.")
+
+
+class PolicyAuditRead(ApiModel):
+    id: UUID
+    action: PolicyAuditAction
+    from_state: BundleLifecycleState | None
+    to_state: BundleLifecycleState | None
+    actor: str
+    reason: str | None
+    details: dict[str, object] = Field(description="Ids and counts only, never policy text.")
+    request_id: str | None
+    created_at: datetime
+
+
+class PolicyAuditPage(ApiModel):
+    items: list[PolicyAuditRead]
+    next_cursor: datetime | None = Field(description="Pass as before for the next (older) page.")

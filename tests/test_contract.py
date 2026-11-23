@@ -12,6 +12,14 @@ from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeRead, CreativeVersionPage
 from app.schemas.jobs import JobAccepted, JobRead
 from app.schemas.policies import GenerationEligibility, PolicyBundleRead
+from app.schemas.policy_admin import (
+    PolicyAuditPage,
+    PolicyBundleChecks,
+    PolicyBundleDetail,
+    PolicyClauseList,
+    PolicyRuleList,
+    PolicySourceRead,
+)
 from app.schemas.policy_evidence import PolicyBundleRulesRead, ValidationContextRead
 from app.schemas.tenancy import ContextRead, MeRead
 from app.schemas.uploads import PolicyUploadRead, UploadLimits, UploadPage, UploadRead
@@ -33,8 +41,14 @@ SCHEMAS: dict[str, type[BaseModel]] = {
         JobRead,
         MediaPage,
         MeRead,
+        PolicyAuditPage,
+        PolicyBundleChecks,
+        PolicyBundleDetail,
         PolicyBundleRead,
+        PolicyClauseList,
         PolicyBundleRulesRead,
+        PolicyRuleList,
+        PolicySourceRead,
         PolicyUploadRead,
         ValidationContextRead,
         UploadLimits,

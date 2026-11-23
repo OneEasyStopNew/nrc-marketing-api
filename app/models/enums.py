@@ -260,3 +260,34 @@ def enum_column[E: StrEnum](enum_cls: type[E]) -> Enum:
         values_callable=lambda members: [member.value for member in members],
         validate_strings=True,
     )
+
+
+class CheckCode(StrEnum):
+    EMPTY_BUNDLE = "EMPTY_BUNDLE"
+    UNREVIEWED_ITEM = "UNREVIEWED_ITEM"
+    MISSING_PROVENANCE = "MISSING_PROVENANCE"
+    EDGE_TO_UNAPPROVED_NODE = "EDGE_TO_UNAPPROVED_NODE"
+    SUPERSEDES_CYCLE = "SUPERSEDES_CYCLE"
+    SUPERSEDES_CONFLICT = "SUPERSEDES_CONFLICT"
+    CONTRADICTORY_WORDING = "CONTRADICTORY_WORDING"
+    UNRESOLVED_EXCEPTION = "UNRESOLVED_EXCEPTION"
+    UNSUPPORTED_LANGUAGE = "UNSUPPORTED_LANGUAGE"
+    DUPLICATE_OBLIGATION = "DUPLICATE_OBLIGATION"
+    EXACT_WORDING_NOT_IN_SOURCE = "EXACT_WORDING_NOT_IN_SOURCE"
+
+
+class Command(StrEnum):
+    SUBMIT = "submit"
+    RETURN_TO_DRAFT = "return_to_draft"
+    APPROVE = "approve"
+    REJECT = "reject"
+    BUILD = "build"
+    ACTIVATE = "activate"
+    ROLLBACK = "rollback"
+    RETIRE = "retire"
+
+
+class ReviewItemKind(StrEnum):
+    NODE = "node"
+    EDGE = "edge"
+    WORDING = "wording"

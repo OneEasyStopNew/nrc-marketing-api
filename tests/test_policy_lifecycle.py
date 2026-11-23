@@ -37,12 +37,14 @@ from app.models import (
 from app.models.enums import (
     BundleLifecycleState,
     CheckType,
+    Command,
     Gate,
     IndexBuildState,
     PolicyAuditAction,
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
+    ReviewItemKind,
     ReviewState,
     Severity,
     WordingKind,
@@ -60,7 +62,6 @@ from app.schemas.policy_admin import (
 )
 from app.services import policy_bundles as bundles
 from app.services.policies import get_active_policy
-from app.services.policy_bundles import Command, ReviewItemKind
 from tests.conftest import (
     IntegrationEnv,
     SeededTenant,

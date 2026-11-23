@@ -12,7 +12,6 @@ retirement extend TRANSITIONS in later steps.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
 from typing import Final
 from uuid import UUID, uuid4
 
@@ -43,10 +42,12 @@ from app.models import (
 )
 from app.models.enums import (
     BundleLifecycleState,
+    Command,
     PolicyAuditAction,
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
+    ReviewItemKind,
     ReviewState,
     ValidationInputKind,
     WordingKind,
@@ -70,17 +71,6 @@ from app.services.policy_index import stale_ready_builds
 State = BundleLifecycleState
 EDITABLE: Final = frozenset({State.DRAFT})
 REVIEWABLE: Final = frozenset({State.DRAFT, State.REVIEW})
-
-
-class Command(StrEnum):
-    SUBMIT = "submit"
-    RETURN_TO_DRAFT = "return_to_draft"
-    APPROVE = "approve"
-    REJECT = "reject"
-    BUILD = "build"
-    ACTIVATE = "activate"
-    ROLLBACK = "rollback"
-    RETIRE = "retire"
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,12 +148,6 @@ _CHANGES_ACTIVE: Final = _ACTIVATING | {Command.RETIRE}
 # Consumers (approval and dispatch invalidation, NRC-12/13) read ids only and load the rest.
 POLICY_BUNDLE_EVENT: Final = "policy_bundle.activated"
 POLICY_BUNDLE_EVENT_VERSION: Final = 1
-
-
-class ReviewItemKind(StrEnum):
-    NODE = "node"
-    EDGE = "edge"
-    WORDING = "wording"
 
 
 _REVIEW_MODELS: Final[

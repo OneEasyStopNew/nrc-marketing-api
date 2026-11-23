@@ -19,6 +19,7 @@ from app.api.routes import (
     jobs,
     me,
     policies,
+    policy_admin,
     policy_uploads,
     workflows,
 )
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
         jobs.router,
         assets.router,
         policy_uploads.router,
+        policy_admin.router,
     ):
         app.include_router(router, prefix=API_PREFIX, responses=COMMON_ERROR_RESPONSES)
     app.include_router(health.router)
