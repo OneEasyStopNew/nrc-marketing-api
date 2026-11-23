@@ -13,6 +13,7 @@ from app.models import ContextManifestRecord, ValidationRun
 from app.models.enums import BundleLifecycleState, Language, PolicyLanguage
 from app.services.policy_context.manifest import MAX_STATEMENT_CHARS
 from app.services.policy_context.provider import manifest_sha256
+from app.services.policy_evidence import get_bundle_rules
 from app.services.validations import policy_language
 from scripts.import_policy_graph import load_synthetic_graph
 from scripts.seed_demo import demo_policy_rules
@@ -22,6 +23,7 @@ from tests.conftest import (
     add_policy_bundle,
     as_tenant_owner,
     count_rows,
+    owner_session,
 )
 
 API = "/v1/marketing"
@@ -507,6 +509,20 @@ async def test_rules_need_membership(
     )
 
     assert response.status_code == 403
+
+
+async def test_a_validation_reads_only_the_rules_its_manifest_selected(
+    world: World, connection: AsyncConnection
+) -> None:
+    bundle_id = await _with_graph(connection, world)
+
+    async with owner_session(connection, world.a.tenant_id) as db:
+        some = await get_bundle_rules(db, world.a.tenant_id, bundle_id, {"REC-07", "REC-01"})
+        none = await get_bundle_rules(db, world.a.tenant_id, bundle_id, {"NOT-A-RULE"})
+
+    assert [rule.rule_id for rule in some.rules] == ["REC-01", "REC-07"]
+    assert [d.node_key for d in some.rules[1].disclosures] == ["DISC-01", "DISC-01-ES"]
+    assert none.rules == []
 
 
 async def test_unapproved_rules_are_hidden(

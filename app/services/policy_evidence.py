@@ -5,7 +5,7 @@ simply not found. Only approved nodes and edges are shown, as in retrieval.
 """
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from uuid import UUID
 
 from sqlalchemy import and_, select
@@ -53,11 +53,16 @@ _DETAIL_EDGES = (
 
 
 async def get_bundle_rules(
-    db: AsyncSession, tenant_id: UUID, policy_bundle_id: UUID
+    db: AsyncSession,
+    tenant_id: UUID,
+    policy_bundle_id: UUID,
+    rule_ids: Collection[str] | None = None,
 ) -> PolicyBundleRulesRead:
     """Return a bundle's approved rules with their sources, disclosures and exceptions.
 
     Only ACTIVE and RETIRED bundles (the ones runs can pin); drafts belong to policy review.
+    `rule_ids` limits the result to those rules (a validation reads only what its manifest
+    selected); then finding none is not an error.
 
     Raises:
         NotFoundError: no such bundle for the tenant, or it is not active or retired.
@@ -77,6 +82,7 @@ async def get_bundle_rules(
     ).one_or_none()
     if bundle is None or bundle.lifecycle_state not in USABLE_BUNDLE_STATES:
         raise NotFoundError("Policy bundle not found.")
+    only = () if rule_ids is None else (PolicyRuleRecord.rule_id.in_(rule_ids),)
     rules = (
         await db.execute(
             select(PolicyRuleRecord, PolicyNode)
@@ -92,11 +98,12 @@ async def get_bundle_rules(
                 PolicyRuleRecord.tenant_id == tenant_id,
                 PolicyRuleRecord.policy_bundle_id == bundle.id,
                 PolicyNode.approved.is_(True),
+                *only,
             )
             .order_by(PolicyRuleRecord.rule_id)
         )
     ).all()
-    if not rules:
+    if not rules and rule_ids is None:
         raise PolicyContextUnavailableError(
             "This policy bundle has no rules to show.",
             details={"reason": PolicyContextReason.GRAPH_MISSING},

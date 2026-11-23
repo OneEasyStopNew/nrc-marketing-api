@@ -478,10 +478,13 @@ async def graph_rules(
 ) -> list[rules.GraphRule]:
     # Exactly the rules the manifest selected (mandatory and optional), read from the graph with
     # the sources the policy evidence endpoint shows. A selected rule with no row is not checked.
-    stored = await policy_evidence.get_bundle_rules(db, tenant_id, policy.policy_bundle_id)
+    chosen = [*manifest.required_rules, *manifest.optional_rules]
+    stored = await policy_evidence.get_bundle_rules(
+        db, tenant_id, policy.policy_bundle_id, rule_ids={rule.rule_id for rule in chosen}
+    )
     rows = {(row.rule_id, row.rule_version): row for row in stored.rules}
     selected_rules = []
-    for selected in [*manifest.required_rules, *manifest.optional_rules]:
+    for selected in chosen:
         row = rows.get((selected.rule_id, selected.rule_version))
         source = SourceReference(source_id=policy.source_ref, clause=selected.rule_id)
         content = None

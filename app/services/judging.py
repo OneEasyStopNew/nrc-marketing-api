@@ -145,7 +145,8 @@ def judge_context(
     rule_keys = {rule.node_key for rule in rules}
     rule_ids = {rule.rule_id for rule in rules}
     own = [item for item in evidence if any(p and p[0] in rule_keys for p in item.paths)]
-    found = [item for item in evidence if item.matches and item not in own]
+    own_keys = {item.node_key for item in own}
+    found = [item for item in evidence if item.matches and item.node_key not in own_keys]
     excerpts = {
         item.node_key: item.excerpt[:MAX_EXCERPT_CHARS]
         for item in [*own, *found][:MAX_EVIDENCE_ITEMS]
