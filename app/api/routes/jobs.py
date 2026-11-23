@@ -89,12 +89,21 @@ async def get_job(job_id: UUID, ctx: CreativeReader, db: DbSession, stubs: DemoS
             "model": ErrorBody,
             "description": "JOB_NOT_CANCELLABLE: the job already finished (details.state).",
         },
+        501: {"model": ErrorBody, "description": "Not available while DEMO_STUBS=true."},
+        503: {
+            "model": ErrorBody,
+            "description": "DEPENDENCY_UNAVAILABLE: the job is busy; retry shortly (retryable).",
+        },
     },
 )
 async def cancel_job(
-    job_id: UUID, ctx: GenerationRunner, db: DbSession, stubs: DemoStubsDep
+    job_id: UUID,
+    ctx: GenerationRunner,
+    db: DbSession,
+    settings: SettingsDep,
+    stubs: DemoStubsDep,
 ) -> JobRead:
     if stubs is not None:
         # Stub jobs live in memory; there is nothing durable to cancel.
         raise FeatureNotAvailableError("Job cancellation is not available in demo stub mode.")
-    return await jobs.request_cancel(db, ctx, job_id)
+    return await jobs.request_cancel(db, ctx, job_id, settings)

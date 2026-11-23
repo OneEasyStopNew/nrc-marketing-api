@@ -8,6 +8,7 @@ from typing import Final
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
@@ -37,6 +38,8 @@ TERMINAL_STATES: Final = frozenset(
 NON_TERMINAL_STATES: Final = frozenset(ExecutionState) - TERMINAL_STATES
 # States a cancel request may move a job out of: every non-terminal one but CANCEL_REQUESTED.
 _CANCELLABLE_FROM: Final = NON_TERMINAL_STATES - {ExecutionState.CANCEL_REQUESTED}
+# SQLSTATE lock_not_available: a lock_timeout ran out.
+_LOCK_NOT_AVAILABLE: Final = "55P03"
 # Jobs that take an active-generation slot. Parked and UNKNOWN jobs don't: UNKNOWN credits
 # stay HELD, so the daily credit ceiling still bounds them. CANCEL_REQUESTED does: the provider
 # may still be running until the worker confirms the cancel, so a request must not free a slot.
@@ -210,7 +213,9 @@ async def get_job(db: AsyncSession, ctx: TenantContext, job_id: UUID) -> JobRead
     return JobRead.model_validate(row)
 
 
-async def request_cancel(db: AsyncSession, ctx: TenantContext, job_id: UUID) -> JobRead:
+async def request_cancel(
+    db: AsyncSession, ctx: TenantContext, job_id: UUID, settings: Settings
+) -> JobRead:
     """Record a durable cancel request; the worker acts on it (stops, settles credits).
 
     State-idempotent: a job already CANCEL_REQUESTED or CANCELLED is returned unchanged. This
@@ -219,20 +224,28 @@ async def request_cancel(db: AsyncSession, ctx: TenantContext, job_id: UUID) -> 
     Raises:
         NotFoundError: no such job, or not visible to the caller.
         JobNotCancellableError: the job already SUCCEEDED or FAILED.
+        DependencyUnavailableError: the job row stayed locked past
+            JOB_CANCEL_LOCK_TIMEOUT_SECONDS (retryable).
     """
     job = await get_job(db, ctx, job_id)
-    if job.state not in TERMINAL_STATES and await transition(
-        db, job_id, allowed_from=_CANCELLABLE_FROM, to=ExecutionState.CANCEL_REQUESTED
-    ):
-        await _wake_worker(db, ctx.tenant_id, job_id)
-        await db.commit()
-        logger.info(
-            "job cancel requested job=%s tenant=%s by=%s",
-            job_id,
-            ctx.tenant_id,
-            ctx.principal.sub,
-        )
-        return await get_job(db, ctx, job_id)
+    if job.state not in TERMINAL_STATES:
+        try:
+            moved = await _record_cancel(db, ctx.tenant_id, job_id, settings)
+        except DBAPIError as error:
+            if getattr(getattr(error, "orig", None), "sqlstate", None) != _LOCK_NOT_AVAILABLE:
+                raise
+            await db.rollback()
+            logger.warning("job cancel lock timeout job=%s tenant=%s", job_id, ctx.tenant_id)
+            raise DependencyUnavailableError("The job is busy. Try again in a moment.") from None
+        if moved:
+            await db.commit()
+            logger.info(
+                "job cancel requested job=%s tenant=%s by=%s",
+                job_id,
+                ctx.tenant_id,
+                ctx.principal.sub,
+            )
+            return await get_job(db, ctx, job_id)
     # Not moved: every other non-terminal state is accepted, so the job is already
     # CANCEL_REQUESTED or terminal (possibly since it was read).
     job = await get_job(db, ctx, job_id)
@@ -243,23 +256,41 @@ async def request_cancel(db: AsyncSession, ctx: TenantContext, job_id: UUID) -> 
     )
 
 
-async def _wake_worker(db: AsyncSession, tenant_id: UUID, job_id: UUID) -> None:
-    # Make the job's pending run event due now; a leased event finishes its step first, so the
-    # lease columns stay as they are. With none pending (e.g. an UNKNOWN job the worker gave
-    # up on) add one, so the worker can finalize the cancel.
-    woken = await db.execute(
-        update(OutboxEvent)
-        .where(
-            OutboxEvent.tenant_id == tenant_id,
-            OutboxEvent.job_id == job_id,
-            OutboxEvent.event_type == RUN_EVENT,
-            OutboxEvent.processed_at.is_(None),
-        )
-        .values(available_at=func.now())
-        .returning(OutboxEvent.id)
-        .execution_options(synchronize_session=False)
+async def _record_cancel(
+    db: AsyncSession, tenant_id: UUID, job_id: UUID, settings: Settings
+) -> bool:
+    """Move the job to CANCEL_REQUESTED and make sure a run event will finish the cancel.
+
+    Locks in the worker's order, the run event first and the job second, or a cancel landing
+    while a worker is inside a provider call deadlocks with it (the worker holds its event lock
+    through the call, then updates the job). An event a worker holds is skipped, not waited on:
+    that worker keeps the event when it finds the cancel after its step (JobRunHandler.handle).
+    Returns whether the job moved.
+    """
+    timeout_ms = round(settings.job_cancel_lock_timeout_seconds * 1000)
+    await db.execute(select(func.set_config("lock_timeout", f"{timeout_ms}ms", True)))
+    pending = select(OutboxEvent.id).where(
+        OutboxEvent.tenant_id == tenant_id,
+        OutboxEvent.job_id == job_id,
+        OutboxEvent.event_type == RUN_EVENT,
+        OutboxEvent.processed_at.is_(None),
     )
-    if woken.first() is None:
+    claimed = await db.scalar(pending.limit(1).with_for_update(skip_locked=True))
+    held_by_worker = claimed is None and bool(await db.scalar(select(pending.exists())))
+    if not await transition(
+        db, job_id, allowed_from=_CANCELLABLE_FROM, to=ExecutionState.CANCEL_REQUESTED
+    ):
+        return False
+    if claimed is not None:
+        # Due now; the lease columns are not ours to touch.
+        await db.execute(
+            update(OutboxEvent)
+            .where(OutboxEvent.id == claimed)
+            .values(available_at=func.now())
+            .execution_options(synchronize_session=False)
+        )
+    elif not held_by_worker:
+        # None pending (e.g. an UNKNOWN job the worker gave up on): add one to finish the cancel.
         db.add(
             OutboxEvent(
                 tenant_id=tenant_id,
@@ -269,6 +300,7 @@ async def _wake_worker(db: AsyncSession, tenant_id: UUID, job_id: UUID) -> None:
                 attempts=0,
             )
         )
+    return True
 
 
 async def transition(

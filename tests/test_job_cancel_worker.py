@@ -72,14 +72,6 @@ async def _cancel(
     )
 
 
-async def _cancel_in_flight(connection: AsyncConnection, job_id: UUID) -> None:
-    # The cancel request lands while a worker is mid-step (as the API's guarded update would).
-    await connection.execute(
-        text("UPDATE jobs SET state = 'CANCEL_REQUESTED' WHERE id = :j AND state <> 'CANCELLED'"),
-        {"j": job_id},
-    )
-
-
 async def _awaiting_review(connection: AsyncConnection) -> list[tuple[UUID, UUID]]:
     # Lists across tenants, so it needs a role that reads tenants (the script uses the owner).
     async with app_session(connection) as db:
@@ -241,7 +233,14 @@ async def test_unknown_job_is_cancelled_with_credits_held_and_never_resent(
     await assert_ledger_consistent(connection, world.a.tenant_id, job_id, spend_before=spend_before)
 
 
+# The two mid-step tests below cancel through the real POST /cancel on the shared test
+# connection, for the ledger checks; tests/test_job_cancel_races.py runs the same cancels on
+# committed data with separate connections, where the row-lock order really applies.
+
+
 async def test_cancel_landing_during_submit_keeps_the_request_id_and_records_the_outcome(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
     world: World,
     sessions: Sessions,
     connection: AsyncConnection,
@@ -251,7 +250,7 @@ async def test_cancel_landing_during_submit_keeps_the_request_id_and_records_the
     provider, sink = _priced(), FakeSink()
 
     async def cancel_now() -> None:
-        await _cancel_in_flight(connection, job_id)
+        assert (await _cancel(client, auth, world, job_id)).status_code == 202
 
     provider.before_submit = cancel_now
     await _run(sessions, provider, sink)
@@ -276,6 +275,8 @@ async def test_cancel_landing_during_submit_keeps_the_request_id_and_records_the
 
 
 async def test_cancel_landing_during_fetch_discards_the_image_and_bills_once(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
     world: World,
     sessions: Sessions,
     connection: AsyncConnection,
@@ -285,7 +286,7 @@ async def test_cancel_landing_during_fetch_discards_the_image_and_bills_once(
     provider, sink = _priced(), FakeSink()
 
     async def cancel_now() -> None:
-        await _cancel_in_flight(connection, job_id)
+        assert (await _cancel(client, auth, world, job_id)).status_code == 202
 
     provider.before_fetch = cancel_now
     await _run(sessions, provider, sink)
