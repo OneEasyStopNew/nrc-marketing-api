@@ -17,12 +17,11 @@ import json
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Final
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -110,8 +109,10 @@ class NodeImport(_ImportModel):
     audiences: list[_Tag] = Field(default_factory=list)
     jurisdictions: list[_Tag] = Field(default_factory=list)
     study_ids: list[UUID] = Field(default_factory=list)
-    effective_from: datetime | None = None
-    effective_to: datetime | None = None
+    # With an offset: a date without one would land in timestamptz in whatever timezone the
+    # importing session assumes, shifting a rule's window by hours.
+    effective_from: AwareDatetime | None = None
+    effective_to: AwareDatetime | None = None
     required_study_fact: str | None = Field(default=None, max_length=64)
 
 

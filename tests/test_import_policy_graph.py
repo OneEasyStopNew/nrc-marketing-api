@@ -19,6 +19,7 @@ from app.models import (
 from app.models.enums import PolicyEdgeType, PolicyLanguage, PolicyNodeType
 from scripts.import_policy_graph import (
     EdgeImport,
+    NodeImport,
     PolicyGraphImport,
     PolicyGraphImportError,
     RuleImport,
@@ -362,6 +363,15 @@ async def test_different_graph_for_a_bundle_that_has_one_is_rejected(
         with pytest.raises(PolicyGraphImportError, match="already has a different graph"):
             await import_policy_graph(db, tenant_id, bundle_id, changed)
         assert await _counts(connection) == EXPECTED_COUNTS
+
+
+@pytest.mark.parametrize("field", ["effective_from", "effective_to"])
+def test_effective_date_without_a_timezone_is_rejected(field: str) -> None:
+    node = {"node_key": "CL-1", "node_type": "CLAUSE", "text": "[SYNTHETIC] clause"}
+
+    NodeImport.model_validate({**node, field: "2026-12-01T00:00:00Z"})
+    with pytest.raises(ValueError, match="timezone info"):
+        NodeImport.model_validate({**node, field: "2026-12-01T00:00:00"})
 
 
 def test_rule_import_rejects_unknown_fields() -> None:
