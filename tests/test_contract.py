@@ -14,6 +14,7 @@ from app.schemas.jobs import JobAccepted, JobRead
 from app.schemas.policies import GenerationEligibility, PolicyBundleRead
 from app.schemas.policy_evidence import PolicyBundleRulesRead, ValidationContextRead
 from app.schemas.tenancy import ContextRead, MeRead
+from app.schemas.validations import ValidationAccepted, ValidationRunRead
 from scripts.export_openapi import CONTRACT_PATH, render
 
 EXAMPLE_FILES = sorted(
@@ -33,7 +34,9 @@ SCHEMAS: dict[str, type[BaseModel]] = {
         MeRead,
         PolicyBundleRead,
         PolicyBundleRulesRead,
+        ValidationAccepted,
         ValidationContextRead,
+        ValidationRunRead,
     )
 }
 
