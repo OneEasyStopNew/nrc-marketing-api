@@ -135,7 +135,7 @@
       "job_id": "0d7e4b2c-8a3f-4c91-b6d5-7f1a9e3c2b58",
       "input_kind": "text",
       "creative_version": 1,
-      "state": "NEEDS_REVIEW",
+      "state": "SUCCEEDED",
       "outcome": "NEEDS_REVIEW",
       "is_current": true,
       "evaluated_at": "2026-11-20T12:30:09Z",
