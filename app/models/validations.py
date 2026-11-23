@@ -3,7 +3,15 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKeyConstraint, Index, String, UniqueConstraint, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,6 +45,13 @@ class ValidationRun(Base):
             "input_kind",
             "created_at",
         ),
+        # A later run may reuse this one's result only when its reuse_key is equal.
+        Index(
+            "ix_validation_runs_reuse",
+            "tenant_id",
+            "reuse_key",
+            postgresql_where=text("reuse_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -50,10 +65,19 @@ class ValidationRun(Base):
     policy_bundle_id: Mapped[UUID]
     policy_bundle_version: Mapped[int]
     study_snapshot_version: Mapped[int]
-    # The policy context gathered for this run (NRC-5): evidence only until NRC-7 judges with it.
+    # The policy context gathered for this run (NRC-5); the outcome comes from its rules.
     context_manifest_id: Mapped[UUID | None]
     # The manifest's content hash when the run used it, so later changes to its JSON show.
     context_manifest_sha256: Mapped[str | None] = mapped_column(String(64))
+    # The model that judged the semantic rules (e.g. simulator:judge-v1); NULL when no model ran.
+    judge_model_id: Mapped[str | None] = mapped_column(String(100))
+    judge_prompt_version: Mapped[str | None] = mapped_column(String(40))
+    # Model calls made for this run; NULL when none.
+    judge_attempts: Mapped[int | None]
+    # Version of the code checks and merge logic that produced the result.
+    evaluation_version: Mapped[str | None] = mapped_column(String(40))
+    # sha256 hex of the content and every dependency version; reuse only on an equal key.
+    reuse_key: Mapped[str | None] = mapped_column(String(64))
     # gates, rule_results, findings and coverage_gaps; validated by the API schemas on read.
     result: Mapped[dict[str, object]] = mapped_column(JSONB)
     created_by: Mapped[str] = mapped_column(String(128))
