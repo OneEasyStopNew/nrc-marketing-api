@@ -23,6 +23,7 @@ from app.db.session import create_engine, create_sessionmaker
 from app.main import create_app
 from app.services.providers.base import FetchedImage, ImageRequest, StatusResult, SubmitResult
 from app.services.providers.simulator import SimulatedImageProvider
+from app.workers import connector
 from app.workers.connector import run_once
 from tests.conftest import (
     JOBS,
@@ -36,6 +37,9 @@ from tests.conftest import (
 
 # Far longer than a cancel needs; only a cancel stuck behind the worker's lock reaches it.
 CANCEL_WAIT_SECONDS = 15
+# Time a cancel gets to reach its update of the job row before the worker commits (well under
+# the 2 s default JOB_CANCEL_LOCK_TIMEOUT_SECONDS).
+CANCEL_REACH_SECONDS = 0.5
 
 Hook = Callable[[], Awaitable[None]]
 
@@ -120,7 +124,7 @@ def _cancel_from_inside(
 
 
 async def _run_worker(
-    test_env: IntegrationEnv, provider: HookProvider, sink: FakeSink, owner: str
+    test_env: IntegrationEnv, provider: HookProvider, sink: FakeSink | None, owner: str
 ) -> None:
     settings = get_settings()
     engine = create_engine(settings, test_env.test_worker_database_url)
@@ -213,6 +217,54 @@ async def test_cancel_during_the_output_fetch_answers_at_once_and_keeps_no_asset
     # Billed (the provider completed it), but the image is not kept as an asset.
     assert tuple(done) == ("CANCELLED", "CANCELLED_AFTER_COMPLETION", "COMMITTED", 0)
     assert sum(provider.submits.values()) == 1
+
+
+async def test_cancel_while_the_worker_closes_its_event_still_leaves_one_to_finish_it(
+    http: httpx.AsyncClient,
+    committed_tenant: SeededTenant,
+    signing_key: RSAPrivateKey,
+    test_env: IntegrationEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The worker's step has nothing more to do (no image storage, so the job parks at
+    # output_ready) and it closes its event; the cancel lands between the worker's last job
+    # update and its commit. Either the worker keeps its event or the cancel adds one, never
+    # neither (or the job sits in CANCEL_REQUESTED with nothing to finish it).
+    auth = AuthHeaders(signing_key)
+    job_id = await _queued_job(http, auth, committed_tenant, "cancel-race-close")
+    real_finish = connector._finish_event
+    cancels: list[asyncio.Task[httpx.Response]] = []
+
+    async def finish_while_a_cancel_lands(
+        db: Any, run: Any, event_id: Any, retry_after: float | None, **kwargs: Any
+    ) -> None:
+        if not cancels:
+            cancels.append(
+                asyncio.create_task(
+                    http.post(
+                        f"/v1/marketing/jobs/{job_id}/cancel",
+                        headers=auth("creator-a", committed_tenant.tenant_id),
+                    )
+                )
+            )
+            await asyncio.sleep(CANCEL_REACH_SECONDS)
+        await real_finish(db, run, event_id, retry_after, **kwargs)
+
+    monkeypatch.setattr(connector, "_finish_event", finish_while_a_cancel_lands)
+
+    await _run_worker(test_env, HookProvider(), None, "cancel-race-close")
+    async with asyncio.timeout(CANCEL_WAIT_SECONDS):
+        response = await cancels[0]
+
+    assert response.status_code == 202
+    [row] = await _owner(
+        test_env,
+        "SELECT j.state, j.stage, (SELECT count(*) FROM outbox_events o WHERE o.job_id = j.id"
+        "  AND o.event_type = 'job.run' AND o.processed_at IS NULL) AS pending"
+        " FROM jobs j WHERE j.tenant_id = :t",
+        committed_tenant,
+    )
+    assert (row.state, row.stage, row.pending) == ("CANCEL_REQUESTED", "output_ready", 1)
 
 
 @pytest.fixture

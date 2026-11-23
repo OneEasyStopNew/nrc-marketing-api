@@ -232,10 +232,16 @@ async def request_cancel(
         try:
             moved = await _record_cancel(db, ctx.tenant_id, job_id, settings)
         except DBAPIError as error:
-            if getattr(getattr(error, "orig", None), "sqlstate", None) != _LOCK_NOT_AVAILABLE:
+            sqlstate = getattr(getattr(error, "orig", None), "sqlstate", None)
+            if sqlstate != _LOCK_NOT_AVAILABLE:
                 raise
             await db.rollback()
-            logger.warning("job cancel lock timeout job=%s tenant=%s", job_id, ctx.tenant_id)
+            logger.exception(
+                "job cancel lock timeout job=%s tenant=%s sqlstate=%s",
+                job_id,
+                ctx.tenant_id,
+                sqlstate,
+            )
             raise DependencyUnavailableError("The job is busy. Try again in a moment.") from None
         if moved:
             await db.commit()
@@ -263,9 +269,12 @@ async def _record_cancel(
 
     Locks in the worker's order, the run event first and the job second, or a cancel landing
     while a worker is inside a provider call deadlocks with it (the worker holds its event lock
-    through the call, then updates the job). An event a worker holds is skipped, not waited on:
-    that worker keeps the event when it finds the cancel after its step (JobRunHandler.handle).
-    Returns whether the job moved.
+    through the call, then updates the job). An event a worker holds is skipped, never waited on.
+
+    Whether a run event is still pending is decided after the job update, not before: the
+    worker's post-step check reads the job with FOR SHARE (JobRunHandler.handle), so either it
+    sees this cancel and keeps its event, or it has committed (event processed) before this
+    update can go through, and the check below adds a new event. Returns whether the job moved.
     """
     timeout_ms = round(settings.job_cancel_lock_timeout_seconds * 1000)
     await db.execute(select(func.set_config("lock_timeout", f"{timeout_ms}ms", True)))
@@ -276,7 +285,6 @@ async def _record_cancel(
         OutboxEvent.processed_at.is_(None),
     )
     claimed = await db.scalar(pending.limit(1).with_for_update(skip_locked=True))
-    held_by_worker = claimed is None and bool(await db.scalar(select(pending.exists())))
     if not await transition(
         db, job_id, allowed_from=_CANCELLABLE_FROM, to=ExecutionState.CANCEL_REQUESTED
     ):
@@ -289,8 +297,10 @@ async def _record_cancel(
             .values(available_at=func.now())
             .execution_options(synchronize_session=False)
         )
-    elif not held_by_worker:
-        # None pending (e.g. an UNKNOWN job the worker gave up on): add one to finish the cancel.
+    elif not await db.scalar(select(pending.exists())):
+        # None pending (e.g. an UNKNOWN job the worker gave up on, or a worker that closed its
+        # event just before this update): add one to finish the cancel. A pending one a worker
+        # holds is kept by that worker.
         db.add(
             OutboxEvent(
                 tenant_id=tenant_id,

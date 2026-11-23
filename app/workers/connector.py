@@ -609,9 +609,11 @@ class JobRunHandler:
                 heartbeat=step.heartbeat,
             )
         retry = await handler.handle(db, job, step)
-        if retry is None and await db.scalar(select(Job.state).where(Job.id == job.id)) is (
-            ExecutionState.CANCEL_REQUESTED
-        ):
+        # FOR SHARE waits for a cancel that is updating the job right now, so this check either
+        # sees it or commits first (request_cancel then adds a new event after its update).
+        if retry is None and await db.scalar(
+            select(Job.state).where(Job.id == job.id).with_for_update(read=True)
+        ) is (ExecutionState.CANCEL_REQUESTED):
             # A cancel arrived mid-step and won the step's guarded update: keep the event, so
             # the cancel is finished instead of the job being left behind.
             return backoff_seconds(1, step.settings)
