@@ -154,6 +154,13 @@ uv run alembic check
 uv run pytest            # uses the marketing_test database; each test is rolled back
 ```
 
+## Design records
+
+- `docs/adr/0001-marketing-service-foundation.md`: service ownership, contract versions, tenancy
+  rules and how to add a module.
+- `docs/migrations.md`: how to write a migration, roll back a release and repair forward, and what
+  each downgrade would destroy.
+
 ## Contract for the frontend
 
 - `contracts/openapi.json` is the spec. Regenerate it with `uv run python -m scripts.export_openapi`.
@@ -181,10 +188,9 @@ Policy and generation:
   `/context` carries a summary in `active_policy`. The seeded policy is synthetic demo rules
   paraphrased from public FDA recruitment-advertising guidance, not the approved client policy.
 - `GET /creatives/{id}/generation-eligibility[?version=N]` says whether generation may start and why
-  not (`reason`). The generation job calls `app.services.eligibility.check_generation_eligibility`
-  and raises `GenerationNotEligibleError` (409 `GENERATION_NOT_ELIGIBLE`) unless it is eligible.
-  Only the latest stored brief run of that exact version counts, and only if it was checked against
-  the current policy version.
+  not (`reason`). `POST /creative-jobs` runs the same check and answers with the errors listed under
+  "Demo stubs" below. Only the latest stored brief run of that exact version counts, and only if it
+  was checked against the current policy version.
 
 Validation (NRC-7):
 

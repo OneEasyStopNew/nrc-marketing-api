@@ -203,11 +203,17 @@
     "schema": "ErrorBody",
     "body": {"code": "STUDY_CLOSED", "message": "The study is closed, so new creatives cannot be started.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e14", "details": null, "retryable": false}
   },
-  "error_409_not_eligible": {
-    "request": "POST /creative-jobs for a version that has not passed brief validation",
+  "error_409_validation_not_passed": {
+    "request": "POST /creative-jobs for a version whose brief has not been validated yet",
     "status": 409,
     "schema": "ErrorBody",
-    "body": {"code": "GENERATION_NOT_ELIGIBLE", "message": "This creative version has not passed brief validation yet.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e19", "details": {"reason": "NOT_VALIDATED"}, "retryable": false}
+    "body": {"code": "VALIDATION_NOT_PASSED", "message": "Validate the brief for this version before generating.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e19", "details": {"validation_run_id": null, "status": "NOT_VALIDATED"}, "retryable": false}
+  },
+  "error_409_not_eligible": {
+    "request": "POST /creative-jobs after the study closed to recruitment",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {"code": "GENERATION_NOT_ELIGIBLE", "message": "This creative version cannot be sent for image generation.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e22", "details": {"reason": "STUDY_CLOSED"}, "retryable": false}
   },
   "error_409_no_active_policy": {
     "request": "POST /validations in a tenant that has no policy yet",
