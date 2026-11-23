@@ -277,6 +277,42 @@ It connects as `marketing_worker` (`WORKER_DATABASE_URL`) and needs `s3:GetObjec
 uv run python -m app.workers.policy
 ```
 
+### Policy bundles: review and activation (NRC-4)
+
+A bundle moves `DRAFT` → `REVIEW` → `APPROVED` → `BUILDING` → `READY` → `ACTIVE` → `RETIRED`.
+`policy_admin` edits drafts, reviews items and submits; `policy_approver` approves or rejects,
+builds, activates, retires and rolls back. One person may hold both roles (`grant_access
+--member <sub>=policy_admin --member <sub>=policy_approver`). The same policy worker builds the
+search index after approval; with `EMBEDDING_MODE=off` the bundle is searchable by full text only,
+and the audit trail says so. The API calls, If-Match rules and errors are in
+`contracts/examples/nrc4.md`.
+
+To walk a reviewed sample bundle (synthetic, English only) through to `ACTIVE`:
+
+```powershell
+# 1. As policy_admin: POST /v1/marketing/policy-bundles {"name": "Sample", "source_ref": "synthetic", "is_synthetic": true}
+# 2. Import the sample graph into that DRAFT bundle (runs as the database owner):
+uv run python -m scripts.import_policy_graph --tenant-id <tenant> --bundle-id <bundle> `
+    --file scripts/data/synthetic_sample_bundle.json
+# 3. GET .../policy-bundles/<bundle>/checks must return {"issues": []}
+# 4. POST .../transitions {"command": "submit"}, then as policy_approver {"command": "approve"}
+# 5. Run the policy worker until GET .../policy-bundles/<bundle> shows READY
+# 6. As policy_approver: POST .../transitions {"command": "activate", "reason": "..."}
+```
+
+Sign-off before activating a real (non-synthetic) bundle:
+
+- [ ] `GET .../checks` is empty, and every rule in `GET .../rule-records` cites a clause or an
+      approved interpretation that says what the rule says.
+- [ ] Each exact wording appears word for word in its clause (`GET /policy-sources/<id>/clauses`).
+- [ ] Prohibited phrases and exceptions match the source; nothing is `LLM_SIMULATED`.
+- [ ] `is_synthetic` is `false` on the bundle and its sources.
+- [ ] The approver is not the person who edited the bundle (until the four-eyes rule is decided,
+      check this by hand in `GET .../audit`).
+- [ ] The activation reason names the source document and its version.
+- [ ] After activation, `GET .../audit` shows the actor, reason and time, and the previous bundle
+      is `RETIRED`.
+
 ## Staging prerequisites
 
 - A Postgres login role `marketing_app` that does not own the tables and has no `BYPASSRLS`. The API's
