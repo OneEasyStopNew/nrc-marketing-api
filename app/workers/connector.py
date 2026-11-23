@@ -1083,7 +1083,8 @@ def check_worker_settings(settings: Settings) -> None:
         raise WorkerConfigError("HTTP_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS.")
     # The handler renews the lease before each judge call. shortcut: botocore's own retries
     # (BEDROCK_MAX_RETRIES) can stretch one call past the lease; measure when live access exists.
-    if settings.validation_model_timeout_seconds >= lease_seconds(settings):
+    judge_on = settings.validation_model_mode != "off"
+    if judge_on and settings.validation_model_timeout_seconds >= lease_seconds(settings):
         raise WorkerConfigError(
             "VALIDATION_MODEL_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS."
         )

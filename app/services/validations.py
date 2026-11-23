@@ -584,6 +584,12 @@ def policy_language(language: Language | str) -> PolicyLanguage | None:
         return None
 
 
+def pinned_policy_version(job: Job) -> int | None:
+    # jobs.policy_bundle_version is text (shared with generation jobs); validation jobs pin an int.
+    value = job.policy_bundle_version
+    return int(value) if value and value.isascii() and value.isdigit() else None
+
+
 def input_hash(kind: ValidationInputKind, text: str) -> str:
     return hashlib.sha256(f"{kind.value}:{text}".encode()).hexdigest()
 
@@ -748,7 +754,7 @@ async def _pending_read(
     job, current_version = row
     kind = INPUT_BY_JOB_KIND[job.kind]
     target = await load_target(db, visible_to(ctx), job.creative_id, job.creative_version)
-    bundle_version = int(job.policy_bundle_version) if job.policy_bundle_version else None
+    bundle_version = pinned_policy_version(job)
     return ValidationRunRead(
         validation_run_id=job.id,
         input_kind=kind,

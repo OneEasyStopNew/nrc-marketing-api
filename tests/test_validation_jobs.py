@@ -310,6 +310,23 @@ async def test_a_validation_job_whose_pinned_policy_is_gone_fails_cleanly(
     )
 
 
+async def test_a_validation_job_with_an_unreadable_policy_version_fails_at_once(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> None:
+    # jobs.policy_bundle_version is text; a bad value must not crash the worker into retries.
+    _, run_id = await _queued(client, auth, world)
+    await _sql(sessions, "UPDATE jobs SET policy_bundle_version = 'v2' WHERE id = :id", run_id)
+
+    await _work(sessions)
+    job = await _job(sessions, run_id)
+
+    assert (job.state, job.failure_code, job.attempt_count) == (
+        ExecutionState.FAILED,
+        validation_jobs.ValidationJobError.code,
+        0,
+    )
+
+
 async def _sql(sessions: Sessions, statement: str, job_id: str) -> None:
     # Test set-up on the worker's connection (it may update jobs).
     async with sessions() as db:
@@ -353,6 +370,19 @@ def test_the_worker_refuses_a_judge_timeout_as_long_as_its_lease() -> None:
 
     with pytest.raises(WorkerConfigError, match="VALIDATION_MODEL_TIMEOUT_SECONDS"):
         check_worker_settings(settings)
+
+
+def test_with_the_model_off_the_judge_timeout_does_not_stop_the_worker() -> None:
+    # No judge calls happen, so the judge timeout can't outlive a lease.
+    settings = get_settings().model_copy(
+        update={
+            "validation_model_mode": "off",
+            "validation_model_timeout_seconds": 60,
+            "worker_lease_seconds": 60,
+        }
+    )
+
+    check_worker_settings(settings)
 
 
 async def _creative(

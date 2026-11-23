@@ -56,19 +56,20 @@ async def run(
     """Run one validation job. Returns None when done, or the seconds until it should run again.
 
     Raises:
-        ValidationJobError: the pinned creative version or policy version no longer exists.
+        ValidationJobError: the pinned creative version or policy version is unreadable or gone.
     """
     if job.state not in _ACTIVE:
         return None
     kind = validations.INPUT_BY_JOB_KIND[job.kind]
+    version = validations.pinned_policy_version(job)
+    if version is None:
+        raise ValidationJobError("The job has no readable policy version.")
     await transition(db, job.id, allowed_from=_ACTIVE, to=ExecutionState.RUNNING, stage=None)
     try:
         target = await validations.load_target(
             db, (Creative.tenant_id == job.tenant_id,), job.creative_id, job.creative_version
         )
-        policy = await policies.get_policy_version(
-            db, job.tenant_id, int(job.policy_bundle_version or 0)
-        )
+        policy = await policies.get_policy_version(db, job.tenant_id, version)
     except AppError:
         raise ValidationJobError(
             "The creative version or policy version to check is gone."
