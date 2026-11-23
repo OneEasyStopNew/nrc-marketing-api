@@ -267,15 +267,18 @@ class AuroraPolicyContextProvider:
                 )
         names = {node_id: node.key for node_id, node in loaded.nodes.items()}
         top_k, bundle_id = self._config.top_k, loaded.bundle.id
+        # One query per search type for all statements, then fused per statement.
+        lexical = await search.lexical(db, bundle_id, texts, language, top_k)
+        semantic = (
+            await search.semantic(db, bundle_id, plan.embedding_model_id, vectors, top_k)
+            if vectors is not None and plan.embedding_model_id is not None
+            else None
+        )
         matches: dict[UUID, list[SearchMatch]] = {}
-        for index, text in enumerate(texts):
-            ranked: dict[search.Source, Sequence[UUID]] = {
-                "lexical": await search.lexical(db, bundle_id, text, language, top_k)
-            }
-            if vectors is not None and plan.embedding_model_id is not None:
-                ranked["semantic"] = await search.semantic(
-                    db, bundle_id, plan.embedding_model_id, vectors[index], top_k
-                )
+        for index in range(len(texts)):
+            ranked: dict[search.Source, Sequence[UUID]] = {"lexical": lexical[index]}
+            if semantic is not None:
+                ranked["semantic"] = semantic[index]
             fused = search.fuse(ranked, names, top_k, self._config.rrf_k)
             for rank, (node_id, found_by) in enumerate(fused, start=1):
                 if node_id in names:

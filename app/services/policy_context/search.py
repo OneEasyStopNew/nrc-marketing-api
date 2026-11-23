@@ -1,16 +1,19 @@
-# Search for supporting evidence (NRC-5): full-text and vector search per statement, fused.
+# Search for supporting evidence (NRC-5): full-text and vector search for every statement in one
+# query each, fused per statement.
 #
 # Search only ever adds evidence. Rules are selected by their conditions alone and exceptions are
 # reached through the graph, so neither is searched: a missed search result can never drop a
 # rule, and a spurious one can never add or excuse one.
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, Literal
 from uuid import UUID
 
-from sqlalchemy import Text, and_, cast, func, literal, select
-from sqlalchemy.dialects.postgresql import REGCONFIG
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import Text, and_, bindparam, cast, func, literal, select, true
+from sqlalchemy.dialects.postgresql import ARRAY, REGCONFIG
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.selectable import TableValuedAlias
 
 from app.db.session import bound_tenant
 from app.models import PolicyNode, PolicyNodeEmbedding
@@ -27,28 +30,49 @@ TEXT_SEARCH_CONFIG: Final[Mapping[PolicyLanguage, str]] = {
 Source = Literal["lexical", "semantic"]
 
 
+def _statements(values: Sequence[str]) -> TableValuedAlias:
+    # One row per statement, numbered from 1: (value, position). Every statement is searched in
+    # one query (a LATERAL top-k per row), not one query per statement.
+    return (
+        func.unnest(bindparam("statements", list(values), type_=ARRAY(Text)))
+        .table_valued("value", with_ordinality="position")
+        .render_derived(name="statements")
+    )
+
+
+def _per_statement(count: int, rows: Iterable[tuple[int, UUID]]) -> list[list[UUID]]:
+    ranked: list[list[UUID]] = [[] for _ in range(count)]
+    for position, node_id in rows:
+        ranked[position - 1].append(node_id)
+    return ranked
+
+
 async def lexical(
     db: AsyncSession,
     bundle_id: UUID,
-    text: str,
+    texts: Sequence[str],
     language: PolicyLanguage,
     limit: int,
-) -> list[UUID]:
-    """Best full-text matches for one statement, best first (ties by node key).
+) -> list[list[UUID]]:
+    """Best full-text matches for each statement, best first (ties by node key), in one query.
 
     websearch_to_tsquery parses the text safely but ANDs every word, so a whole sentence would
     rarely match anything; its terms are ORed instead. ts_rank (not ts_rank_cd) orders them: with
     an OR query, cover density scores one repeated word as high as two different ones, while
     ts_rank ranks a node that shares more distinct terms higher.
     """
+    if not texts:
+        return []
     tenant_id = bound_tenant(db)
+    statements = _statements(texts)
     config = cast(literal(TEXT_SEARCH_CONFIG[language]), REGCONFIG)
-    terms = cast(func.websearch_to_tsquery(config, text), Text)
+    terms = cast(func.websearch_to_tsquery(config, statements.c.value), Text)
     # Negations ("-word") are dropped: ORed, `!word` would match every node without that word.
     ored = func.regexp_replace(func.replace(terms, " & ", " | "), "!", "", "g")
     query = func.to_tsquery(config, ored)
-    rows = await db.execute(
-        select(PolicyNode.id)
+    score = func.ts_rank(PolicyNode.search_vector, query)
+    best = (
+        select(PolicyNode.id, PolicyNode.node_key, score.label("score"))
         .where(
             PolicyNode.tenant_id == tenant_id,
             PolicyNode.policy_bundle_id == bundle_id,
@@ -59,27 +83,38 @@ async def lexical(
             PolicyNode.language == language,
             PolicyNode.search_vector.bool_op("@@")(query),
         )
-        .order_by(func.ts_rank(PolicyNode.search_vector, query).desc(), PolicyNode.node_key)
+        .order_by(score.desc(), PolicyNode.node_key)
         .limit(limit)
+        .lateral("best")
     )
-    return list(rows.scalars())
+    rows = await db.execute(
+        select(statements.c.position, best.c.id)
+        .select_from(statements.join(best, true()))
+        .order_by(statements.c.position, best.c.score.desc(), best.c.node_key)
+    )
+    return _per_statement(len(texts), rows)
 
 
 async def semantic(
     db: AsyncSession,
     bundle_id: UUID,
     model_id: str,
-    vector: Sequence[float],
+    vectors: Sequence[Sequence[float]],
     limit: int,
-) -> list[UUID]:
-    """Nearest nodes by cosine distance for one statement's vector, best first.
+) -> list[list[UUID]]:
+    """Nearest nodes by cosine distance for each statement's vector, best first, in one query.
 
     Exact search over one bundle's vectors (no ANN index: a bundle is a few hundred nodes, and a
     filtered approximate scan could return fewer than `limit` rows).
     """
+    if not vectors:
+        return []
     tenant_id = bound_tenant(db)
-    rows = await db.execute(
-        select(PolicyNode.id)
+    # pgvector's text form, "[x,y,...]"; cast back to vector per row.
+    statements = _statements(["[" + ",".join(map(str, vector)) + "]" for vector in vectors])
+    distance = PolicyNodeEmbedding.embedding.cosine_distance(cast(statements.c.value, Vector))
+    best = (
+        select(PolicyNode.id, PolicyNode.node_key, distance.label("distance"))
         .join(
             PolicyNodeEmbedding,
             and_(
@@ -95,10 +130,16 @@ async def semantic(
             PolicyNode.node_type.in_(SEARCHABLE_NODE_TYPES),
             PolicyNodeEmbedding.model_id == model_id,
         )
-        .order_by(PolicyNodeEmbedding.embedding.cosine_distance(list(vector)), PolicyNode.node_key)
+        .order_by(distance, PolicyNode.node_key)
         .limit(limit)
+        .lateral("best")
     )
-    return list(rows.scalars())
+    rows = await db.execute(
+        select(statements.c.position, best.c.id)
+        .select_from(statements.join(best, true()))
+        .order_by(statements.c.position, best.c.distance, best.c.node_key)
+    )
+    return _per_statement(len(vectors), rows)
 
 
 def fuse(

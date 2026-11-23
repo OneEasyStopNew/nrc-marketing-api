@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import event, insert, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -938,6 +938,61 @@ async def test_full_search_fuses_both_searches(connection: AsyncConnection, worl
     assert manifest.embedding_model_id == embedder.model_id
     assert _match(manifest, "CL-FDA-5").matches[0].found_by == ("lexical", "semantic")
     assert MissingContextCode.SEMANTIC_SEARCH_SKIPPED not in [code for code, _ in _codes(manifest)]
+
+
+async def test_all_statements_are_searched_in_one_query_per_search(
+    connection: AsyncConnection, world: World
+) -> None:
+    # Batched search gives each statement the same matches as searching it alone.
+    texts = ["Join us for free treatment", "better than other treatments", "Sunshine"]
+    embedder = _TestEmbedder()
+    bundle_id = await _indexed(connection, world, embedder)
+    searches: list[str] = []
+
+    def count(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        if "ts_rank" in statement or "<=>" in statement:
+            searches.append(statement)
+
+    event.listen(connection.sync_connection, "before_cursor_execute", count)
+    try:
+        together = (
+            await _build(
+                connection,
+                world.a.tenant_id,
+                bundle_id,
+                world.a.snapshot_id,
+                provider=_provider(embedder),
+                statements=texts,
+            )
+        ).manifest
+    finally:
+        event.remove(connection.sync_connection, "before_cursor_execute", count)
+
+    assert len(searches) == 2
+    for index, statement in enumerate(texts):
+        alone = (
+            await _build(
+                connection,
+                world.a.tenant_id,
+                bundle_id,
+                world.a.snapshot_id,
+                provider=_provider(embedder),
+                statements=[statement],
+            )
+        ).manifest
+        expected = {
+            (item.node_key, match.found_by, match.rank)
+            for item in alone.evidence
+            for match in item.matches
+        }
+        actual = {
+            (item.node_key, match.found_by, match.rank)
+            for item in together.evidence
+            for match in item.matches
+            if match.statement_index == index
+        }
+        assert actual == expected
+    assert any(item.matches for item in together.evidence)
 
 
 async def test_paraphrase_is_found_by_vectors_only(
