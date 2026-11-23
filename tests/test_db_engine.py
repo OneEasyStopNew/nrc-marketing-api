@@ -1,5 +1,6 @@
-# The app's engine never puts bound parameter values (post text, names) into database errors,
-# so logging an error with its traceback can't leak customer content.
+# The app's engine keeps bound parameter values (post text, names) out of SQLAlchemy's error
+# text, so logging a database error with its traceback doesn't repeat them. (asyncpg's own
+# message for a value it can't encode is outside this.)
 
 import pytest
 from sqlalchemy import text

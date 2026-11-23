@@ -67,7 +67,9 @@ class RetrievalSettings(EmbeddingSettings):
     # Limit on each database statement (Postgres statement_timeout) while building the policy
     # context inside a validation request; a run that hits it is stored as NEEDS_REVIEW (never
     # PASS) with a coverage gap. Per statement, so a build's worst case is a few times this.
-    policy_context_timeout_seconds: float = Field(default=5, gt=0, le=30)
+    # Must be below DB_TIMEOUT_SECONDS (checked in Settings).
+    # At least 1 ms: statement_timeout is in whole milliseconds and 0 would mean no limit.
+    policy_context_timeout_seconds: float = Field(default=5, ge=0.001, le=30)
 
 
 class Settings(RetrievalSettings):
@@ -185,6 +187,17 @@ class Settings(RetrievalSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @model_validator(mode="after")
+    def _context_timeout_below_db_timeout(self) -> Self:
+        # Postgres's statement_timeout must fire first: asyncpg's own timeout (DB_TIMEOUT_SECONDS)
+        # raises outside SQLAlchemy and would fail the request instead of recording NEEDS_REVIEW.
+        if self.policy_context_timeout_seconds >= self.db_timeout_seconds:
+            raise ValueError(
+                "POLICY_CONTEXT_TIMEOUT_SECONDS must be below DB_TIMEOUT_SECONDS "
+                f"({self.policy_context_timeout_seconds} >= {self.db_timeout_seconds})"
+            )
+        return self
 
     @model_validator(mode="after")
     def _shortcuts_only_outside_production(self) -> Self:

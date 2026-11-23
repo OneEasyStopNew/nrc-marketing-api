@@ -392,7 +392,7 @@ async def _gather_context(
             async with db.begin_nested():
                 await db.execute(
                     sql_text("SELECT set_config('statement_timeout', :ms, true)"),
-                    {"ms": str(round(deadline_seconds * 1000))},
+                    {"ms": str(max(1, round(deadline_seconds * 1000)))},
                 )
                 stored = await provider.build(db, request, actor=ctx.principal.sub)
                 await db.execute(sql_text("SET LOCAL statement_timeout TO DEFAULT"))
@@ -406,8 +406,8 @@ async def _gather_context(
             else:
                 reason = PolicyContextReason.RETRIEVAL_ERROR
                 # With the traceback, so the failing query can be found. The engine sets
-                # hide_parameters, so the error text carries the SQL but no parameter values
-                # (the post's text).
+                # hide_parameters, so SQLAlchemy's part of the error carries the SQL but no bound
+                # values; asyncpg's own message can still quote a value it failed to encode.
                 logger.exception(
                     "policy context failed tenant=%s bundle=%s sqlstate=%s",
                     ctx.tenant_id,

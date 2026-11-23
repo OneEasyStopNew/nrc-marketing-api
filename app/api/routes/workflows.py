@@ -53,8 +53,9 @@ _VALIDATIONS: dict[int | str, dict[str, Any]] = {
     "validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until "
     "SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run. Each "
     "brief or caption run also stores the policy context it was checked against (see "
-    "GET /validations/{validation_run_id}/context). If that context can't be gathered in time, "
-    "the run is stored as NEEDS_REVIEW (or FAIL), never PASS, with a coverage gap.",
+    "GET /validations/{validation_run_id}/context). If that context can't be gathered (each "
+    "of its database queries has a time limit), the run is stored as NEEDS_REVIEW (or FAIL), "
+    "never PASS, with a coverage gap.",
     responses=_VALIDATIONS,
 )
 async def create_validation(
