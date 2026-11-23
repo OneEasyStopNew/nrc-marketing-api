@@ -183,6 +183,9 @@ class Settings(RetrievalSettings):
     # Connect and read timeout per judge call, and the cap on the answer's tokens.
     validation_model_timeout_seconds: float = Field(default=30, gt=0, le=120)
     validation_model_max_output_tokens: int = Field(default=2000, ge=256, le=8000)
+    # Judge calls per validation when the answer fails verification (provider errors are retried
+    # by the job, not here).
+    validation_model_max_attempts: int = Field(default=2, ge=1, le=3)
 
     @field_validator("cognito_client_ids", "cors_origins", "higgsfield_output_hosts", mode="before")
     @classmethod
