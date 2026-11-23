@@ -11,7 +11,16 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.workers.connector import WorkerConfigError, worker_database_url
-from tests.conftest import APP_ROLE, WORKER_ROLE, AuthHeaders, World, _creative, _post_job, as_role
+from tests.conftest import (
+    APP_ROLE,
+    WORKER_ROLE,
+    AuthHeaders,
+    Sessions,
+    World,
+    _creative,
+    _post_job,
+    as_role,
+)
 
 LEASE = "lease_outbox_events(text, integer, integer, text[])"
 ROLES = (APP_ROLE, WORKER_ROLE)
@@ -37,8 +46,10 @@ async def _bind(connection: AsyncConnection, tenant_id: UUID | None) -> None:
 
 
 @pytest.fixture
-async def job_in_a(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> None:
-    creative_id = await _creative(client, auth, world.a)
+async def job_in_a(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> None:
+    creative_id = await _creative(client, auth, world.a, sessions)
     assert (await _post_job(client, auth, world, creative_id)).status_code == 202
 
 
@@ -53,7 +64,10 @@ async def test_no_role_reads_another_tenants_outbox_rows(
         await _bind(connection, tenant)
         visible[name] = int(
             await connection.scalar(
-                text("SELECT count(*) FROM outbox_events WHERE tenant_id = :a"),
+                text(
+                    "SELECT count(*) FROM outbox_events"
+                    " WHERE tenant_id = :a AND event_type = 'job.run'"
+                ),
                 {"a": world.a.tenant_id},
             )
             or 0
@@ -247,10 +261,14 @@ async def test_every_table_the_worker_touches_for_a_check_forces_tenant_isolatio
 
 @pytest.fixture
 async def run_in_a(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    sessions: Sessions,
 ) -> dict[str, Any]:
     # _creative also stores the brief validation run of tenant A, which the tests copy.
-    await _creative(client, auth, world.a)
+    await _creative(client, auth, world.a, sessions)
     row = (
         (
             await connection.execute(

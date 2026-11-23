@@ -45,7 +45,7 @@ from app.api.deps import get_db, get_signing_keys
 from app.core.config import get_settings
 from app.core.errors import AuthenticationError
 from app.db.base import Base
-from app.db.session import TenantSession, bind_tenant
+from app.db.session import TenantSession, bind_tenant, create_engine, create_sessionmaker
 from app.main import create_app
 from app.models import (
     Asset,
@@ -69,6 +69,8 @@ from app.services.providers.base import (
     SubmitResult,
 )
 from app.services.providers.simulator import SimulatedImageProvider
+from app.services.validations import VALIDATION_RUN_EVENT
+from app.workers.connector import EVENT_HANDLERS, run_once
 from scripts.import_policy_graph import PolicyGraphImport, import_policy_graph, load_synthetic_graph
 from scripts.seed_demo import DEMO_POLICY_NAME, SYNTHETIC_FACTS, demo_policy_rules
 
@@ -402,6 +404,28 @@ def sessions(connection: AsyncConnection) -> Sessions:
 
 
 @pytest.fixture
+async def committed_worker_sessions(test_env: IntegrationEnv) -> AsyncIterator[Sessions]:
+    # The worker's sessions on committed data (for tests that use committed_tenant).
+    engine = create_engine(get_settings(), test_env.test_worker_database_url)
+    try:
+        yield create_sessionmaker(engine)
+    finally:
+        await engine.dispose()
+
+
+async def store_validations(sessions: Sessions) -> int:
+    # Validation is a worker job: one worker pass over the validation events stores the queued
+    # runs. Generation events are left alone. Returns how many events ran.
+    return await run_once(
+        sessions,
+        {},
+        None,
+        get_settings(),
+        event_handlers={VALIDATION_RUN_EVENT: EVENT_HANDLERS[VALIDATION_RUN_EVENT]},
+    )
+
+
+@pytest.fixture
 def seed_graph() -> bool:
     # Whether tenant A's bundle gets the synthetic graph. Modules that write their own graph rows
     # into that bundle override this with False.
@@ -548,10 +572,12 @@ async def _creative(
     client: httpx.AsyncClient,
     auth: AuthHeaders,
     tenant: SeededTenant,
+    worker: Sessions,
     *,
     prompt: str = "Invite adults with high blood pressure to learn about the study.",
 ) -> str:
-    # Creates a draft and validates its brief: generation needs a stored run (NRC-7 gate).
+    # Creates a draft and validates its brief, running the validation job on the worker's
+    # sessions: generation needs a stored run (NRC-7 gate).
     response = await client.post(
         "/v1/marketing/creatives",
         headers=auth("creator-a", tenant.tenant_id, **{"Idempotency-Key": uuid4().hex}),
@@ -571,6 +597,7 @@ async def _creative(
         json={"creative_id": creative_id, "creative_version": 1, "input_kind": "brief"},
     )
     assert validation.status_code == 202, validation.text
+    await store_validations(worker)
     return creative_id
 
 

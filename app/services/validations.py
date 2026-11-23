@@ -6,13 +6,12 @@ selected: code checks first (phrases, exact wording, study facts), then the mode
 semantic rules the code left open. A run with no context falls back to the legacy JSONB rules
 and can't pass.
 
-Where the run happens depends on VALIDATION_MODEL_MODE:
-- off: no external call is needed, so the run finishes in the request and POST returns
-  SUCCEEDED (semantic rules stay UNABLE_TO_ASSESS, so the run needs review).
-- simulator or live: POST queues a job (202 QUEUED); the worker builds the context, runs the
-  checks and the model (app.services.validation_jobs) and inserts the run under the job's id.
-  Until then GET answers from the job. A finished PASS or FAIL with an equal reuse key (same
-  content, configuration and dependency versions) is copied instead of judged again.
+Every brief or caption run is a worker job (decided 23 Nov): POST queues it (202 QUEUED) and the
+worker builds the context, runs the checks and, when VALIDATION_MODEL_MODE is on, the model
+(app.services.validation_jobs), then inserts the run under the job's id. Until then GET answers
+from the job. With the model off, semantic rules stay UNABLE_TO_ASSESS, so the run needs review.
+A finished PASS or FAIL with an equal reuse key (same content, configuration and dependency
+versions) is copied instead of checked again.
 
 Runs are insert-only: a run is written once, finished. Image validation (D4) is not built here;
 the routes answer it from the demo stubs or with 501.
@@ -68,7 +67,6 @@ from app.schemas.validations import (
 )
 from app.services import idempotency, judging, policies, policy_evidence, rules
 from app.services.creatives import visible_to
-from app.services.jobs import RUN_EVENT
 from app.services.policy_context import (
     ContextRequest,
     ContextScope,
@@ -93,6 +91,8 @@ JOB_KIND_BY_INPUT: Final = MappingProxyType(
     {ValidationInputKind.BRIEF: "brief_validation", ValidationInputKind.TEXT: "text_validation"}
 )
 INPUT_BY_JOB_KIND: Final = MappingProxyType({v: k for k, v in JOB_KIND_BY_INPUT.items()})
+# Its own outbox event type, so validation never queues behind (or runs with) paid generation.
+VALIDATION_RUN_EVENT: Final = "validation.run"
 # Only a definite result is reused: NEEDS_REVIEW may come from a failed model call.
 _REUSABLE: Final = (Outcome.PASS, Outcome.FAIL)
 
@@ -144,12 +144,10 @@ async def create_validation(
     ctx: TenantContext,
     body: ValidationCreate,
     idempotency_key: str,
-    context_provider: PolicyContextProvider,
-    context_timeout: float,
     settings: Settings,
 ) -> tuple[ValidationAccepted, bool]:
-    """Check a brief or caption now, or queue it for the worker. Returns it and whether this was
-    a replay.
+    """Queue a brief or caption for the worker, or reuse an equal finished run. Returns it and
+    whether this was a replay.
 
     Raises:
         FeatureNotAvailableError: image input (D4 is not built).
@@ -175,19 +173,13 @@ async def create_validation(
     text = target.text(body.input_kind)
     now = datetime.now(tz=UTC)
     key = reuse_key(body.input_kind, text, target, policy, settings, now.date())
-    if settings.validation_model_mode == "off":
-        run = await _check_now(
-            db, ctx, body, text, target, policy, context_provider, context_timeout, now
-        )
-        run.reuse_key = key
-    else:
-        reused = await _reusable(db, ctx.tenant_id, key)
-        if reused is None:
-            run_id = await _queue(db, ctx, body, target, policy, settings, now)
-            await idempotency.complete(db, ctx.tenant_id, VALIDATE_ROUTE, idempotency_key, run_id)
-            await db.commit()
-            return _accepted(run_id, ExecutionState.QUEUED), False
-        run = _copy(reused, ctx, body)
+    reused = await _reusable(db, ctx.tenant_id, key)
+    if reused is None:
+        run_id = await _queue(db, ctx, body, target, policy, settings, now)
+        await idempotency.complete(db, ctx.tenant_id, VALIDATE_ROUTE, idempotency_key, run_id)
+        await db.commit()
+        return _accepted(run_id, ExecutionState.QUEUED), False
+    run = _copy(reused, ctx, body)
     db.add(run)
     await idempotency.complete(db, ctx.tenant_id, VALIDATE_ROUTE, idempotency_key, run.id)
     await db.commit()
@@ -597,56 +589,6 @@ def input_hash(kind: ValidationInputKind, text: str) -> str:
     return hashlib.sha256(f"{kind.value}:{text}".encode()).hexdigest()
 
 
-async def _check_now(
-    db: AsyncSession,
-    ctx: TenantContext,
-    body: ValidationCreate,
-    text: str,
-    target: Target,
-    policy: PolicyBundleRead,
-    provider: PolicyContextProvider,
-    context_timeout: float,
-    now: datetime,
-) -> ValidationRun:
-    # The run without a model: code checks only, so semantic rules stay UNABLE_TO_ASSESS.
-    stored, context_gaps = await gather_context(
-        db,
-        ctx.tenant_id,
-        ctx.principal.sub,
-        provider,
-        context_timeout,
-        body.input_kind,
-        text,
-        target,
-        policy,
-        now,
-    )
-    if stored is None:
-        # Without its policy context a run can't be shown to pass (17 Nov decision superseded on
-        # 20 Nov, Dinesh's review): PASS becomes NEEDS_REVIEW; FAIL is already stricter.
-        evaluation = without_pass(rules.evaluate_text(body.input_kind, text, policy, target.facts))
-    else:
-        selected = await graph_rules(db, ctx.tenant_id, stored.manifest, policy)
-        evaluation = rules.evaluate_graph_rules(text, selected, target.facts)
-    return new_run(
-        run_id=uuid4(),
-        tenant_id=ctx.tenant_id,
-        creative_id=body.creative_id,
-        creative_version=body.creative_version,
-        kind=body.input_kind,
-        text=text,
-        target=target,
-        policy=policy,
-        evaluation=evaluation,
-        evaluated_at=now,
-        context=stored,
-        context_gaps=context_gaps,
-        created_by=ctx.principal.sub,
-        judged=Judged(),
-        reuse_key=None,
-    )
-
-
 async def _queue(
     db: AsyncSession,
     ctx: TenantContext,
@@ -683,7 +625,7 @@ async def _queue(
         OutboxEvent(
             tenant_id=ctx.tenant_id,
             job_id=run_id,
-            event_type=RUN_EVENT,
+            event_type=VALIDATION_RUN_EVENT,
             payload={"job_id": str(run_id)},
             attempts=0,
         )

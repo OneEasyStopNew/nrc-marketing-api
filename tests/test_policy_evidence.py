@@ -19,11 +19,13 @@ from scripts.import_policy_graph import load_synthetic_graph
 from scripts.seed_demo import demo_policy_rules
 from tests.conftest import (
     AuthHeaders,
+    Sessions,
     World,
     add_policy_bundle,
     as_tenant_owner,
     count_rows,
     owner_session,
+    store_validations,
 )
 
 API = "/v1/marketing"
@@ -80,7 +82,10 @@ async def _validate(
     creative: dict[str, Any],
     kind: str = "brief",
     key: str | None = None,
+    *,
+    worker: Sessions,
 ) -> str:
+    # One worker pass then stores the queued run (validation is a job).
     response = await client.post(
         f"{API}/validations",
         headers=auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": key or uuid4().hex}),
@@ -91,6 +96,7 @@ async def _validate(
         },
     )
     assert response.status_code == 202, response.text
+    await store_validations(worker)
     run_id: str = response.json()["validation_run_id"]
     return run_id
 
@@ -118,12 +124,16 @@ async def _run(connection: AsyncConnection, run_id: str) -> Row[UUID, UUID | Non
 
 
 async def test_brief_run_stores_lexical_context(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
 
-    run_id = await _validate(client, auth, world, creative)
+    run_id = await _validate(client, auth, world, creative, worker=sessions)
 
     response = await _get(client, auth, f"/validations/{run_id}/context", world.a.tenant_id)
     assert response.status_code == 200, response.text
@@ -145,11 +155,15 @@ async def test_brief_run_stores_lexical_context(
 
 
 async def test_context_shows_no_internal_ids_or_statement_text(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
-    run_id = await _validate(client, auth, world, creative)
+    run_id = await _validate(client, auth, world, creative, worker=sessions)
 
     body = (await _get(client, auth, f"/validations/{run_id}/context", world.a.tenant_id)).text
 
@@ -165,11 +179,15 @@ async def test_context_shows_no_internal_ids_or_statement_text(
 
 
 async def test_context_finds_evidence_for_the_text(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id, RISKY_PROMPT)
-    run_id = await _validate(client, auth, world, creative)
+    run_id = await _validate(client, auth, world, creative, worker=sessions)
 
     context = (await _get(client, auth, f"/validations/{run_id}/context", world.a.tenant_id)).json()
 
@@ -181,12 +199,16 @@ async def test_context_finds_evidence_for_the_text(
 
 
 async def test_caption_run_uses_the_caption_scope(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
 
-    run_id = await _validate(client, auth, world, creative, kind="text")
+    run_id = await _validate(client, auth, world, creative, kind="text", worker=sessions)
 
     context = (await _get(client, auth, f"/validations/{run_id}/context", world.a.tenant_id)).json()
     assert context["input_kind"] == "text"
@@ -197,12 +219,16 @@ async def test_caption_run_uses_the_caption_scope(
 
 
 async def test_empty_caption_stores_graph_only_context(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id, caption=None)
 
-    run_id = await _validate(client, auth, world, creative, kind="text")
+    run_id = await _validate(client, auth, world, creative, kind="text", worker=sessions)
 
     context = (await _get(client, auth, f"/validations/{run_id}/context", world.a.tenant_id)).json()
     assert context["retrieval_mode"] == "graph_only"
@@ -210,14 +236,18 @@ async def test_empty_caption_stores_graph_only_context(
 
 
 async def test_context_does_not_change_the_outcome(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     # The same risky brief, before and after the graph exists: same outcome, findings and rules.
     before = await _creative(client, auth, world.a.tenant_id, world.a.study_id, RISKY_PROMPT)
-    before_id = await _validate(client, auth, world, before)
+    before_id = await _validate(client, auth, world, before, worker=sessions)
     await _with_graph(connection, world)
     after = await _creative(client, auth, world.a.tenant_id, world.a.study_id, RISKY_PROMPT)
-    after_id = await _validate(client, auth, world, after)
+    after_id = await _validate(client, auth, world, after, worker=sessions)
 
     first = (await _get(client, auth, f"/validations/{before_id}", world.a.tenant_id)).json()
     second = (await _get(client, auth, f"/validations/{after_id}", world.a.tenant_id)).json()
@@ -228,12 +258,16 @@ async def test_context_does_not_change_the_outcome(
 
 
 async def test_bundle_without_graph_stores_run_with_gap(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     await _without_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
 
-    run_id = await _validate(client, auth, world, creative)
+    run_id = await _validate(client, auth, world, creative, worker=sessions)
 
     assert (await _run(connection, run_id)).context_manifest_id is None
     run = (await _get(client, auth, f"/validations/{run_id}", world.a.tenant_id)).json()
@@ -247,14 +281,18 @@ async def test_bundle_without_graph_stores_run_with_gap(
 
 
 async def test_replay_returns_the_same_run_and_manifest(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
     key = uuid4().hex
 
-    first = await _validate(client, auth, world, creative, key=key)
-    replay = await _validate(client, auth, world, creative, key=key)
+    first = await _validate(client, auth, world, creative, key=key, worker=sessions)
+    replay = await _validate(client, auth, world, creative, key=key, worker=sessions)
 
     assert replay == first
     async with as_tenant_owner(connection, world.a.tenant_id):
@@ -263,14 +301,18 @@ async def test_replay_returns_the_same_run_and_manifest(
 
 
 async def test_identical_runs_share_one_manifest(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     # A new key is a new run, but the same inputs reuse the stored manifest.
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
 
-    first = await _run(connection, await _validate(client, auth, world, creative))
-    second = await _run(connection, await _validate(client, auth, world, creative))
+    first = await _run(connection, await _validate(client, auth, world, creative, worker=sessions))
+    second = await _run(connection, await _validate(client, auth, world, creative, worker=sessions))
 
     assert first.id != second.id
     assert first.context_manifest_id is not None
@@ -280,12 +322,16 @@ async def test_identical_runs_share_one_manifest(
 
 
 async def test_context_shows_the_hash_the_run_recorded(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     # Anyone holding the run can check the manifest JSON it used has not changed since.
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
-    run_id = await _validate(client, auth, world, creative)
+    run_id = await _validate(client, auth, world, creative, worker=sessions)
 
     context = (await _get(client, auth, f"/validations/{run_id}/context", world.a.tenant_id)).json()
 
@@ -301,11 +347,15 @@ async def test_context_shows_the_hash_the_run_recorded(
 
 
 async def test_context_of_another_tenants_run_is_not_found(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
-    run_id = await _validate(client, auth, world, creative)
+    run_id = await _validate(client, auth, world, creative, worker=sessions)
 
     response = await _get(
         client, auth, f"/validations/{run_id}/context", world.b.tenant_id, sub="creator-b"
@@ -325,11 +375,15 @@ async def test_context_of_unknown_run_is_not_found(
 
 
 async def test_context_needs_membership(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
-    run_id = await _validate(client, auth, world, creative)
+    run_id = await _validate(client, auth, world, creative, worker=sessions)
 
     response = await _get(
         client, auth, f"/validations/{run_id}/context", world.a.tenant_id, sub="creator-b"
@@ -339,11 +393,15 @@ async def test_context_needs_membership(
 
 
 async def test_reviewer_can_read_context(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     await _with_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
-    run_id = await _validate(client, auth, world, creative)
+    run_id = await _validate(client, auth, world, creative, worker=sessions)
 
     response = await _get(
         client, auth, f"/validations/{run_id}/context", world.a.tenant_id, sub="reviewer-a"
@@ -449,7 +507,11 @@ async def test_rules_of_a_retired_bundle_are_shown(
 
 
 async def test_statement_too_long_for_search_stores_run_with_gap(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> None:
     # A stored text over the statement limit (e.g. grown by NFC normalisation) gets no context,
     # but the validation still runs and is stored.
@@ -461,7 +523,7 @@ async def test_statement_too_long_for_search_stores_run_with_gap(
             {"p": "a" * (MAX_STATEMENT_CHARS + 1), "c": UUID(creative["id"])},
         )
 
-    run_id = await _validate(client, auth, world, creative)
+    run_id = await _validate(client, auth, world, creative, worker=sessions)
 
     assert (await _run(connection, run_id)).context_manifest_id is None
     run = (await _get(client, auth, f"/validations/{run_id}", world.a.tenant_id)).json()

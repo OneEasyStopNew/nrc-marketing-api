@@ -88,7 +88,7 @@ from app.services.providers.text_judge import (
     text_judge_from_settings,
 )
 from app.services.storage import ObjectStorage
-from app.services.validations import INPUT_BY_JOB_KIND
+from app.services.validations import INPUT_BY_JOB_KIND, VALIDATION_RUN_EVENT
 
 logger = logging.getLogger(__name__)
 
@@ -613,18 +613,19 @@ class ValidationJobHandler:
         return self._built[1], self._built[2]
 
 
-_VALIDATION_HANDLER: Final = ValidationJobHandler()
-# Keyed by jobs.kind: a JobKind value, or one of the internal validation kinds.
+# Keyed by jobs.kind. Each event type has its own map, so a "job.run" event can't run a
+# validation and a "validation.run" event can't run (or pay for) a generation.
 JOB_HANDLERS: Final[Mapping[str, JobHandler]] = MappingProxyType(
-    {
-        JobKind.IMAGE_GENERATION: ImageGenerationHandler(),
-        **dict.fromkeys(INPUT_BY_JOB_KIND, _VALIDATION_HANDLER),
-    }
+    {JobKind.IMAGE_GENERATION: ImageGenerationHandler()}
+)
+VALIDATION_JOB_HANDLERS: Final[Mapping[str, JobHandler]] = MappingProxyType(
+    dict.fromkeys(INPUT_BY_JOB_KIND, ValidationJobHandler())
 )
 
 
 class JobRunHandler:
-    # "job.run": runs the next step of the event's job with the handler for its kind.
+    # "job.run" or "validation.run": runs the next step of the event's job with the handler for
+    # its kind.
 
     def __init__(self, job_handlers: Mapping[str, JobHandler]) -> None:
         self._job_handlers = job_handlers
@@ -652,7 +653,10 @@ _GIVE_UP_MESSAGES: Final = MappingProxyType(
 # The one subscription registry, keyed by outbox event type. The worker leases exactly these
 # types; others (asset.generated until NRC-7 registers its handler) wait untouched.
 EVENT_HANDLERS: Final[Mapping[str, EventHandler]] = MappingProxyType(
-    {RUN_EVENT: JobRunHandler(JOB_HANDLERS)}
+    {
+        RUN_EVENT: JobRunHandler(JOB_HANDLERS),
+        VALIDATION_RUN_EVENT: JobRunHandler(VALIDATION_JOB_HANDLERS),
+    }
 )
 
 

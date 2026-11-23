@@ -1,6 +1,7 @@
 # One runner over the labelled SYNTHETIC NRC-7 cases in tests/data/nrc7_labelled_cases.json
 # (developer-labelled, not the expert-labelled set the ticket requires). Each case runs through the
-# real API: model off answers on POST; a SIMULATED judge scenario is queued and run by the worker.
+# real API and the worker: with the model off the worker runs the code checks only; with a
+# SIMULATED judge scenario it also asks the simulated model.
 
 import json
 from collections.abc import Iterator
@@ -13,12 +14,11 @@ import pytest
 from sqlalchemy import text
 
 from app.core.config import get_settings
-from app.services.jobs import RUN_EVENT
 from app.services.providers.text_judge import SimulatedJudgeScenario, SimulatedTextJudge
-from app.services.validations import JOB_KIND_BY_INPUT
-from app.workers.connector import JOB_HANDLERS, JobRunHandler, ValidationJobHandler, run_once
+from app.services.validations import JOB_KIND_BY_INPUT, VALIDATION_RUN_EVENT
+from app.workers.connector import JobRunHandler, ValidationJobHandler, run_once
 from scripts.import_policy_graph import PolicyGraphImport, load_synthetic_graph
-from tests.conftest import ROOT, AuthHeaders, Sessions, World
+from tests.conftest import ROOT, AuthHeaders, Sessions, World, store_validations
 
 API = "/v1/marketing"
 MODEL_OFF = "off"
@@ -119,10 +119,10 @@ async def test_labelled_case(
     assert accepted.status_code == 202, accepted.text
     run_id = accepted.json()["validation_run_id"]
 
+    assert accepted.json()["state"] == "QUEUED"
     if case.model == MODEL_OFF:
-        assert accepted.json()["state"] == "SUCCEEDED"
+        assert await store_validations(sessions) == 1
     else:
-        assert accepted.json()["state"] == "QUEUED"
         await _run_worker(sessions, case.model, run_id)
 
     response = await client.get(f"{API}/validations/{run_id}", headers=headers)
@@ -195,7 +195,7 @@ async def _run_worker(sessions: Sessions, scenario: str, run_id: str) -> None:
     # gets a second pass after its backoff is made due, with the cap lowered to two attempts.
     judge = SimulatedTextJudge(SimulatedJudgeScenario(scenario))
     handler = ValidationJobHandler(judge=judge)
-    handlers = {**JOB_HANDLERS, **dict.fromkeys(JOB_KIND_BY_INPUT.values(), handler)}
+    handlers = dict.fromkeys(JOB_KIND_BY_INPUT.values(), handler)
     passes = THROTTLE_PASSES if scenario == SimulatedJudgeScenario.THROTTLED else 1
     if passes > 1:
         await _sql(sessions, "UPDATE jobs SET max_attempts = :n WHERE id = :id", run_id)
@@ -212,7 +212,7 @@ async def _run_worker(sessions: Sessions, scenario: str, run_id: str) -> None:
             {},
             None,
             get_settings(),
-            event_handlers={RUN_EVENT: JobRunHandler(handlers)},
+            event_handlers={VALIDATION_RUN_EVENT: JobRunHandler(handlers)},
         )
         assert done == 1
 

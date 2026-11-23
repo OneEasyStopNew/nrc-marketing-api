@@ -32,6 +32,7 @@ from tests.conftest import (
     FakeSink,
     IntegrationEnv,
     SeededTenant,
+    Sessions,
     StaticKeys,
     _creative,
 )
@@ -92,13 +93,14 @@ async def _scalar(test_env: IntegrationEnv, sql: str, tenant: SeededTenant) -> o
 
 
 async def test_two_workers_on_one_event_submit_once(
+    committed_worker_sessions: Sessions,
     http: httpx.AsyncClient,
     committed_tenant: SeededTenant,
     signing_key: RSAPrivateKey,
     test_env: IntegrationEnv,
 ) -> None:
     auth = AuthHeaders(signing_key)
-    creative_id = await _creative(http, auth, committed_tenant)
+    creative_id = await _creative(http, auth, committed_tenant, committed_worker_sessions)
     assert (await _post(http, auth, committed_tenant, creative_id, "race-w-1")).status_code == 202
     settings = get_settings()
     provider, sink = SlowProvider(), FakeSink()
@@ -131,6 +133,7 @@ async def test_two_workers_on_one_event_submit_once(
 
 
 async def test_parallel_admission_respects_the_active_job_limit(
+    committed_worker_sessions: Sessions,
     http: httpx.AsyncClient,
     committed_tenant: SeededTenant,
     signing_key: RSAPrivateKey,
@@ -138,7 +141,7 @@ async def test_parallel_admission_respects_the_active_job_limit(
 ) -> None:
     auth = AuthHeaders(signing_key)
     limit = get_settings().generation_max_active_jobs_per_tenant
-    creative_id = await _creative(http, auth, committed_tenant)
+    creative_id = await _creative(http, auth, committed_tenant, committed_worker_sessions)
     for n in range(limit - 1):
         response = await _post(http, auth, committed_tenant, creative_id, f"fill-{n:04d}")
         assert response.status_code == 202
@@ -149,7 +152,9 @@ async def test_parallel_admission_respects_the_active_job_limit(
 
     assert sorted(r.status_code for r in last_slot) == [202, 429]
     count = await _scalar(
-        test_env, "SELECT count(*) FROM jobs WHERE tenant_id = :t", committed_tenant
+        test_env,
+        "SELECT count(*) FROM jobs WHERE tenant_id = :t AND kind = 'image_generation'",
+        committed_tenant,
     )
     assert count == limit
 
@@ -189,13 +194,14 @@ async def empty_simulator_spend(test_env: IntegrationEnv) -> AsyncIterator[None]
 
 @pytest.mark.usefixtures("empty_simulator_spend")
 async def test_two_workers_cannot_both_take_the_last_budget_slot(
+    committed_worker_sessions: Sessions,
     http: httpx.AsyncClient,
     committed_tenant: SeededTenant,
     signing_key: RSAPrivateKey,
     test_env: IntegrationEnv,
 ) -> None:
     auth = AuthHeaders(signing_key)
-    creative_id = await _creative(http, auth, committed_tenant)
+    creative_id = await _creative(http, auth, committed_tenant, committed_worker_sessions)
     for key in ("budget-1", "budget-2"):
         assert (await _post(http, auth, committed_tenant, creative_id, key)).status_code == 202
     # Room for one $0.03 image, not two.
@@ -230,7 +236,7 @@ async def test_two_workers_cannot_both_take_the_last_budget_slot(
             await conn.execute(
                 text(
                     "SELECT state, failure_code, provider_spend_state FROM jobs"
-                    " WHERE tenant_id = :t ORDER BY state"
+                    " WHERE tenant_id = :t AND kind = 'image_generation' ORDER BY state"
                 ),
                 {"t": committed_tenant.tenant_id},
             )
@@ -289,13 +295,14 @@ async def _owner_execute(
 
 
 async def test_heartbeat_renews_the_lease_so_no_other_worker_takes_the_event(
+    committed_worker_sessions: Sessions,
     http: httpx.AsyncClient,
     committed_tenant: SeededTenant,
     signing_key: RSAPrivateKey,
     test_env: IntegrationEnv,
 ) -> None:
     auth = AuthHeaders(signing_key)
-    creative_id = await _creative(http, auth, committed_tenant)
+    creative_id = await _creative(http, auth, committed_tenant, committed_worker_sessions)
     assert (
         await _post(http, auth, committed_tenant, creative_id, "heartbeat-0001")
     ).status_code == 202
@@ -305,7 +312,7 @@ async def test_heartbeat_renews_the_lease_so_no_other_worker_takes_the_event(
         create_engine(settings, test_env.test_worker_database_url),
         create_engine(settings, test_env.test_worker_database_url),
     ]
-    lease = "SELECT leased_until FROM outbox_events WHERE tenant_id = :t"
+    lease = "SELECT leased_until FROM outbox_events WHERE tenant_id = :t AND event_type = 'job.run'"
     try:
         worker_a = asyncio.create_task(
             run_once(
@@ -373,6 +380,7 @@ class CommitGate:
 
 
 async def test_expired_lease_is_abandoned_and_the_job_finished_once(
+    committed_worker_sessions: Sessions,
     http: httpx.AsyncClient,
     committed_tenant: SeededTenant,
     signing_key: RSAPrivateKey,
@@ -380,7 +388,7 @@ async def test_expired_lease_is_abandoned_and_the_job_finished_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     auth = AuthHeaders(signing_key)
-    creative_id = await _creative(http, auth, committed_tenant)
+    creative_id = await _creative(http, auth, committed_tenant, committed_worker_sessions)
     assert (
         await _post(http, auth, committed_tenant, creative_id, "lost-lease-0001")
     ).status_code == 202

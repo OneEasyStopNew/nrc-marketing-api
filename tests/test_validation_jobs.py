@@ -21,8 +21,9 @@ from app.services.providers.text_judge import (
     SimulatedJudgeScenario,
     SimulatedTextJudge,
 )
-from app.services.validations import JOB_KIND_BY_INPUT
+from app.services.validations import JOB_KIND_BY_INPUT, VALIDATION_RUN_EVENT
 from app.workers.connector import (
+    EVENT_HANDLERS,
     JOB_HANDLERS,
     JobRunHandler,
     ValidationJobHandler,
@@ -59,13 +60,13 @@ async def _work(
 ) -> int:
     # One worker pass with the SIMULATED judge in the given scenario.
     handler = ValidationJobHandler(judge=SimulatedTextJudge(scenario))
-    handlers = {**JOB_HANDLERS, **dict.fromkeys(JOB_KIND_BY_INPUT.values(), handler)}
+    handlers = dict.fromkeys(JOB_KIND_BY_INPUT.values(), handler)
     return await run_once(
         sessions,
         {},
         None,
         get_settings().model_copy(update=settings),
-        event_handlers={RUN_EVENT: JobRunHandler(handlers)},
+        event_handlers={VALIDATION_RUN_EVENT: JobRunHandler(handlers)},
     )
 
 
@@ -85,6 +86,21 @@ async def _read(client: httpx.AsyncClient, auth: AuthHeaders, world: World, run_
     response = await _run(client, auth, world.a.tenant_id, run_id)
     assert response.status_code == 200, response.text
     return response.json()
+
+
+async def test_a_generation_worker_pass_never_takes_a_validation(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> None:
+    # Own event type: validation never queues behind, or runs as, a paid generation.
+    _, run_id = await _queued(client, auth, world)
+
+    ran = await run_once(
+        sessions, {}, None, get_settings(), event_handlers={RUN_EVENT: JobRunHandler(JOB_HANDLERS)}
+    )
+    job = await _job(sessions, run_id)
+
+    assert (ran, job.state) == (0, ExecutionState.QUEUED)
+    assert set(EVENT_HANDLERS) >= {RUN_EVENT, VALIDATION_RUN_EVENT}
 
 
 async def test_queued_run_is_readable_then_stored_by_the_worker(
