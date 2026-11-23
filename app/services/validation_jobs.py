@@ -22,16 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.errors import AppError, ValidationJobError
 from app.models import Creative, Job
-from app.models.enums import ExecutionState, JobStage
+from app.models.enums import ExecutionState, JobStage, ModelCheckFailure
 from app.services import judging, policies, rules, validations
 from app.services.jobs import transition
 from app.services.policy_context import PolicyContextProvider, StoredManifest
 from app.services.providers.base import ProviderError
 from app.services.providers.text_judge import TextJudge
 
-# Failure codes stored in the rules' reason when the model check couldn't finish.
-DEADLINE_PASSED: Final = "DEADLINE_PASSED"
-ATTEMPTS_USED: Final = "MODEL_UNAVAILABLE"
 _ACTIVE: Final = frozenset({ExecutionState.QUEUED, ExecutionState.RUNNING})
 
 logger = logging.getLogger(__name__)
@@ -146,7 +143,7 @@ async def _review(
         model_id=judge.model_id, prompt_version=judging.PROMPT_TEMPLATE_VERSION
     )
     if now >= job.deadline_at:
-        return _failed(judge, DEADLINE_PASSED), judged
+        return _failed(judge, ModelCheckFailure.DEADLINE_PASSED), judged
     context = judging.judge_context(
         validations.judged_rules(open_rules), stored.manifest.evidence, stored.manifest.exceptions
     )
@@ -178,12 +175,16 @@ async def _review(
             )
             return max(error.retry_after_seconds or 0.0, retry_delay(attempts))
         logger.warning("judge failed job=%s code=%s", job.id, error.code)
-        failure = ATTEMPTS_USED if error.retryable else error.code
+        failure = (
+            ModelCheckFailure.MODEL_UNAVAILABLE
+            if error.retryable
+            else ModelCheckFailure.MODEL_REJECTED
+        )
         return _failed(judge, failure), judged
     answers = judgement.answers or {}
     review = rules.ModelReview(
         answers=answers,
-        failure=None if judgement.failure is None else judgement.failure.value,
+        failure=judgement.failure,
         is_simulated=judge.is_simulated,
     )
     return review, validations.Judged(
@@ -193,5 +194,5 @@ async def _review(
     )
 
 
-def _failed(judge: TextJudge, failure: str) -> rules.ModelReview:
+def _failed(judge: TextJudge, failure: ModelCheckFailure) -> rules.ModelReview:
     return rules.ModelReview(answers={}, failure=failure, is_simulated=judge.is_simulated)

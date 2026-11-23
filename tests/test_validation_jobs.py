@@ -13,11 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.core.config import get_settings
 from app.core.errors import ValidationJobError
 from app.models import Job, ValidationRun
-from app.models.enums import ExecutionState
-from app.services import rules, validation_jobs
+from app.models.enums import ExecutionState, ModelCheckFailure
+from app.services import rules
 from app.services.jobs import RUN_EVENT
+from app.services.providers.base import ProviderRejectedError
 from app.services.providers.text_judge import (
     SIMULATED_JUDGE_MODEL_ID,
+    JudgeReply,
+    JudgeRequest,
     SimulatedJudgeScenario,
     SimulatedTextJudge,
 )
@@ -213,7 +216,7 @@ async def test_throttling_retries_then_needs_review_and_never_opens_generation(
 
     assert (done["state"], done["outcome"]) == ("SUCCEEDED", "NEEDS_REVIEW")
     reasons = {r["reason"] for r in done["rule_results"] if r["result"] == "UNABLE_TO_ASSESS"}
-    assert reasons == {rules.MODEL_CHECK_FAILED.format(failure=validation_jobs.ATTEMPTS_USED)}
+    assert reasons == {rules.MODEL_CHECK_FAILED.format(failure=ModelCheckFailure.MODEL_UNAVAILABLE)}
     eligibility = await client.get(
         f"/v1/marketing/creatives/{creative['id']}/generation-eligibility",
         headers=auth("creator-a", world.a.tenant_id),
@@ -236,7 +239,41 @@ async def test_past_the_deadline_the_model_is_skipped_and_the_run_needs_review(
     done = await _read(client, auth, world, run_id)
 
     assert done["outcome"] == "NEEDS_REVIEW"
-    assert validation_jobs.DEADLINE_PASSED in done["rule_results"][0]["reason"]
+    assert done["rule_results"][0]["reason"] == rules.MODEL_CHECK_FAILED.format(
+        failure=ModelCheckFailure.DEADLINE_PASSED
+    )
+
+
+class RejectingJudge:
+    # A model refusal that retrying can't fix, like a disabled model or a rejected request.
+
+    model_id = SIMULATED_JUDGE_MODEL_ID
+    is_simulated = True
+
+    async def judge(self, request: JudgeRequest) -> JudgeReply:
+        raise ProviderRejectedError("The model rejected the request.")
+
+
+async def test_a_refused_model_call_stores_a_fixed_code_not_the_provider_error_code(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> None:
+    # The frontend branches on the code in brackets, so it is a ModelCheckFailure member.
+    _, run_id = await _queued(client, auth, world)
+    handler = ValidationJobHandler(judge=RejectingJudge())
+    await run_once(
+        sessions,
+        {},
+        None,
+        get_settings(),
+        event_handlers={
+            VALIDATION_RUN_EVENT: JobRunHandler(dict.fromkeys(JOB_KIND_BY_INPUT.values(), handler))
+        },
+    )
+    done = await _read(client, auth, world, run_id)
+
+    assert (done["state"], done["outcome"]) == ("SUCCEEDED", "NEEDS_REVIEW")
+    reasons = {r["reason"] for r in done["rule_results"] if r["result"] == "UNABLE_TO_ASSESS"}
+    assert reasons == {rules.MODEL_CHECK_FAILED.format(failure=ModelCheckFailure.MODEL_REJECTED)}
 
 
 async def test_identical_content_reuses_a_finished_result_without_a_job(

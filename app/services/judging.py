@@ -18,12 +18,11 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Final
 
 from pydantic import ValidationError
 
-from app.models.enums import Applicability
+from app.models.enums import Applicability, JudgeFailure
 from app.schemas.validations import RuleResultValue
 from app.services.policy_context.manifest import EvidenceItem, ExceptionItem
 from app.services.providers.text_judge import (
@@ -103,16 +102,6 @@ class JudgeContext:
     evidence: Mapping[str, str]
     # rule_id -> {node_key: excerpt} of exceptions the manifest found applicable
     exceptions: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
-
-
-class JudgeFailure(StrEnum):
-    TRUNCATED = "TRUNCATED"
-    MALFORMED = "MALFORMED"
-    WRONG_RULES = "WRONG_RULES"
-    UNKNOWN_EVIDENCE = "UNKNOWN_EVIDENCE"
-    BAD_EXCEPTION = "BAD_EXCEPTION"
-    BAD_SPAN = "BAD_SPAN"
-    CONTRADICTION = "CONTRADICTION"
 
 
 class InvalidJudgeAnswerError(Exception):

@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from app.models.enums import Applicability, PolicyLanguage, PolicyNodeType
+from app.models.enums import Applicability, JudgeFailure, PolicyLanguage, PolicyNodeType
 from app.schemas.validations import RuleResultValue
 from app.services import judging
-from app.services.judging import JudgeContext, JudgedRule, JudgeFailure
+from app.services.judging import JudgeContext, JudgedRule
 from app.services.policy_context.manifest import (
     EvidenceItem,
     ExceptionItem,

@@ -5,7 +5,15 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.enums import CheckType, Gate, Outcome, Severity, ValidationInputKind
+from app.models.enums import (
+    CheckType,
+    Gate,
+    JudgeFailure,
+    ModelCheckFailure,
+    Outcome,
+    Severity,
+    ValidationInputKind,
+)
 from app.schemas.policies import PolicyBundleRead, PolicyRule
 from app.schemas.tenancy import StudyFacts
 from app.schemas.validations import RuleResultValue, SourceReference
@@ -328,7 +336,9 @@ def test_graph_outcome_table(mandatory: bool, hit: bool, expected: Outcome) -> N
 # Merging the model check (ModelReview) into the graph rules.
 
 
-def _review(*answers: JudgeRuleAnswer, failure: str | None = None) -> rules.ModelReview:
+def _review(
+    *answers: JudgeRuleAnswer, failure: JudgeFailure | ModelCheckFailure | None = None
+) -> rules.ModelReview:
     return rules.ModelReview(
         answers={a.rule_id: a for a in answers}, failure=failure, is_simulated=False
     )
@@ -395,11 +405,13 @@ def test_model_unable_to_assess_needs_review_with_its_explanation() -> None:
 
 def test_rejected_model_answer_leaves_the_rule_unassessed_with_the_failure() -> None:
     evaluation = rules.evaluate_graph_rules(
-        "text", [_graph_rule()], FACTS, _review(failure="MALFORMED")
+        "text", [_graph_rule()], FACTS, _review(failure=JudgeFailure.MALFORMED)
     )
 
     assert _result_of(evaluation) is RuleResultValue.UNABLE_TO_ASSESS
-    assert evaluation.rule_results[0].reason == rules.MODEL_CHECK_FAILED.format(failure="MALFORMED")
+    assert evaluation.rule_results[0].reason == rules.MODEL_CHECK_FAILED.format(
+        failure=JudgeFailure.MALFORMED
+    )
     assert evaluation.outcome is Outcome.NEEDS_REVIEW
 
 

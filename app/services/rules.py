@@ -20,7 +20,13 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol
 
-from app.models.enums import CheckType, Outcome, ValidationInputKind
+from app.models.enums import (
+    CheckType,
+    JudgeFailure,
+    ModelCheckFailure,
+    Outcome,
+    ValidationInputKind,
+)
 from app.schemas.policies import PolicyBundleRead, PolicyRule
 from app.schemas.tenancy import StudyFacts
 from app.schemas.validations import (
@@ -179,7 +185,7 @@ class ModelReview:
     # The model check of semantic rules, already verified by app.services.judging. answers is
     # empty when the check ran but its answer was rejected; failure then says why.
     answers: Mapping[str, JudgeRuleAnswer]
-    failure: str | None
+    failure: JudgeFailure | ModelCheckFailure | None
     is_simulated: bool
 
 

@@ -156,6 +156,30 @@ class PolicyContextReason(StrEnum):
     RETRIEVAL_ERROR = "RETRIEVAL_ERROR"
 
 
+class JudgeFailure(StrEnum):
+    """Why the model's answer was rejected (app.services.judging). Shown in brackets in the
+    reason of each rule the model should have decided; the frontend branches on these values."""
+
+    TRUNCATED = "TRUNCATED"
+    MALFORMED = "MALFORMED"
+    WRONG_RULES = "WRONG_RULES"
+    UNKNOWN_EVIDENCE = "UNKNOWN_EVIDENCE"
+    BAD_EXCEPTION = "BAD_EXCEPTION"
+    BAD_SPAN = "BAD_SPAN"
+    CONTRADICTION = "CONTRADICTION"
+
+
+class ModelCheckFailure(StrEnum):
+    """Why a validation job finished without the model's answer. Shown like JudgeFailure."""
+
+    # The job's deadline passed before the model was called.
+    DEADLINE_PASSED = "DEADLINE_PASSED"
+    # Throttled or unavailable on every attempt the job allows.
+    MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
+    # Refused in a way retrying can't fix (configuration, rejected request); the log has the code.
+    MODEL_REJECTED = "MODEL_REJECTED"
+
+
 class CheckType(StrEnum):
     """What makes the final decision for a rule: code alone, or the model after a phrase check."""
 
