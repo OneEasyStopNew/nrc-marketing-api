@@ -185,3 +185,34 @@ async def record_failed_build(
         )
     )
     await db.flush()
+
+
+async def stale_ready_builds(db: AsyncSession, tenant_id: UUID, bundle_id: UUID) -> list[UUID]:
+    """READY builds of the bundle whose checksum no longer matches its approved searchable nodes.
+
+    Activation (NRC-4) refuses a bundle with one: retrieval would distrust that index anyway.
+    """
+    nodes = [
+        (node_id, text)
+        for node_id, text in await db.execute(
+            select(PolicyNode.id, PolicyNode.text)
+            .where(
+                PolicyNode.tenant_id == tenant_id,
+                PolicyNode.policy_bundle_id == bundle_id,
+                PolicyNode.approved.is_(True),
+                PolicyNode.node_type.in_(SEARCHABLE_NODE_TYPES),
+            )
+            .order_by(PolicyNode.id)
+        )
+    ]
+    checksum = index_content_checksum(nodes)
+    return list(
+        await db.scalars(
+            select(PolicyIndexBuild.id).where(
+                PolicyIndexBuild.tenant_id == tenant_id,
+                PolicyIndexBuild.policy_bundle_id == bundle_id,
+                PolicyIndexBuild.state == IndexBuildState.READY,
+                PolicyIndexBuild.content_checksum != checksum,
+            )
+        )
+    )

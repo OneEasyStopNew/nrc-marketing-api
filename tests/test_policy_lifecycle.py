@@ -3,10 +3,11 @@
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -22,9 +23,11 @@ from app.core.errors import (
 )
 from app.db.session import TenantSession, bind_tenant
 from app.models import (
+    OutboxEvent,
     PolicyAuditEvent,
     PolicyBundle,
     PolicyEdge,
+    PolicyIndexBuild,
     PolicyNode,
     PolicyRuleRecord,
     PolicyRuleWording,
@@ -35,6 +38,7 @@ from app.models.enums import (
     BundleLifecycleState,
     CheckType,
     Gate,
+    IndexBuildState,
     PolicyAuditAction,
     PolicyEdgeType,
     PolicyLanguage,
@@ -55,6 +59,7 @@ from app.schemas.policy_admin import (
     WordingCreate,
 )
 from app.services import policy_bundles as bundles
+from app.services.policies import get_active_policy
 from app.services.policy_bundles import Command, ReviewItemKind
 from tests.conftest import (
     IntegrationEnv,
@@ -865,3 +870,289 @@ async def test_two_editors_with_the_same_revision_one_wins(
 
     assert sorted(results) == ["saved", "stale"]
     assert revision == 2
+
+
+# ---- Activation, rollback and retirement
+
+
+async def approved(env: Env) -> Draft:
+    draft = await env.draft()
+    await env.review_all(draft)
+    await env.move(draft, Command.SUBMIT)
+    await env.move(draft, Command.APPROVE, env.approver)
+    return draft
+
+
+async def mark_ready(conn: AsyncConnection, tenant_id: UUID, bundle_id: UUID) -> None:
+    # What the build worker does (tested in test_policy_build_worker.py), as the owner.
+    async with as_tenant_owner(conn, tenant_id):
+        await conn.execute(
+            update(PolicyBundle)
+            .where(PolicyBundle.id == bundle_id)
+            .values(lifecycle_state=BundleLifecycleState.READY, available_at=None)
+        )
+
+
+async def ready(connection: AsyncConnection, env: Env) -> Draft:
+    draft = await approved(env)
+    await mark_ready(connection, env.tenant_id, draft.id)
+    await bind_tenant(env.db, env.tenant_id)
+    return draft
+
+
+def because(reason: str = "[SYNTHETIC] reviewed and signed off") -> TransitionRequest:
+    return TransitionRequest(reason=reason)
+
+
+async def active_bundles(env: Env) -> list[UUID]:
+    await bind_tenant(env.db, env.tenant_id)
+    return list(
+        (
+            await env.db.scalars(
+                select(PolicyBundle.id).where(
+                    PolicyBundle.lifecycle_state == BundleLifecycleState.ACTIVE
+                )
+            )
+        ).all()
+    )
+
+
+async def events(env: Env) -> list[dict[str, object]]:
+    await bind_tenant(env.db, env.tenant_id)
+    rows = (
+        await env.db.scalars(
+            select(OutboxEvent).where(OutboxEvent.event_type == bundles.POLICY_BUNDLE_EVENT)
+        )
+    ).all()
+    return [row.payload for row in rows]
+
+
+async def test_activation_replaces_the_active_bundle_and_tells_consumers(
+    connection: AsyncConnection, env: Env, world: World
+) -> None:
+    old = world.a.policy_bundle_id
+    draft = await ready(connection, env)
+
+    bundle = await env.move(draft, Command.ACTIVATE, env.approver, because())
+
+    assert bundle.lifecycle_state is BundleLifecycleState.ACTIVE
+    assert bundle.activated_by == APPROVER
+    assert bundle.activated_at is not None
+    assert await active_bundles(env) == [draft.id]
+    retired = await env.db.get(PolicyBundle, old, populate_existing=True)
+    assert retired is not None
+    assert retired.lifecycle_state is BundleLifecycleState.RETIRED
+    activation = await env.db.scalar(
+        select(PolicyAuditEvent).where(
+            PolicyAuditEvent.policy_bundle_id == draft.id,
+            PolicyAuditEvent.action == PolicyAuditAction.ACTIVATE,
+        )
+    )
+    assert activation is not None
+    assert (activation.actor, activation.reason) == (
+        APPROVER,
+        "[SYNTHETIC] reviewed and signed off",
+    )
+    assert activation.details["previous_bundle_id"] == str(old)
+    replaced = await env.db.scalar(
+        select(PolicyAuditEvent).where(
+            PolicyAuditEvent.policy_bundle_id == old,
+            PolicyAuditEvent.action == PolicyAuditAction.RETIRE,
+        )
+    )
+    assert replaced is not None
+    assert replaced.details["replaced_by_bundle_id"] == str(draft.id)
+    assert await events(env) == [
+        {
+            "event_version": 1,
+            "tenant_id": str(env.tenant_id),
+            "policy_bundle_id": str(draft.id),
+            "version": bundle.version,
+            "action": "ACTIVATE",
+            "audit_event_id": str(activation.id),
+            "previous_bundle_id": str(old),
+        }
+    ]
+    outbox = await env.db.scalar(
+        select(OutboxEvent).where(OutboxEvent.event_type == bundles.POLICY_BUNDLE_EVENT)
+    )
+    assert outbox is not None
+    assert outbox.job_id is None
+    # Validation now reads the new bundle's rules.
+    policy = await get_active_policy(env.db, env.admin)
+    assert (policy.policy_bundle_id, [r.rule_id for r in policy.rules]) == (draft.id, ["REC-07"])
+
+
+async def test_activation_needs_a_reason_and_the_activate_capability(
+    connection: AsyncConnection, env: Env
+) -> None:
+    draft = await ready(connection, env)
+
+    with pytest.raises(PolicyItemInvalidError, match="Give a reason"):
+        await env.move(draft, Command.ACTIVATE, env.approver)
+    with pytest.raises(PermissionDeniedError, match="cannot do this"):
+        await env.move(draft, Command.ACTIVATE, env.admin, because())
+
+
+async def test_a_bundle_that_was_not_built_cannot_be_activated(env: Env) -> None:
+    draft = await approved(env)
+
+    with pytest.raises(PolicyBundleStateError, match="not in a state") as error:
+        await env.move(draft, Command.ACTIVATE, env.approver, because())
+    assert error.value.details == {"state": "APPROVED", "allowed": ["READY"]}
+
+
+async def test_a_stale_index_blocks_activation_and_changes_nothing(
+    connection: AsyncConnection, env: Env, world: World
+) -> None:
+    draft = await ready(connection, env)
+    async with as_tenant_owner(connection, env.tenant_id):
+        await connection.execute(
+            insert(PolicyIndexBuild).values(
+                tenant_id=env.tenant_id,
+                policy_bundle_id=draft.id,
+                model_id="synthetic-stale",
+                dimensions=1024,
+                state=IndexBuildState.READY,
+                node_count=1,
+                content_checksum="0" * 64,
+                completed_at=datetime(2026, 11, 23, tzinfo=UTC),
+            )
+        )
+    await bind_tenant(env.db, env.tenant_id)
+
+    with pytest.raises(PolicyBundleHasIssuesError, match="cannot be activated") as error:
+        await env.move(draft, Command.ACTIVATE, env.approver, because())
+
+    assert error.value.details is not None
+    issues = error.value.details["issues"]
+    assert isinstance(issues, list)
+    assert [issue["code"] for issue in issues] == ["INDEX_STALE"]
+    await env.db.rollback()
+    assert await active_bundles(env) == [world.a.policy_bundle_id]
+    assert await events(env) == []
+
+
+async def test_retiring_the_active_bundle_leaves_no_active_policy(
+    connection: AsyncConnection, env: Env
+) -> None:
+    draft = await ready(connection, env)
+    await env.move(draft, Command.ACTIVATE, env.approver, because())
+
+    bundle = await env.move(draft, Command.RETIRE, env.approver, because("[SYNTHETIC] withdrawn"))
+
+    assert bundle.lifecycle_state is BundleLifecycleState.RETIRED
+    assert await active_bundles(env) == []
+    with pytest.raises(NotFoundError, match="no active policy"):
+        await get_active_policy(env.db, env.admin)
+    retire = [e for e in await events(env) if e["action"] == "RETIRE"]
+    assert len(retire) == 1
+    assert (retire[0]["policy_bundle_id"], retire[0]["previous_bundle_id"]) == (str(draft.id), None)
+
+
+async def test_rollback_returns_to_the_previously_active_bundle(
+    connection: AsyncConnection, env: Env
+) -> None:
+    first = await ready(connection, env)
+    await env.move(first, Command.ACTIVATE, env.approver, because())
+    second = await ready(connection, env)
+    await env.move(second, Command.ACTIVATE, env.approver, because())
+    first.revision = await env.revision(first.id)
+
+    bundle = await env.move(first, Command.ROLLBACK, env.approver, because("[SYNTHETIC] v3 wrong"))
+
+    assert bundle.lifecycle_state is BundleLifecycleState.ACTIVE
+    assert await active_bundles(env) == [first.id]
+    rollback = await env.db.scalar(
+        select(PolicyAuditEvent).where(
+            PolicyAuditEvent.policy_bundle_id == first.id,
+            PolicyAuditEvent.action == PolicyAuditAction.ROLLBACK,
+        )
+    )
+    assert rollback is not None
+    assert rollback.reason == "[SYNTHETIC] v3 wrong"
+    assert rollback.details["previous_bundle_id"] == str(second.id)
+    assert [e for e in await events(env) if e["action"] == "ROLLBACK"] == [
+        {
+            "event_version": 1,
+            "tenant_id": str(env.tenant_id),
+            "policy_bundle_id": str(first.id),
+            "version": bundle.version,
+            "action": "ROLLBACK",
+            "audit_event_id": str(rollback.id),
+            "previous_bundle_id": str(second.id),
+        }
+    ]
+
+
+async def test_only_a_bundle_that_was_active_can_be_rolled_back_to(
+    connection: AsyncConnection, env: Env
+) -> None:
+    draft = await approved(env)
+    async with as_tenant_owner(connection, env.tenant_id):
+        await connection.execute(
+            update(PolicyBundle)
+            .where(PolicyBundle.id == draft.id)
+            .values(lifecycle_state=BundleLifecycleState.RETIRED)
+        )
+    await bind_tenant(env.db, env.tenant_id)
+
+    with pytest.raises(PolicyBundleStateError, match="was active before"):
+        await env.move(draft, Command.ROLLBACK, env.approver, because())
+
+
+async def test_parallel_activations_leave_exactly_one_active_bundle(
+    committed_tenant: SeededTenant, test_env: IntegrationEnv
+) -> None:
+    tenant_id = committed_tenant.tenant_id
+    owner = create_async_engine(
+        test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
+    )
+    api = create_async_engine(test_env.test_database_url.get_secret_value(), poolclass=NullPool)
+
+    async def session() -> AsyncSession:
+        db = AsyncSession(api, sync_session_class=TenantSession, expire_on_commit=False)
+        await bind_tenant(db, tenant_id)
+        return db
+
+    async def activate(draft: Draft) -> None:
+        async with await session() as db:
+            approver = ctx_for(tenant_id, APPROVER, Role.POLICY_APPROVER)
+            await bundles.transition(
+                db, approver, draft.id, draft.revision, Command.ACTIVATE, because(), EN
+            )
+
+    try:
+        async with owner.connect() as conn:
+            clause_id = await add_source_clause(conn, tenant_id)
+            await conn.commit()
+        drafts = []
+        for _ in range(2):
+            async with await session() as db:
+                drafts.append(await approved(Env(db, tenant_id, clause_id)))
+        async with owner.connect() as conn:
+            for draft in drafts:
+                await mark_ready(conn, tenant_id, draft.id)
+            await conn.commit()
+
+        await asyncio.gather(*(activate(draft) for draft in drafts))
+
+        async with await session() as db:
+            states = (
+                await db.scalars(
+                    select(PolicyBundle.lifecycle_state).where(
+                        PolicyBundle.id.in_([d.id for d in drafts])
+                    )
+                )
+            ).all()
+            announced = await db.scalar(
+                select(func.count())
+                .select_from(OutboxEvent)
+                .where(OutboxEvent.event_type == bundles.POLICY_BUNDLE_EVENT)
+            )
+    finally:
+        await api.dispose()
+        await owner.dispose()
+
+    assert sorted(states) == [BundleLifecycleState.ACTIVE, BundleLifecycleState.RETIRED]
+    assert announced == 2

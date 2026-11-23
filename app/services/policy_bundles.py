@@ -31,6 +31,7 @@ from app.core.errors import (
 )
 from app.core.request_context import request_id_var
 from app.models import (
+    OutboxEvent,
     PolicyAuditEvent,
     PolicyBundle,
     PolicyEdge,
@@ -64,6 +65,7 @@ from app.schemas.policy_admin import (
 )
 from app.schemas.validations import SourceReference
 from app.services.policy_checks import load_snapshot, run_checks
+from app.services.policy_index import stale_ready_builds
 
 State = BundleLifecycleState
 EDITABLE: Final = frozenset({State.DRAFT})
@@ -76,6 +78,9 @@ class Command(StrEnum):
     APPROVE = "approve"
     REJECT = "reject"
     BUILD = "build"
+    ACTIVATE = "activate"
+    ROLLBACK = "rollback"
+    RETIRE = "retire"
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +127,37 @@ TRANSITIONS: Final[Mapping[Command, Transition]] = {
         frozenset({Capability.POLICY_ACTIVATE}),
         PolicyAuditAction.BUILD_STARTED,
     ),
+    # AC6: activation, rollback and retirement always name a reason.
+    Command.ACTIVATE: Transition(
+        frozenset({State.READY}),
+        State.ACTIVE,
+        frozenset({Capability.POLICY_ACTIVATE}),
+        PolicyAuditAction.ACTIVATE,
+        needs_reason=True,
+    ),
+    # Back to a bundle that was active before (activated_at set); the graph never changed.
+    Command.ROLLBACK: Transition(
+        frozenset({State.RETIRED}),
+        State.ACTIVE,
+        frozenset({Capability.POLICY_ACTIVATE}),
+        PolicyAuditAction.ROLLBACK,
+        needs_reason=True,
+    ),
+    # Leaves the tenant with no active policy: validation then answers NO_ACTIVE_POLICY.
+    Command.RETIRE: Transition(
+        frozenset({State.ACTIVE}),
+        State.RETIRED,
+        frozenset({Capability.POLICY_ACTIVATE}),
+        PolicyAuditAction.RETIRE,
+        needs_reason=True,
+    ),
 }
+# Commands that change which bundle is active: serialised per tenant, and announced.
+_ACTIVATING: Final = frozenset({Command.ACTIVATE, Command.ROLLBACK})
+_CHANGES_ACTIVE: Final = _ACTIVATING | {Command.RETIRE}
+# Consumers (approval and dispatch invalidation, NRC-12/13) read ids only and load the rest.
+POLICY_BUNDLE_EVENT: Final = "policy_bundle.activated"
+POLICY_BUNDLE_EVENT_VERSION: Final = 1
 
 
 class ReviewItemKind(StrEnum):
@@ -204,11 +239,33 @@ async def _finish(
     reason: str | None = None,
     details: Mapping[str, object] | None = None,
     item: PolicyNode | PolicyEdge | PolicyRuleRecord | PolicyRuleWording | None = None,
+    event: Mapping[str, object] | None = None,
 ) -> None:
     bundle.revision += 1
     bundle.updated_at = func.now()
+    audit_id = uuid4()
+    if event is not None:
+        # Same transaction as the change: consumers hear of it exactly when it commits.
+        db.add(
+            OutboxEvent(
+                tenant_id=bundle.tenant_id,
+                job_id=None,
+                event_type=POLICY_BUNDLE_EVENT,
+                payload={
+                    "event_version": POLICY_BUNDLE_EVENT_VERSION,
+                    "tenant_id": str(bundle.tenant_id),
+                    "policy_bundle_id": str(bundle.id),
+                    "version": bundle.version,
+                    "action": action.value,
+                    "audit_event_id": str(audit_id),
+                    **event,
+                },
+                attempts=0,
+            )
+        )
     db.add(
         PolicyAuditEvent(
+            id=audit_id,
             tenant_id=bundle.tenant_id,
             policy_bundle_id=bundle.id,
             action=action,
@@ -680,13 +737,28 @@ async def transition(
     _require(ctx, step.capabilities)
     if step.needs_reason and body.reason is None:
         raise PolicyItemInvalidError("Give a reason.", details={"field": "reason"})
+    if command in _CHANGES_ACTIVE:
+        # Taken before the row lock, in the same order everywhere, so two activations in one
+        # tenant run one after the other instead of deadlocking.
+        await lock_tenant_bundles(db, ctx.tenant_id)
     bundle = await _open(db, ctx, bundle_id, revision, step.from_states)
     from_state = bundle.lifecycle_state
     details: dict[str, object] = {}
+    event: dict[str, object] | None = None
     if command is Command.APPROVE:
         details = await _approve(db, ctx, bundle, supported_languages)
     elif command is Command.BUILD:
         _queue_build(bundle)
+    elif command in _ACTIVATING:
+        if command is Command.ROLLBACK and bundle.activated_at is None:
+            raise PolicyBundleStateError(
+                "Only a bundle that was active before can be rolled back to.",
+                details={"state": bundle.lifecycle_state.value, "allowed": ["RETIRED"]},
+            )
+        previous = await _activate(db, ctx, bundle, supported_languages, body.reason)
+        details = event = {"previous_bundle_id": str(previous) if previous else None}
+    elif command is Command.RETIRE:
+        event = {"previous_bundle_id": None}
     bundle.lifecycle_state = step.to_state
     await _finish(
         db,
@@ -696,8 +768,71 @@ async def transition(
         from_state=from_state,
         reason=body.reason,
         details=details,
+        event=event,
     )
     return bundle
+
+
+async def _activate(
+    db: AsyncSession,
+    ctx: TenantContext,
+    bundle: PolicyBundle,
+    supported_languages: Sequence[PolicyLanguage],
+    reason: str | None,
+) -> UUID | None:
+    # Under the tenant lock: re-check the bundle and its index, then retire the active bundle
+    # first, because a tenant may have only one ACTIVE bundle (unique index). Returns its id.
+    snapshot = await load_snapshot(db, bundle.tenant_id, bundle.id)
+    issues = [
+        {"code": i.code.value, "subject": i.subject, "message": i.message}
+        for i in run_checks(snapshot, supported_languages)
+    ]
+    issues += [
+        {
+            "code": "INDEX_STALE",
+            "subject": f"build:{build_id}",
+            "message": "The index no longer matches the bundle's approved nodes.",
+        }
+        for build_id in await stale_ready_builds(db, bundle.tenant_id, bundle.id)
+    ]
+    if issues:
+        raise PolicyBundleHasIssuesError(
+            "The policy bundle has open issues and cannot be activated.",
+            details={"issues": issues},
+        )
+    previous = await db.scalar(
+        select(PolicyBundle)
+        .where(
+            PolicyBundle.tenant_id == bundle.tenant_id,
+            PolicyBundle.lifecycle_state == State.ACTIVE,
+            PolicyBundle.id != bundle.id,
+        )
+        .with_for_update()
+    )
+    if previous is not None:
+        previous.lifecycle_state = State.RETIRED
+        previous.revision += 1
+        previous.updated_at = func.now()
+        db.add(
+            PolicyAuditEvent(
+                tenant_id=previous.tenant_id,
+                policy_bundle_id=previous.id,
+                action=PolicyAuditAction.RETIRE,
+                from_state=State.ACTIVE,
+                to_state=State.RETIRED,
+                actor=ctx.principal.sub,
+                reason=reason,
+                details={
+                    "revision": previous.revision,
+                    "replaced_by_bundle_id": str(bundle.id),
+                },
+                request_id=request_id_var.get(),
+            )
+        )
+        await db.flush()
+    bundle.activated_at = func.now()
+    bundle.activated_by = ctx.principal.sub
+    return previous.id if previous else None
 
 
 async def _approve(
