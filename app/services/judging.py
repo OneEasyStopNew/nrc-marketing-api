@@ -35,7 +35,8 @@ from app.services.providers.text_judge import (
 )
 
 # Recorded on each run, so a result can be traced to the exact instructions that produced it.
-# Change it whenever SYSTEM_PROMPT or the user message layout changes.
+# Change it whenever SYSTEM_PROMPT or the user message layout changes (v1 was edited before any
+# run outside tests used it).
 PROMPT_TEMPLATE_VERSION: Final = "judge-prompt-v1"
 # Bounds on what one prompt carries: the rules' own evidence first, then search matches.
 MAX_EVIDENCE_ITEMS: Final = 40
@@ -65,6 +66,8 @@ For every rule in "rules", decide:
 - PASS: you are confident the text does not break the rule.
 - NOT_APPLICABLE: only when an entry in "exceptions" for that rule applies; give its node_key.
 - UNABLE_TO_ASSESS: anything else, including when you are unsure.
+If "text" is empty, random characters or otherwise not readable marketing copy, answer \
+UNABLE_TO_ASSESS for every rule.
 
 Answer with only this JSON, no other text:
 {"results": [{"rule_id": "...", "result": "PASS|FAIL|NOT_APPLICABLE|UNABLE_TO_ASSESS", \

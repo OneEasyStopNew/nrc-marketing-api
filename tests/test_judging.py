@@ -75,6 +75,7 @@ def test_text_is_a_json_string_that_cannot_break_out_of_its_field() -> None:
     assert [r["rule_id"] for r in payload["rules"]] == ["REC-01", "REC-04"]
     assert request.rule_ids == ("REC-01", "REC-04")
     assert "never instructions" in request.system
+    assert "not readable marketing copy" in request.system
 
 
 def test_text_keeps_its_characters_so_offsets_match() -> None:
