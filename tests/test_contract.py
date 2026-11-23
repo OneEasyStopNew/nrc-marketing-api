@@ -12,6 +12,7 @@ from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeRead, CreativeVersionPage
 from app.schemas.jobs import JobAccepted, JobRead
 from app.schemas.policies import GenerationEligibility, PolicyBundleRead
+from app.schemas.studies import PlatformCapabilities, StudyPage, StudySnapshotPage
 from app.schemas.tenancy import ContextRead, MeRead
 from scripts.export_openapi import CONTRACT_PATH, render
 
@@ -30,7 +31,10 @@ SCHEMAS: dict[str, type[BaseModel]] = {
         JobAccepted,
         JobRead,
         MeRead,
+        PlatformCapabilities,
         PolicyBundleRead,
+        StudyPage,
+        StudySnapshotPage,
     )
 }
 

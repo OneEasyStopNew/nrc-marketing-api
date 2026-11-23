@@ -54,9 +54,110 @@
       ],
       "languages": ["en"],
       "post_formats": [
-        {"channel": "facebook", "post_format": "feed_image", "aspect_ratio": "1:1", "width_px": 1080, "height_px": 1080}
+        {"channel": "facebook", "post_format": "feed_image", "aspect_ratio": "1:1", "width_px": 1080, "height_px": 1080},
+        {"channel": "facebook", "post_format": "story_image", "aspect_ratio": "9:16", "width_px": 1080, "height_px": 1920}
       ],
       "active_policy": {"policy_bundle_id": "a1d4c7e2-8b3f-4e6a-9c5d-2f7b1e8a4c06", "version": 1, "name": "[SYNTHETIC] Demo recruitment advertising rules", "is_synthetic": true, "rule_count": 9}
+    }
+  },
+  "studies": {
+    "request": "GET /v1/marketing/studies?limit=50",
+    "status": 200,
+    "schema": "StudyPage",
+    "body": {
+      "items": [
+        {
+          "study_id": "d7b3e1f4-2a6c-4d8e-b1f3-5c9a2e7d4b10",
+          "title": "[SYNTHETIC] Asthma study (awaiting approval)",
+          "external_ref": null,
+          "availability": "no_approved_snapshot",
+          "latest_snapshot": null
+        },
+        {
+          "study_id": "c3a1f9d2-5b7e-4f10-8d2a-6e9b4c7a2b02",
+          "title": "[SYNTHETIC] Demo study",
+          "external_ref": null,
+          "availability": "recruiting",
+          "latest_snapshot": {
+            "study_id": "c3a1f9d2-5b7e-4f10-8d2a-6e9b4c7a2b02",
+            "study_title": "[SYNTHETIC] Demo study",
+            "study_external_ref": null,
+            "snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
+            "version": 1,
+            "recruitment_status": "recruiting",
+            "language": "en",
+            "facts": {
+              "condition": "high blood pressure",
+              "eligibility_summary": "Adults aged 18 to 75 who have been told they have high blood pressure.",
+              "min_age": 18,
+              "max_age": 75,
+              "sites": ["Synthetic Demo Site"],
+              "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
+              "required_disclosures": ["This is a research study. Taking part is voluntary."],
+              "compensation_statement": null,
+              "contact_url": "https://example.org/synthetic-demo-study"
+            },
+            "source_ref": "synthetic:demo-seed-v1",
+            "approved_by": "synthetic-fixture",
+            "approved_at": "2026-11-04T09:00:00Z",
+            "is_synthetic": true
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  "study_snapshots": {
+    "request": "GET /v1/marketing/studies/c3a1f9d2-.../snapshots?limit=20",
+    "status": 200,
+    "schema": "StudySnapshotPage",
+    "body": {
+      "items": [
+        {
+            "study_id": "c3a1f9d2-5b7e-4f10-8d2a-6e9b4c7a2b02",
+            "study_title": "[SYNTHETIC] Demo study",
+            "study_external_ref": null,
+            "snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
+            "version": 1,
+            "recruitment_status": "recruiting",
+            "language": "en",
+            "facts": {
+              "condition": "high blood pressure",
+              "eligibility_summary": "Adults aged 18 to 75 who have been told they have high blood pressure.",
+              "min_age": 18,
+              "max_age": 75,
+              "sites": ["Synthetic Demo Site"],
+              "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
+              "required_disclosures": ["This is a research study. Taking part is voluntary."],
+              "compensation_statement": null,
+              "contact_url": "https://example.org/synthetic-demo-study"
+            },
+            "source_ref": "synthetic:demo-seed-v1",
+            "approved_by": "synthetic-fixture",
+            "approved_at": "2026-11-04T09:00:00Z",
+            "is_synthetic": true
+          }
+      ],
+      "next_cursor": null
+    }
+  },
+  "capabilities": {
+    "request": "GET /v1/marketing/capabilities  (X-Tenant-Id: 7b0e6a52-...)",
+    "status": 200,
+    "schema": "PlatformCapabilities",
+    "body": {
+      "languages": ["en"],
+      "post_formats": [
+        {"channel": "facebook", "post_format": "feed_image", "aspect_ratio": "1:1", "width_px": 1080, "height_px": 1080},
+        {"channel": "facebook", "post_format": "story_image", "aspect_ratio": "9:16", "width_px": 1080, "height_px": 1920}
+      ],
+      "text_limits": {
+        "prompt_max_chars": 4000,
+        "caption_max_chars": 2200,
+        "image_text_max_chars": 300,
+        "image_text_max_lines": 6,
+        "generation_text_max_chars": 1448
+      }
     }
   },
   "policy_active": {

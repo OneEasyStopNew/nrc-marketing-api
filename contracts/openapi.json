@@ -131,6 +131,390 @@
         }
       }
     },
+    "/v1/marketing/studies": {
+      "get": {
+        "tags": [
+          "studies"
+        ],
+        "summary": "Studies the caller may use, by title",
+        "description": "Each study says whether it accepts new drafts (availability) and carries its latest approved snapshot. Closed studies are listed so their drafts stay reachable.",
+        "operationId": "list_studies",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the last page.",
+              "title": "Cursor"
+            },
+            "description": "next_cursor from the last page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/studies/{study_id}": {
+      "get": {
+        "tags": [
+          "studies"
+        ],
+        "summary": "One study and its latest snapshot",
+        "operationId": "get_study",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Study Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Study not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/studies/{study_id}/snapshots": {
+      "get": {
+        "tags": [
+          "studies"
+        ],
+        "summary": "Approved snapshots of a study, newest first",
+        "description": "Snapshots never change. A draft keeps the snapshot it was created with, so a newer snapshot does not change existing drafts, validation runs or jobs.",
+        "operationId": "list_study_snapshots",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Study Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the last page.",
+              "title": "Cursor"
+            },
+            "description": "next_cursor from the last page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudySnapshotPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Study not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/capabilities": {
+      "get": {
+        "tags": [
+          "studies"
+        ],
+        "summary": "Languages, post formats and text limits for drafts",
+        "operationId": "get_capabilities",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformCapabilities"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/marketing/creatives": {
       "post": {
         "tags": [
@@ -2849,6 +3233,34 @@
         "title": "Outcome",
         "description": "Overall result. PASS is not approval and does not make content ready to publish."
       },
+      "PlatformCapabilities": {
+        "properties": {
+          "languages": {
+            "items": {
+              "$ref": "#/components/schemas/Language"
+            },
+            "type": "array",
+            "title": "Languages"
+          },
+          "post_formats": {
+            "items": {
+              "$ref": "#/components/schemas/PostFormatOption"
+            },
+            "type": "array",
+            "title": "Post Formats"
+          },
+          "text_limits": {
+            "$ref": "#/components/schemas/TextLimits"
+          }
+        },
+        "type": "object",
+        "required": [
+          "languages",
+          "post_formats",
+          "text_limits"
+        ],
+        "title": "PlatformCapabilities"
+      },
       "PolicyBundleRead": {
         "properties": {
           "policy_bundle_id": {
@@ -3148,6 +3560,15 @@
         ],
         "title": "SourceReference"
       },
+      "StudyAvailability": {
+        "type": "string",
+        "enum": [
+          "recruiting",
+          "closed",
+          "no_approved_snapshot"
+        ],
+        "title": "StudyAvailability"
+      },
       "StudyFacts": {
         "properties": {
           "condition": {
@@ -3238,6 +3659,113 @@
         ],
         "title": "StudyFacts",
         "description": "Approved, marketing-safe facts. Validation and generation may only rely on these."
+      },
+      "StudyPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StudyRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor",
+            "description": "Pass as cursor for the next page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "StudyPage"
+      },
+      "StudyRead": {
+        "properties": {
+          "study_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Study Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "external_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Ref"
+          },
+          "availability": {
+            "$ref": "#/components/schemas/StudyAvailability",
+            "description": "Only recruiting studies accept new drafts. Existing drafts of closed studies stay readable."
+          },
+          "latest_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudySnapshotRead"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until an approved snapshot is imported."
+          }
+        },
+        "type": "object",
+        "required": [
+          "study_id",
+          "title",
+          "external_ref",
+          "availability",
+          "latest_snapshot"
+        ],
+        "title": "StudyRead"
+      },
+      "StudySnapshotPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StudySnapshotRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor",
+            "description": "Pass as cursor for the next (older) page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "StudySnapshotPage"
       },
       "StudySnapshotRead": {
         "properties": {
@@ -3349,6 +3877,40 @@
           "capabilities"
         ],
         "title": "TenantMembershipRead"
+      },
+      "TextLimits": {
+        "properties": {
+          "prompt_max_chars": {
+            "type": "integer",
+            "title": "Prompt Max Chars"
+          },
+          "caption_max_chars": {
+            "type": "integer",
+            "title": "Caption Max Chars"
+          },
+          "image_text_max_chars": {
+            "type": "integer",
+            "title": "Image Text Max Chars"
+          },
+          "image_text_max_lines": {
+            "type": "integer",
+            "title": "Image Text Max Lines"
+          },
+          "generation_text_max_chars": {
+            "type": "integer",
+            "title": "Generation Text Max Chars",
+            "description": "Prompt plus image text together. Checked when generation starts, not on save, because drafts that are only validated never generate."
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt_max_chars",
+          "caption_max_chars",
+          "image_text_max_chars",
+          "image_text_max_lines",
+          "generation_text_max_chars"
+        ],
+        "title": "TextLimits"
       },
       "TextSpan": {
         "properties": {

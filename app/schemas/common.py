@@ -10,6 +10,8 @@ MAX_CAPTION_CHARS = 2200  # Instagram's limit, the stricter of the two first-pas
 # Text rendered inside the image. The brief and this text must fit the provider's 1,448 limit.
 MAX_IMAGE_TEXT_CHARS = 300
 MAX_IMAGE_TEXT_LINES = 6
+# Ideogram's limit for the prompt plus the image text; the generation gate (NRC-7) enforces it.
+MAX_GENERATION_TEXT_CHARS = 1448
 
 
 class ApiModel(BaseModel):
