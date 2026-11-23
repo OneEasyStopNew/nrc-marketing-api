@@ -2,6 +2,7 @@
 # approved settings, the cost cap defaults to $0.09 and a job can only use an enabled model.
 
 import json
+from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
 
@@ -229,9 +230,13 @@ def test_live_worker_refuses_an_unpinned_enabled_model() -> None:
 
 
 @pytest.fixture
-def three_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HIGGSFIELD_MODEL", SOUL)
-    monkeypatch.setenv("HIGGSFIELD_MODELS", f"{SOUL},{STUDIO},{IDEOGRAM}")
+def three_models() -> Iterator[None]:
+    # Cleared again on teardown, so later tests never see these cached settings.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("HIGGSFIELD_MODEL", SOUL)
+        patch.setenv("HIGGSFIELD_MODELS", f"{SOUL},{STUDIO},{IDEOGRAM}")
+        get_settings.cache_clear()
+        yield
     get_settings.cache_clear()
 
 
