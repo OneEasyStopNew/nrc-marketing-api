@@ -10,6 +10,7 @@ from app.schemas.policies import PolicyBundleRead, PolicyRule
 from app.schemas.tenancy import StudyFacts
 from app.schemas.validations import RuleResultValue, SourceReference
 from app.services import rules
+from app.services.providers.text_judge import JudgeFinding, JudgeRuleAnswer
 from scripts.seed_demo import DEMO_POLICY_NAME, DEMO_POLICY_RULES, SYNTHETIC_FACTS
 
 BRIEF = ValidationInputKind.BRIEF
@@ -191,7 +192,10 @@ def _graph_rule(
     loaded: bool = True,
 ) -> rules.GraphRule:
     content = rules.RuleContent(
-        title="Test rule", exact_wording=wording, prohibited_phrases=phrases
+        title="Test rule",
+        requirement="Test requirement.",
+        exact_wording=wording,
+        prohibited_phrases=phrases,
     )
     return rules.GraphRule(
         rule_id=rule_id,
@@ -318,3 +322,124 @@ def test_graph_outcome_table(mandatory: bool, hit: bool, expected: Outcome) -> N
     evaluation = rules.evaluate_graph_rules("a cure" if hit else "clean", [rule], FACTS)
 
     assert evaluation.outcome is expected
+
+
+# Merging the model check (ModelReview) into the graph rules.
+
+
+def _review(*answers: JudgeRuleAnswer, failure: str | None = None) -> rules.ModelReview:
+    return rules.ModelReview(
+        answers={a.rule_id: a for a in answers}, failure=failure, is_simulated=False
+    )
+
+
+def _said(result: RuleResultValue, **extra: object) -> JudgeRuleAnswer:
+    return JudgeRuleAnswer.model_validate(
+        {"rule_id": "R-1", "result": result, "explanation": "The model's reason.", **extra}
+    )
+
+
+def test_model_fail_becomes_findings_with_its_spans() -> None:
+    text = "🙂 This will fix you."
+    finding = JudgeFinding(start=2, end=20, excerpt="This will fix you.", suggested_correction="x")
+
+    evaluation = rules.evaluate_graph_rules(
+        text, [_graph_rule()], FACTS, _review(_said(RuleResultValue.FAIL, findings=[finding]))
+    )
+
+    (found,) = evaluation.findings
+    assert found.text_span is not None
+    assert text[found.text_span.start : found.text_span.end] == "This will fix you."
+    assert (found.explanation, found.suggested_correction) == ("The model's reason.", "x")
+    assert evaluation.outcome is Outcome.FAIL
+
+
+def test_model_fail_for_something_missing_has_one_finding_without_a_span() -> None:
+    evaluation = rules.evaluate_graph_rules(
+        "text", [_graph_rule()], FACTS, _review(_said(RuleResultValue.FAIL))
+    )
+
+    (found,) = evaluation.findings
+    assert found.text_span is None
+
+
+def test_model_pass_on_every_open_rule_lets_the_text_pass() -> None:
+    evaluation = rules.evaluate_graph_rules(
+        "text", [_graph_rule()], FACTS, _review(_said(RuleResultValue.PASS))
+    )
+
+    assert evaluation.outcome is Outcome.PASS
+    assert evaluation.coverage_gaps == []
+
+
+def test_model_not_applicable_keeps_its_reason_and_exception() -> None:
+    answer = _said(RuleResultValue.NOT_APPLICABLE, exception_node_key="EX-1")
+
+    evaluation = rules.evaluate_graph_rules("text", [_graph_rule()], FACTS, _review(answer))
+
+    (result,) = evaluation.rule_results
+    assert result.result is RuleResultValue.NOT_APPLICABLE
+    assert result.reason == "The model's reason. (exception EX-1)"
+    assert evaluation.outcome is Outcome.PASS
+
+
+def test_model_unable_to_assess_needs_review_with_its_explanation() -> None:
+    evaluation = rules.evaluate_graph_rules(
+        "text", [_graph_rule()], FACTS, _review(_said(RuleResultValue.UNABLE_TO_ASSESS))
+    )
+
+    assert evaluation.outcome is Outcome.NEEDS_REVIEW
+    assert evaluation.rule_results[0].reason == "The model's reason."
+
+
+def test_rejected_model_answer_leaves_the_rule_unassessed_with_the_failure() -> None:
+    evaluation = rules.evaluate_graph_rules(
+        "text", [_graph_rule()], FACTS, _review(failure="MALFORMED")
+    )
+
+    assert _result_of(evaluation) is RuleResultValue.UNABLE_TO_ASSESS
+    assert evaluation.rule_results[0].reason == rules.MODEL_CHECK_FAILED.format(failure="MALFORMED")
+    assert evaluation.outcome is Outcome.NEEDS_REVIEW
+
+
+def test_a_code_hit_wins_over_a_model_pass() -> None:
+    rule = _graph_rule(phrases=("cure",))
+
+    evaluation = rules.evaluate_graph_rules(
+        "a cure", [rule], FACTS, _review(_said(RuleResultValue.PASS))
+    )
+
+    assert evaluation.outcome is Outcome.FAIL
+
+
+def test_a_model_answer_never_changes_a_deterministic_rule() -> None:
+    rule = _graph_rule(check_type=CheckType.DETERMINISTIC)
+
+    evaluation = rules.evaluate_graph_rules(
+        "text", [rule], FACTS, _review(_said(RuleResultValue.PASS))
+    )
+
+    assert evaluation.rule_results[0].reason == rules.NOT_CHECKED
+
+
+def test_a_simulated_review_is_labelled_in_the_coverage_gaps() -> None:
+    review = rules.ModelReview(
+        answers={"R-1": _said(RuleResultValue.PASS)}, failure=None, is_simulated=True
+    )
+
+    evaluation = rules.evaluate_graph_rules("text", [_graph_rule()], FACTS, review)
+
+    assert rules.SIMULATED_REVIEW_GAP in evaluation.coverage_gaps
+
+
+def test_only_open_semantic_rules_go_to_the_model() -> None:
+    open_rule = _graph_rule("R-OPEN", phrases=("cure",))
+    hit_rule = _graph_rule("R-HIT", phrases=("guaranteed",))
+    missing = _graph_rule("R-MISSING", loaded=False)
+    code_rule = _graph_rule("R-CODE", check_type=CheckType.DETERMINISTIC, phrases=("free",))
+
+    sent = rules.rules_for_model(
+        "Guaranteed help.", [open_rule, hit_rule, missing, code_rule], FACTS
+    )
+
+    assert [rule.rule_id for rule in sent] == ["R-OPEN"]

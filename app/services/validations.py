@@ -374,6 +374,7 @@ async def _evaluate_manifest_rules(
                 )
             content = rules.RuleContent(
                 title=row.title,
+                requirement=row.requirement,
                 exact_wording=row.exact_wording,
                 prohibited_phrases=tuple(row.prohibited_phrases),
             )

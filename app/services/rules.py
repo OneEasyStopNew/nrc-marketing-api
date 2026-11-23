@@ -35,6 +35,7 @@ from app.schemas.validations import (
     SourceReference,
     TextSpan,
 )
+from app.services.providers.text_judge import JudgeRuleAnswer
 
 PHRASE_AND_FACT_GAP: Final = CoverageGap(
     reason="Phrase and study-fact checks only; a review of meaning (AI or human) has not run."
@@ -42,6 +43,10 @@ PHRASE_AND_FACT_GAP: Final = CoverageGap(
 NOT_CHECKED: Final = "No automated check exists for this rule yet."
 NEEDS_MEANING: Final = "Needs a review of meaning; the model check has not run."
 RULE_NOT_LOADED: Final = "The rule's text is not in the policy graph, so it could not be checked."
+MODEL_CHECK_FAILED: Final = "The model check failed ({failure}); a person must review this rule."
+SIMULATED_REVIEW_GAP: Final = CoverageGap(
+    reason="Semantic rules were judged by the SIMULATED model check; this is not evidence."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +152,7 @@ class RuleInfo(Protocol):
 class RuleContent:
     # What the policy graph stores about a rule that the checks read.
     title: str
+    requirement: str
     exact_wording: str | None
     prohibited_phrases: tuple[str, ...]
 
@@ -162,6 +168,20 @@ class GraphRule:
     source: SourceReference
     check_type: CheckType
     content: RuleContent | None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelReview:
+    # The model check of semantic rules, already verified by app.services.judging. answers is
+    # empty when the check ran but its answer was rejected; failure then says why.
+    answers: Mapping[str, JudgeRuleAnswer]
+    failure: str | None
+    is_simulated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _NotApplicable:
+    reason: str
 
 
 def _phrase_check(check: _PhraseCheck) -> _Check:
@@ -252,28 +272,49 @@ def evaluate_text(
     return summarise(rules, hits, extra_gaps=[PHRASE_AND_FACT_GAP])
 
 
-def evaluate_graph_rules(text: str, rules: Sequence[GraphRule], facts: StudyFacts) -> Evaluation:
+def evaluate_graph_rules(
+    text: str,
+    rules: Sequence[GraphRule],
+    facts: StudyFacts,
+    review: ModelReview | None = None,
+) -> Evaluation:
     """Check a text against the rules a context manifest selected, from their stored data.
 
-    A prohibited phrase or missing exact wording FAILs the rule. Otherwise a deterministic rule
-    that had something to check PASSes, and every other rule is UNABLE_TO_ASSESS: a semantic rule
-    needs the model, and a rule with nothing to check or no stored row needs a person.
+    A prohibited phrase or missing exact wording FAILs the rule, whatever the model says. A
+    deterministic rule that had something to check otherwise PASSes. A semantic rule takes the
+    model's verified answer from `review`; without one it is UNABLE_TO_ASSESS, as is a rule with
+    nothing to check or no stored row.
     """
     hits: dict[str, list[Hit]] = {}
     unassessed: dict[str, str] = {}
+    not_applicable: dict[str, str] = {}
     for rule in rules:
-        outcome = _check_graph_rule(rule, text, facts)
+        outcome = _check_graph_rule(rule, text, facts, review)
         if isinstance(outcome, str):
             unassessed[rule.rule_id] = outcome
+        elif isinstance(outcome, _NotApplicable):
+            not_applicable[rule.rule_id] = outcome.reason
         else:
             hits[rule.rule_id] = outcome
     return summarise(
-        {rule.rule_id: rule for rule in rules}, hits, extra_gaps=[], unassessed=unassessed
+        {rule.rule_id: rule for rule in rules},
+        hits,
+        extra_gaps=[SIMULATED_REVIEW_GAP] if review is not None and review.is_simulated else [],
+        unassessed=unassessed,
+        not_applicable=not_applicable,
     )
 
 
-def _check_graph_rule(rule: GraphRule, text: str, facts: StudyFacts) -> list[Hit] | str:
-    # The rule's hits (empty means checked and clean), or the reason it can't be assessed.
+def rules_for_model(text: str, rules: Sequence[GraphRule], facts: StudyFacts) -> list[GraphRule]:
+    # The semantic rules the code checks left open: no phrase or wording hit, row loaded.
+    return [rule for rule in rules if _check_graph_rule(rule, text, facts, None) == NEEDS_MEANING]
+
+
+def _check_graph_rule(
+    rule: GraphRule, text: str, facts: StudyFacts, review: ModelReview | None
+) -> list[Hit] | str | _NotApplicable:
+    # The rule's hits (empty means checked and clean), the reason it can't be assessed, or why
+    # it does not apply.
     content = rule.content
     if content is None:
         return RULE_NOT_LOADED
@@ -291,9 +332,37 @@ def _check_graph_rule(rule: GraphRule, text: str, facts: StudyFacts) -> list[Hit
     if hits:
         return hits
     if rule.check_type is CheckType.SEMANTIC:
-        return NEEDS_MEANING
+        return _model_result(rule, review)
     checked = bool(content.prohibited_phrases or content.exact_wording or fact_check)
     return [] if checked else NOT_CHECKED
+
+
+def _model_result(rule: GraphRule, review: ModelReview | None) -> list[Hit] | str | _NotApplicable:
+    if review is None:
+        return NEEDS_MEANING
+    answer = review.answers.get(rule.rule_id)
+    if answer is None:
+        return (
+            MODEL_CHECK_FAILED.format(failure=review.failure) if review.failure else NEEDS_MEANING
+        )
+    match answer.result:
+        case RuleResultValue.FAIL:
+            # Something missing has no span: one finding with the explanation alone.
+            return [
+                Hit(
+                    answer.explanation,
+                    span=TextSpan(start=finding.start, end=finding.end),
+                    excerpt=finding.excerpt,
+                    correction=finding.suggested_correction,
+                )
+                for finding in answer.findings
+            ] or [Hit(answer.explanation)]
+        case RuleResultValue.PASS:
+            return []
+        case RuleResultValue.NOT_APPLICABLE:
+            return _NotApplicable(f"{answer.explanation} (exception {answer.exception_node_key})")
+        case RuleResultValue.UNABLE_TO_ASSESS:
+            return answer.explanation
 
 
 def _normalise(value: str) -> str:
@@ -333,29 +402,32 @@ def summarise(
     extra_gaps: list[CoverageGap],
     regions: Mapping[str, ImageRegion] | None = None,
     unassessed: Mapping[str, str] | None = None,
+    not_applicable: Mapping[str, str] | None = None,
 ) -> Evaluation:
     """Turn per-rule hits into rule results, gates, findings and an outcome.
 
     A rule with hits FAILs, a checked rule without hits PASSes, and a rule with no check is
     UNABLE_TO_ASSESS (reported as a coverage gap). `unassessed` gives the reason for such a rule
-    (default NOT_CHECKED).
+    (default NOT_CHECKED); a rule in `not_applicable` is NOT_APPLICABLE with that reason.
     """
     reasons = unassessed or {}
+    exempt = not_applicable or {}
     findings = [
         _finding(rules[rule_id], hit, None if regions is None else regions.get(rule_id))
         for rule_id, rule_hits in hits.items()
         for hit in rule_hits
     ]
-    results = {rule_id: _result(rule_id, hits) for rule_id in rules}
+    results = {
+        rule_id: RuleResultValue.NOT_APPLICABLE if rule_id in exempt else _result(rule_id, hits)
+        for rule_id in rules
+    }
     rule_results = [
         RuleResult(
             rule_id=rule.rule_id,
             rule_version=rule.rule_version,
             mandatory=rule.mandatory,
             result=results[rule.rule_id],
-            reason=reasons.get(rule.rule_id, NOT_CHECKED)
-            if results[rule.rule_id] is RuleResultValue.UNABLE_TO_ASSESS
-            else None,
+            reason=_reason(results[rule.rule_id], rule.rule_id, reasons, exempt),
         )
         for rule in rules.values()
     ]
@@ -395,6 +467,16 @@ def outcome_of(results: Iterable[tuple[RuleInfo, RuleResultValue]]) -> Outcome:
         ):
             outcome = Outcome.NEEDS_REVIEW
     return outcome
+
+
+def _reason(
+    result: RuleResultValue, rule_id: str, unassessed: Mapping[str, str], exempt: Mapping[str, str]
+) -> str | None:
+    if result is RuleResultValue.UNABLE_TO_ASSESS:
+        return unassessed.get(rule_id, NOT_CHECKED)
+    if result is RuleResultValue.NOT_APPLICABLE:
+        return exempt[rule_id]
+    return None
 
 
 def _result(rule_id: str, hits: Mapping[str, list[Hit]]) -> RuleResultValue:
