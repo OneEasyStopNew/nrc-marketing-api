@@ -117,6 +117,24 @@ class PolicySourceUploadNotReadyError(ConflictError):
     default_message = "This upload has not passed its checks yet, so it cannot become a source."
 
 
+class PolicyBundleStateError(ConflictError):
+    # details.state: the bundle's lifecycle state; details.allowed: the states the command needs.
+    code = "POLICY_BUNDLE_STATE"
+    default_message = "The policy bundle is not in a state that allows this."
+
+
+class PolicyBundleHasIssuesError(ConflictError):
+    # details.issues: [{code, subject, message}] from the bundle checks. Fix them, then retry.
+    code = "POLICY_BUNDLE_HAS_ISSUES"
+    default_message = "The policy bundle has open issues and cannot be approved."
+
+
+class PolicyItemInvalidError(ConflictError):
+    # A graph change the bundle cannot take, e.g. approving an edge without provenance.
+    code = "POLICY_ITEM_INVALID"
+    default_message = "This change cannot be applied to the policy bundle."
+
+
 class UploadNotAcceptedError(AppError):
     # The declared file breaks a configured limit. details.field names the field; the limits
     # are in GET /assets/upload-limits.
