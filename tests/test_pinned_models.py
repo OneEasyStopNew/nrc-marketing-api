@@ -5,6 +5,7 @@ import hashlib
 import json
 from collections.abc import Iterator
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -30,6 +31,7 @@ SOUL = "higgsfield-ai/soul/v2/standard"
 STUDIO = "marketing-studio/image"
 IDEOGRAM = "ideogram/v4.0"
 MODELS = "/v1/marketing/generation-models"
+EXAMPLES = Path(__file__).resolve().parents[1] / "contracts" / "examples"
 # Fake credentials: every provider call here goes to an httpx.MockTransport.
 KEY_ID = "kid-test-123"
 KEY_SECRET = "ksecret-test-456"  # noqa: S105
@@ -403,6 +405,19 @@ async def test_the_model_list_carries_labels_and_estimated_prices(
         assert item["price_is_fixed"] is pinned.price_is_fixed
     assert models[STUDIO]["price_is_fixed"] is False
     assert models[SOUL]["price_is_fixed"] is True
+
+
+@pytest.mark.usefixtures("three_models")
+async def test_the_published_model_list_example_is_what_the_api_returns(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    # The frontend mocks from contracts/examples/f24.json, so it must match the real response,
+    # ordering included (aspect ratios sort as strings: "16:9" comes before "1:1").
+    example = json.loads((EXAMPLES / "f24.json").read_text(encoding="utf-8"))
+
+    response = await client.get(MODELS, headers=auth("creator-a", world.a.tenant_id))
+
+    assert response.json() == example["generation_models"]["body"]
 
 
 def test_every_pinned_model_has_a_label_and_a_positive_price_estimate() -> None:

@@ -11,8 +11,8 @@
           "is_default": true,
           "text_in_image": false,
           "aspect_ratios": [
-            "1:1",
             "16:9",
+            "1:1",
             "2:3",
             "3:2",
             "3:4",
@@ -30,8 +30,8 @@
           "is_default": false,
           "text_in_image": false,
           "aspect_ratios": [
-            "1:1",
             "16:9",
+            "1:1",
             "3:4",
             "4:3",
             "9:16"
