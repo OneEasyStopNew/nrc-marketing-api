@@ -1,6 +1,7 @@
 # The reviewed sample bundle (NRC-4 evidence, README "Policy bundles") must stay clean: it is the
 # file a reviewer imports to walk a bundle from review to ACTIVE.
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.models.enums import PolicyLanguage, WordingKind
@@ -9,6 +10,13 @@ from scripts.import_policy_graph import SYNTHETIC_GRAPH_PATH, import_policy_grap
 from tests.conftest import World, owner_session
 
 SAMPLE_BUNDLE_PATH = SYNTHETIC_GRAPH_PATH.with_name("synthetic_sample_bundle.json")
+
+
+@pytest.fixture
+def seed_graph() -> bool:
+    # These tests count or write their own sources, graph rows and wordings in tenant A, so its
+    # bundle starts without NRC-5's synthetic graph.
+    return False
 
 
 async def test_the_sample_bundle_passes_every_check(

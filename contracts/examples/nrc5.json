@@ -34,6 +34,7 @@
               "image"
             ],
             "channels": [],
+            "post_formats": [],
             "languages": [],
             "audiences": [],
             "jurisdictions": [],
@@ -81,6 +82,7 @@
               "image"
             ],
             "channels": [],
+            "post_formats": [],
             "languages": [],
             "audiences": [],
             "jurisdictions": [],
@@ -110,6 +112,7 @@
               "applicability": {
                 "input_kinds": [],
                 "channels": [],
+                "post_formats": [],
                 "languages": [],
                 "audiences": [],
                 "jurisdictions": [],
@@ -136,6 +139,7 @@
               "text"
             ],
             "channels": [],
+            "post_formats": [],
             "languages": [],
             "audiences": [],
             "jurisdictions": [],
@@ -177,6 +181,7 @@
               "text"
             ],
             "channels": [],
+            "post_formats": [],
             "languages": [],
             "audiences": [],
             "jurisdictions": [],
@@ -205,6 +210,7 @@
     "schema": "ValidationContextRead",
     "body": {
       "validation_run_id": "b7e3d1f4-2a6c-4d8e-9f1b-3c5a7e9d2b08",
+      "manifest_sha256": "3f2a9c1e7b4d6058a1e9c3b7d5f20486e1c9a7b3d5f2e08c4a6b1d9e7f3c5a20",
       "policy_bundle_id": "a1d4c7e2-8b3f-4e6a-9c5d-2f7b1e8a4c06",
       "policy_bundle_version": 1,
       "is_synthetic": true,
@@ -212,6 +218,7 @@
       "study_snapshot_version": 1,
       "input_kind": "brief",
       "channel": "facebook",
+      "post_format": "feed_image",
       "language": "en",
       "audience": null,
       "jurisdiction": null,

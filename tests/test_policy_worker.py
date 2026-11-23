@@ -33,6 +33,13 @@ BUCKET = "nrc-test-policy"
 MARKDOWN = b"# [SYNTHETIC] Claims\n\nFirst clause.\n\nSecond  clause, kept verbatim.\n"
 
 
+@pytest.fixture
+def seed_graph() -> bool:
+    # These tests count or write their own sources, graph rows and wordings in tenant A, so its
+    # bundle starts without NRC-5's synthetic graph.
+    return False
+
+
 class FakeStorage:
     # The policy storage the worker reads through: bytes by key, with an outage switch.
 

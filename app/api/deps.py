@@ -67,12 +67,20 @@ PolicySourceStorageDep = Annotated[ObjectStorage, Depends(get_policy_source_stor
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
-def get_context_provider(settings: SettingsDep) -> PolicyContextProvider:
+async def get_context_provider(settings: SettingsDep) -> PolicyContextProvider:
     # No embedder: a request never calls a model provider, so search is full-text only.
     return AuroraPolicyContextProvider(settings)
 
 
 ContextProviderDep = Annotated[PolicyContextProvider, Depends(get_context_provider)]
+
+
+async def get_context_timeout(settings: SettingsDep) -> float:
+    # Its own dependency, so tests can shorten the deadline without other settings.
+    return settings.policy_context_timeout_seconds
+
+
+ContextTimeoutDep = Annotated[float, Depends(get_context_timeout)]
 
 
 def require_storage(storage: ObjectStorage | None) -> ObjectStorage:

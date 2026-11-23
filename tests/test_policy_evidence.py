@@ -1,5 +1,6 @@
 # Policy evidence (NRC-5): the context stored by each validation run, and the evidence API.
 
+import json
 import re
 from typing import Any
 from uuid import UUID, uuid4
@@ -11,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.models import ContextManifestRecord, ValidationRun
 from app.models.enums import BundleLifecycleState, Language, PolicyLanguage
 from app.services.policy_context.manifest import MAX_STATEMENT_CHARS
+from app.services.policy_context.provider import manifest_sha256
 from app.services.validations import policy_language
-from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
+from scripts.import_policy_graph import load_synthetic_graph
 from scripts.seed_demo import demo_policy_rules
 from tests.conftest import (
     AuthHeaders,
@@ -20,7 +22,6 @@ from tests.conftest import (
     add_policy_bundle,
     as_tenant_owner,
     count_rows,
-    owner_session,
 )
 
 API = "/v1/marketing"
@@ -32,13 +33,16 @@ BRIEF_RULES = ["REC-01", "REC-02", "REC-03", "REC-04", "REC-05", "REC-08"]
 GAP_START = "Policy evidence was not gathered for this run"
 
 
+async def _without_graph(connection: AsyncConnection, world: World) -> UUID:
+    # A newer active bundle for tenant A with JSONB rules only (an older kind of bundle): no graph
+    # to retrieve from. The seeded bundle has one.
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        return await add_policy_bundle(connection, world.a.tenant_id, 2, rules=demo_policy_rules())
+
+
 async def _with_graph(connection: AsyncConnection, world: World) -> UUID:
-    # Tenant A's active bundle with the synthetic rulebook imported into its graph.
+    # Tenant A's active bundle: seed_tenant imports the synthetic rulebook into its graph.
     assert world.a.policy_bundle_id is not None
-    async with owner_session(connection, world.a.tenant_id) as db:
-        await import_policy_graph(
-            db, world.a.tenant_id, world.a.policy_bundle_id, load_synthetic_graph()
-        )
     return world.a.policy_bundle_id
 
 
@@ -95,13 +99,15 @@ async def _get(
     return await client.get(f"{API}{path}", headers=auth(sub, tenant_id))
 
 
-async def _run(connection: AsyncConnection, run_id: str) -> Row[UUID, UUID | None]:
+async def _run(connection: AsyncConnection, run_id: str) -> Row[UUID, UUID | None, str | None]:
     # The stored run's id and context link (a Core query: the connection has no ORM session).
     return (
         await connection.execute(
-            select(ValidationRun.id, ValidationRun.context_manifest_id).where(
-                ValidationRun.id == UUID(run_id)
-            )
+            select(
+                ValidationRun.id,
+                ValidationRun.context_manifest_id,
+                ValidationRun.context_manifest_sha256,
+            ).where(ValidationRun.id == UUID(run_id))
         )
     ).one()
 
@@ -123,11 +129,8 @@ async def test_brief_run_stores_lexical_context(
     assert context["validation_run_id"] == run_id
     assert context["policy_bundle_id"] == str(world.a.policy_bundle_id)
     assert context["study_snapshot_id"] == str(world.a.snapshot_id)
-    assert (context["input_kind"], context["channel"], context["language"]) == (
-        "brief",
-        "facebook",
-        "en",
-    )
+    scope = ("input_kind", "channel", "post_format", "language")
+    assert tuple(context[name] for name in scope) == ("brief", "facebook", "feed_image", "en")
     # Inside a request there's no embedder: full-text only, and the manifest says so.
     assert context["retrieval_mode"] == "lexical_only"
     assert context["embedding_model_id"] is None
@@ -151,7 +154,11 @@ async def test_context_shows_no_internal_ids_or_statement_text(
     # The only ids are the run's, the bundle's and the snapshot's (all public elsewhere).
     public = {run_id, str(world.a.policy_bundle_id), str(world.a.snapshot_id)}
     assert set(UUID_TEXT.findall(body)) == public
-    assert "sha256" not in body
+    # No statement hashes: the one hash is the whole manifest's, which also covers internal node
+    # ids the client never sees, so it can't be used to guess the text.
+    rest = json.loads(body)
+    rest.pop("manifest_sha256")
+    assert "sha256" not in json.dumps(rest)
     assert CLEAN_PROMPT not in body
 
 
@@ -221,15 +228,15 @@ async def test_context_does_not_change_the_outcome(
 async def test_bundle_without_graph_stores_run_with_gap(
     client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
 ) -> None:
-    # Tenant A's seeded bundle has JSONB rules only (an older bundle): no graph to retrieve from.
+    await _without_graph(connection, world)
     creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
 
     run_id = await _validate(client, auth, world, creative)
 
     assert (await _run(connection, run_id)).context_manifest_id is None
     run = (await _get(client, auth, f"/validations/{run_id}", world.a.tenant_id)).json()
-    # Unchanged: the context is evidence only, so its absence doesn't change the outcome yet.
-    assert run["outcome"] == "PASS"
+    # Without its policy context a clean brief can't pass: it needs a human decision.
+    assert run["outcome"] == "NEEDS_REVIEW"
     gaps = [gap["reason"] for gap in run["coverage_gaps"]]
     assert any(reason.startswith(GAP_START) and "(GRAPH_MISSING)" in reason for reason in gaps)
     response = await _get(client, auth, f"/validations/{run_id}/context", world.a.tenant_id)
@@ -266,6 +273,29 @@ async def test_identical_runs_share_one_manifest(
     assert first.id != second.id
     assert first.context_manifest_id is not None
     assert first.context_manifest_id == second.context_manifest_id
+    assert first.context_manifest_sha256 is not None
+    assert first.context_manifest_sha256 == second.context_manifest_sha256
+
+
+async def test_context_shows_the_hash_the_run_recorded(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+) -> None:
+    # Anyone holding the run can check the manifest JSON it used has not changed since.
+    await _with_graph(connection, world)
+    creative = await _creative(client, auth, world.a.tenant_id, world.a.study_id)
+    run_id = await _validate(client, auth, world, creative)
+
+    context = (await _get(client, auth, f"/validations/{run_id}/context", world.a.tenant_id)).json()
+
+    run = await _run(connection, run_id)
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        stored = await connection.scalar(
+            select(ContextManifestRecord.manifest).where(
+                ContextManifestRecord.id == run.context_manifest_id
+            )
+        )
+    assert stored is not None
+    assert context["manifest_sha256"] == run.context_manifest_sha256 == manifest_sha256(stored)
 
 
 async def test_context_of_another_tenants_run_is_not_found(
@@ -388,11 +418,11 @@ def test_graph_rule_ids_match_the_stored_rules() -> None:
 
 
 async def test_rules_of_a_bundle_without_graph_are_unavailable(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
 ) -> None:
-    response = await _get(
-        client, auth, f"/policy-bundles/{world.a.policy_bundle_id}/rules", world.a.tenant_id
-    )
+    bundle_id = await _without_graph(connection, world)
+
+    response = await _get(client, auth, f"/policy-bundles/{bundle_id}/rules", world.a.tenant_id)
 
     assert response.status_code == 409
     assert response.json()["code"] == "POLICY_CONTEXT_UNAVAILABLE"

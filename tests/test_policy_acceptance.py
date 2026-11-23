@@ -82,6 +82,13 @@ _EXPIRE_LEASE = {
 # ---- Fixtures (no test module imports another)
 
 
+@pytest.fixture
+def seed_graph() -> bool:
+    # These tests count or write their own sources, graph rows and wordings in tenant A, so its
+    # bundle starts without NRC-5's synthetic graph.
+    return False
+
+
 @pytest.fixture(autouse=True)
 def local_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     # Local-only values that open the SeaweedFS container, not AWS.

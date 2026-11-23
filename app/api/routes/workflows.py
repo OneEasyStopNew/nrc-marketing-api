@@ -9,6 +9,7 @@ from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
     ContextProviderDep,
+    ContextTimeoutDep,
     CreativeReader,
     DbSession,
     DemoStubsDep,
@@ -52,7 +53,9 @@ _VALIDATIONS: dict[int | str, dict[str, Any]] = {
     "validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until "
     "SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run. Each "
     "brief or caption run also stores the policy context it was checked against (see "
-    "GET /validations/{validation_run_id}/context); it doesn't change the outcome yet.",
+    "GET /validations/{validation_run_id}/context). If that context can't be gathered (each "
+    "of its database queries has a time limit), the run is stored as NEEDS_REVIEW (or FAIL), "
+    "never PASS, with a coverage gap.",
     responses=_VALIDATIONS,
 )
 async def create_validation(
@@ -62,6 +65,7 @@ async def create_validation(
     idempotency_key: IdempotencyKey,
     stubs: DemoStubsDep,
     context_provider: ContextProviderDep,
+    context_timeout: ContextTimeoutDep,
     response: Response,
 ) -> ValidationAccepted:
     if body.input_kind is ValidationInputKind.IMAGE:
@@ -69,7 +73,7 @@ async def create_validation(
         accepted, replayed = await service.start_validation(db, ctx, body, idempotency_key)
     else:
         accepted, replayed = await validations.create_validation(
-            db, ctx, body, idempotency_key, context_provider
+            db, ctx, body, idempotency_key, context_provider, context_timeout
         )
     if replayed:
         response.headers["Idempotent-Replayed"] = "true"

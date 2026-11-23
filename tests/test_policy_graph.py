@@ -58,6 +58,12 @@ MODEL_ID = "synthetic-embedding-model"
 SYNTHETIC_CHECKSUM = "a" * 64
 
 
+@pytest.fixture
+def seed_graph() -> bool:
+    # These tests write their own graph rows into tenant A's bundle, so it starts without one.
+    return False
+
+
 @asynccontextmanager
 async def rejected(connection: AsyncConnection, match: str) -> AsyncIterator[None]:
     # The savepoint keeps the test's transaction usable after the expected database error.

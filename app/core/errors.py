@@ -19,6 +19,12 @@ class AppError(Exception):
         super().__init__(self.message)
 
 
+class TenantNotBoundError(AppError):
+    # A programming error: tenant-scoped code ran on a session without bind_tenant. A 500 with the
+    # generic message; never served to a client as anything more specific.
+    pass
+
+
 class AuthenticationError(AppError):
     code = "UNAUTHENTICATED"
     default_message = "Authentication is required."
@@ -79,9 +85,8 @@ class NoActivePolicyError(ConflictError):
 
 
 class PolicyContextUnavailableError(ConflictError):
-    # details.reason: BUNDLE_NOT_FOUND, BUNDLE_NOT_USABLE, GRAPH_MISSING, SNAPSHOT_NOT_FOUND, or
-    # (with an embedder) INDEX_NOT_READY or INDEX_STALE. Callers record it as a coverage gap; it
-    # must never turn into a PASS.
+    # details.reason is a PolicyContextReason (app/models/enums.py). Callers record it as a
+    # coverage gap; it must never turn into a PASS.
     code = "POLICY_CONTEXT_UNAVAILABLE"
     default_message = "The policy context for this check could not be built."
 

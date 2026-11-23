@@ -46,7 +46,9 @@ from app.models import PolicyBundle, PolicyNode, PolicyRuleRecord, StudySnapshot
 from app.models.enums import (
     BundleLifecycleState,
     Channel,
+    PolicyContextReason,
     PolicyLanguage,
+    PostFormat,
     RetrievalMode,
     ValidationInputKind,
 )
@@ -69,7 +71,9 @@ CHARS_PER_TOKEN: Final = 4
 Mode = Literal["auto", "full", "lexical"]
 # Unavailable reasons that building the index fixes; the others (no graph, bundle not usable,
 # no snapshot) need a different bundle or snapshot.
-INDEX_REASONS: Final = frozenset({"INDEX_NOT_READY", "INDEX_STALE"})
+INDEX_REASONS: Final = frozenset(
+    {PolicyContextReason.INDEX_NOT_READY, PolicyContextReason.INDEX_STALE}
+)
 INDEX_HINT: Final = "; build the index first with scripts.build_policy_index"
 # Below this many timed cases, nearest-rank p95 is simply the slowest case.
 MIN_CASES_FOR_P95: Final = 20
@@ -87,6 +91,8 @@ class EvalCase(BaseModel):
     language: PolicyLanguage
     input_kind: ValidationInputKind
     channel: Channel
+    # Optional: rules restricted by post format are UNRESOLVED (still selected) without it.
+    post_format: PostFormat | None = None
     text: str = Field(min_length=1, max_length=MAX_STATEMENT_CHARS)
     required_rules: tuple[str, ...]
     relevant_evidence: tuple[str, ...] = ()
@@ -320,6 +326,7 @@ async def evaluate(
             scope=ContextScope(
                 input_kind=case.input_kind,
                 channel=case.channel,
+                post_format=case.post_format,
                 language=case.language,
                 evaluated_at=evaluated_at,
             ),
@@ -327,7 +334,7 @@ async def evaluate(
         )
         started = time.perf_counter()
         try:
-            stored = await provider.build(db, tenant_id, request, actor="eval_retrieval")
+            stored = await provider.build(db, request, actor="eval_retrieval")
         except PolicyContextUnavailableError as error:
             reason = str((error.details or {}).get("reason", error.code))
             hint = INDEX_HINT if reason in INDEX_REASONS else ""

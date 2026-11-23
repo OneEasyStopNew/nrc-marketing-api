@@ -204,6 +204,7 @@ class PolicyNode(_ReviewColumns, Base):
     # Applicability of RULE and EXCEPTION nodes; an empty array means no restriction.
     input_kinds: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=_EMPTY_ARRAY)
     channels: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=_EMPTY_ARRAY)
+    post_formats: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=_EMPTY_ARRAY)
     languages: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=_EMPTY_ARRAY)
     audiences: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=_EMPTY_ARRAY)
     jurisdictions: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=_EMPTY_ARRAY)

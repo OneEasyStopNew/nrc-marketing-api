@@ -6,12 +6,12 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert, select, text
+from sqlalchemy import event, insert, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.config import get_settings
-from app.core.errors import PolicyContextUnavailableError
+from app.core.errors import PolicyContextUnavailableError, TenantNotBoundError
 from app.db.session import bind_tenant
 from app.models import ContextManifestRecord, StudySnapshot
 from app.models.enums import (
@@ -20,6 +20,7 @@ from app.models.enums import (
     Language,
     PolicyLanguage,
     PolicyNodeType,
+    PostFormat,
     RecruitmentStatus,
     RetrievalMode,
     ValidationInputKind,
@@ -34,6 +35,7 @@ from app.services.policy_context import (
     StoredManifest,
 )
 from app.services.policy_context.manifest import Statement
+from app.services.policy_context.provider import manifest_sha256
 from app.services.policy_index import build_policy_index
 from app.services.providers.embeddings import (
     EmbeddingProvider,
@@ -48,7 +50,6 @@ from scripts.import_policy_graph import (
     RuleImport,
     SourceImport,
     import_policy_graph,
-    load_synthetic_graph,
 )
 from scripts.seed_demo import SYNTHETIC_FACTS
 from tests.conftest import (
@@ -71,11 +72,13 @@ def _scope(
     kind: ValidationInputKind = ValidationInputKind.TEXT,
     *,
     audience: str | None = None,
+    post_format: PostFormat | None = None,
     at: datetime = NOW,
 ) -> ContextScope:
     return ContextScope(
         input_kind=kind,
         channel=Channel.FACEBOOK,
+        post_format=post_format,
         language=PolicyLanguage.EN,
         audience=audience,
         evaluated_at=at,
@@ -109,18 +112,14 @@ async def _build(
     )
     async with app_session(connection) as db:
         await bind_tenant(db, tenant_id)
-        stored = await (provider or _provider()).build(db, tenant_id, request, actor="tester")
+        stored = await (provider or _provider()).build(db, request, actor="tester")
         await db.commit()
     return stored
 
 
 async def _synthetic(connection: AsyncConnection, world: World) -> tuple[UUID, UUID]:
-    # Tenant A's seeded bundle with the synthetic rulebook imported.
+    # Tenant A's seeded bundle: seed_tenant imports the synthetic rulebook into its graph.
     assert world.a.policy_bundle_id is not None
-    async with owner_session(connection, world.a.tenant_id) as db:
-        await import_policy_graph(
-            db, world.a.tenant_id, world.a.policy_bundle_id, load_synthetic_graph()
-        )
     return world.a.policy_bundle_id, world.a.snapshot_id
 
 
@@ -453,6 +452,31 @@ async def test_hitting_the_node_limit_is_recorded(
     assert _ids(manifest.required_rules) == ["R-1"]
 
 
+async def test_rule_for_another_post_format_is_dropped_and_unknown_format_flagged(
+    connection: AsyncConnection, world: World
+) -> None:
+    # A story-only rule doesn't apply to a feed image; with the format unknown it is kept.
+    graph = _graph(
+        [_rule_node("R-STORY", post_formats=["story_image"]), _rule_node("R-ALL")],
+        [_rule("R-STORY"), _rule("R-ALL")],
+        [],
+    )
+    bundle_id = await _custom(connection, world, graph)
+    tenant, snapshot = world.a.tenant_id, world.a.snapshot_id
+
+    feed = await _build(
+        connection, tenant, bundle_id, snapshot, _scope(post_format=PostFormat.FEED_IMAGE)
+    )
+    unknown = await _build(connection, tenant, bundle_id, snapshot)
+
+    assert _ids(feed.manifest.required_rules) == ["R-ALL"]
+    assert feed.manifest.missing_context == ()
+    assert _ids(unknown.manifest.required_rules) == ["R-ALL", "R-STORY"]
+    assert _codes(unknown.manifest) == [(MissingContextCode.APPLICABILITY_UNRESOLVED, "R-STORY")]
+    # The format is part of the cache key: the second request built its own manifest.
+    assert (unknown.reused, unknown.id != feed.id) == (False, True)
+
+
 async def test_rule_restricted_by_an_unknown_audience_is_kept_and_flagged(
     connection: AsyncConnection, world: World
 ) -> None:
@@ -604,10 +628,27 @@ async def test_ambiguous_supersedes_is_a_conflict_and_keeps_the_rules(
 async def test_bundle_without_a_graph_is_unavailable(
     connection: AsyncConnection, world: World
 ) -> None:
-    assert world.a.policy_bundle_id is not None
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        bundle_id = await add_policy_bundle(connection, world.a.tenant_id, 2)
     with pytest.raises(PolicyContextUnavailableError, match="could not be built") as raised:
-        await _build(connection, world.a.tenant_id, world.a.policy_bundle_id, world.a.snapshot_id)
+        await _build(connection, world.a.tenant_id, bundle_id, world.a.snapshot_id)
     assert raised.value.details == {"reason": "GRAPH_MISSING"}
+
+
+async def test_build_on_a_session_without_a_tenant_is_refused(
+    connection: AsyncConnection, world: World
+) -> None:
+    # The provider takes the tenant from the session only; an unbound one is a programming error,
+    # not an empty result.
+    assert world.a.policy_bundle_id is not None
+    request = ContextRequest(
+        policy_bundle_id=world.a.policy_bundle_id,
+        study_snapshot_id=world.a.snapshot_id,
+        scope=_scope(),
+    )
+    async with app_session(connection) as db:
+        with pytest.raises(TenantNotBoundError, match="Unexpected error"):
+            await _provider().build(db, request, actor="tester")
 
 
 async def test_retired_bundle_still_builds_for_reproduction(
@@ -675,8 +716,45 @@ async def test_same_request_reuses_the_stored_manifest(
     assert (first.reused, second.reused) == (False, True)
     assert second.id == first.id
     assert second.manifest == first.manifest
+    assert second.sha256 == first.sha256
     await bind_test_tenant(connection, world.a.tenant_id)
     assert await count_rows(connection, ContextManifestRecord) == 1
+
+
+async def test_stored_hash_matches_the_stored_json(
+    connection: AsyncConnection, world: World
+) -> None:
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+
+    stored = await _build(connection, world.a.tenant_id, bundle_id, snapshot_id)
+
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        row = (
+            await connection.execute(
+                select(ContextManifestRecord.manifest, ContextManifestRecord.content_sha256).where(
+                    ContextManifestRecord.id == stored.id
+                )
+            )
+        ).one()
+    assert row.content_sha256 == stored.sha256 == manifest_sha256(row.manifest)
+
+
+async def test_reused_manifest_without_a_stored_hash_is_hashed_from_its_json(
+    connection: AsyncConnection, world: World
+) -> None:
+    # A row stored before the hash column existed.
+    bundle_id, snapshot_id = await _synthetic(connection, world)
+    first = await _build(connection, world.a.tenant_id, bundle_id, snapshot_id)
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        await connection.execute(
+            update(ContextManifestRecord)
+            .where(ContextManifestRecord.id == first.id)
+            .values(content_sha256=None)
+        )
+
+    second = await _build(connection, world.a.tenant_id, bundle_id, snapshot_id)
+
+    assert (second.reused, second.sha256) == (True, first.sha256)
 
 
 async def test_any_changed_dependency_builds_a_new_manifest(
@@ -860,6 +938,61 @@ async def test_full_search_fuses_both_searches(connection: AsyncConnection, worl
     assert manifest.embedding_model_id == embedder.model_id
     assert _match(manifest, "CL-FDA-5").matches[0].found_by == ("lexical", "semantic")
     assert MissingContextCode.SEMANTIC_SEARCH_SKIPPED not in [code for code, _ in _codes(manifest)]
+
+
+async def test_all_statements_are_searched_in_one_query_per_search(
+    connection: AsyncConnection, world: World
+) -> None:
+    # Batched search gives each statement the same matches as searching it alone.
+    texts = ["Join us for free treatment", "better than other treatments", "Sunshine"]
+    embedder = _TestEmbedder()
+    bundle_id = await _indexed(connection, world, embedder)
+    searches: list[str] = []
+
+    def count(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        if "ts_rank" in statement or "<=>" in statement:
+            searches.append(statement)
+
+    event.listen(connection.sync_connection, "before_cursor_execute", count)
+    try:
+        together = (
+            await _build(
+                connection,
+                world.a.tenant_id,
+                bundle_id,
+                world.a.snapshot_id,
+                provider=_provider(embedder),
+                statements=texts,
+            )
+        ).manifest
+    finally:
+        event.remove(connection.sync_connection, "before_cursor_execute", count)
+
+    assert len(searches) == 2
+    for index, statement in enumerate(texts):
+        alone = (
+            await _build(
+                connection,
+                world.a.tenant_id,
+                bundle_id,
+                world.a.snapshot_id,
+                provider=_provider(embedder),
+                statements=[statement],
+            )
+        ).manifest
+        expected = {
+            (item.node_key, match.found_by, match.rank)
+            for item in alone.evidence
+            for match in item.matches
+        }
+        actual = {
+            (item.node_key, match.found_by, match.rank)
+            for item in together.evidence
+            for match in item.matches
+            if match.statement_index == index
+        }
+        assert actual == expected
+    assert any(item.matches for item in together.evidence)
 
 
 async def test_paraphrase_is_found_by_vectors_only(

@@ -46,6 +46,13 @@ LEASE_FUNCTIONS = {
 }
 
 
+@pytest.fixture
+def seed_graph() -> bool:
+    # These tests count or write their own sources, graph rows and wordings in tenant A, so its
+    # bundle starts without NRC-5's synthetic graph.
+    return False
+
+
 def _migration() -> ModuleType:
     # The file name starts with a date, so it cannot be imported by name.
     path = next((ROOT / "migrations" / "versions").glob("*_8e41b6d0a7c3_policy_ingestion.py"))

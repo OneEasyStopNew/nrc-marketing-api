@@ -36,6 +36,13 @@ CLAUSE_TEXT = "[SYNTHETIC] Every post must say: This is a research study. Taking
 WORDING = "This is a research study. Taking part is voluntary."
 
 
+@pytest.fixture
+def seed_graph() -> bool:
+    # These tests count or write their own sources, graph rows and wordings in tenant A, so its
+    # bundle starts without NRC-5's synthetic graph.
+    return False
+
+
 @pytest.fixture(autouse=True)
 async def staff(connection: AsyncConnection, world: World) -> None:
     members = [

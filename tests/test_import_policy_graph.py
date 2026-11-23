@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -19,6 +20,7 @@ from app.models import (
 from app.models.enums import PolicyEdgeType, PolicyLanguage, PolicyNodeType
 from scripts.import_policy_graph import (
     EdgeImport,
+    NodeImport,
     PolicyGraphImport,
     PolicyGraphImportError,
     RuleImport,
@@ -39,6 +41,12 @@ from tests.conftest import (
 GRAPH_MODELS = (PolicySource, PolicySourceClause, PolicyNode, PolicyRuleRecord, PolicyEdge)
 # Sources, clauses, nodes, rules, edges in the synthetic rulebook.
 EXPECTED_COUNTS = (1, 8, 21, 9, 15)
+
+
+@pytest.fixture
+def seed_graph() -> bool:
+    # These tests write their own graph rows into tenant A's bundle, so it starts without one.
+    return False
 
 
 def _bundle_of(world: World) -> UUID:
@@ -356,6 +364,74 @@ async def test_different_graph_for_a_bundle_that_has_one_is_rejected(
         with pytest.raises(PolicyGraphImportError, match="already has a different graph"):
             await import_policy_graph(db, tenant_id, bundle_id, changed)
         assert await _counts(connection) == EXPECTED_COUNTS
+
+
+def _change_edge(graph: PolicyGraphImport) -> PolicyGraphImport:
+    first, *rest = graph.edges
+    return graph.model_copy(
+        update={"edges": [first.model_copy(update={"approved": not first.approved}), *rest]}
+    )
+
+
+def _change_node(graph: PolicyGraphImport) -> PolicyGraphImport:
+    first, *rest = graph.nodes
+    return graph.model_copy(
+        update={"nodes": [first.model_copy(update={"post_formats": ["story_image"]}), *rest]}
+    )
+
+
+def _change_rule(graph: PolicyGraphImport) -> PolicyGraphImport:
+    first, *rest = graph.rules
+    title = first.title + " (changed)"
+    return graph.model_copy(update={"rules": [first.model_copy(update={"title": title}), *rest]})
+
+
+def _change_effective_date(graph: PolicyGraphImport) -> PolicyGraphImport:
+    first, *rest = graph.nodes
+    start = datetime(2020, 1, 1, tzinfo=UTC)
+    return graph.model_copy(
+        update={"nodes": [first.model_copy(update={"effective_from": start}), *rest]}
+    )
+
+
+@pytest.mark.parametrize(
+    "change", [_change_edge, _change_node, _change_rule, _change_effective_date]
+)
+async def test_a_file_that_changes_any_imported_field_is_rejected_not_skipped(
+    connection: AsyncConnection,
+    world: World,
+    change: Callable[[PolicyGraphImport], PolicyGraphImport],
+) -> None:
+    tenant_id, bundle_id = world.a.tenant_id, _bundle_of(world)
+    async with owner_session(connection, tenant_id) as db:
+        await import_policy_graph(db, tenant_id, bundle_id, load_synthetic_graph())
+        with pytest.raises(PolicyGraphImportError, match="already has a different graph"):
+            await import_policy_graph(db, tenant_id, bundle_id, change(load_synthetic_graph()))
+
+
+async def test_same_instant_in_another_offset_is_the_same_file(
+    connection: AsyncConnection, world: World
+) -> None:
+    tenant_id, bundle_id = world.a.tenant_id, _bundle_of(world)
+    utc = _change_effective_date(load_synthetic_graph())
+    first, *rest = utc.nodes
+    assert first.effective_from is not None
+    shifted = first.effective_from.astimezone(timezone(timedelta(hours=5, minutes=30)))
+    other_offset = utc.model_copy(
+        update={"nodes": [first.model_copy(update={"effective_from": shifted}), *rest]}
+    )
+    async with owner_session(connection, tenant_id) as db:
+        await import_policy_graph(db, tenant_id, bundle_id, utc)
+        assert (await import_policy_graph(db, tenant_id, bundle_id, other_offset)).skipped
+
+
+@pytest.mark.parametrize("field", ["effective_from", "effective_to"])
+def test_effective_date_without_a_timezone_is_rejected(field: str) -> None:
+    node = {"node_key": "CL-1", "node_type": "CLAUSE", "text": "[SYNTHETIC] clause"}
+
+    NodeImport.model_validate({**node, field: "2026-12-01T00:00:00Z"})
+    with pytest.raises(ValueError, match="timezone info"):
+        NodeImport.model_validate({**node, field: "2026-12-01T00:00:00"})
 
 
 def test_rule_import_rejects_unknown_fields() -> None:

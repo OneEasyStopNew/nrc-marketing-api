@@ -24,7 +24,7 @@ from app.models import (
     PolicySourceClause,
     ValidationRun,
 )
-from app.models.enums import PolicyEdgeType, PolicyNodeType
+from app.models.enums import PolicyContextReason, PolicyEdgeType, PolicyNodeType
 from app.schemas.policy_evidence import (
     BundleRuleRead,
     ContextEvidenceRead,
@@ -98,7 +98,8 @@ async def get_bundle_rules(
     ).all()
     if not rules:
         raise PolicyContextUnavailableError(
-            "This policy bundle has no rules to show.", details={"reason": "GRAPH_MISSING"}
+            "This policy bundle has no rules to show.",
+            details={"reason": PolicyContextReason.GRAPH_MISSING},
         )
     linked = await _linked_nodes(db, ctx.tenant_id, bundle.id, [node.id for _, node in rules])
     # Sources are the clauses quoted by rule nodes and by the nodes rules are supported by.
@@ -130,7 +131,11 @@ async def get_validation_context(
     """
     row = (
         await db.execute(
-            select(ValidationRun.id, ValidationRun.context_manifest_id)
+            select(
+                ValidationRun.id,
+                ValidationRun.context_manifest_id,
+                ValidationRun.context_manifest_sha256,
+            )
             .join(
                 Creative,
                 and_(
@@ -154,14 +159,17 @@ async def get_validation_context(
     if stored is None:
         # The foreign key makes this impossible; never answer with someone else's context.
         raise ContextNotAvailableError()
-    return context_read(row.id, ContextManifest.model_validate(stored))
+    return context_read(row.id, ContextManifest.model_validate(stored), row.context_manifest_sha256)
 
 
-def context_read(validation_run_id: UUID, manifest: ContextManifest) -> ValidationContextRead:
+def context_read(
+    validation_run_id: UUID, manifest: ContextManifest, manifest_sha256: str | None
+) -> ValidationContextRead:
     # The stored manifest without statement hashes; field names match, so submodels map directly.
     scope = manifest.scope
     return ValidationContextRead(
         validation_run_id=validation_run_id,
+        manifest_sha256=manifest_sha256,
         policy_bundle_id=manifest.policy_bundle.id,
         policy_bundle_version=manifest.policy_bundle.version,
         is_synthetic=manifest.policy_bundle.is_synthetic,
@@ -169,6 +177,7 @@ def context_read(validation_run_id: UUID, manifest: ContextManifest) -> Validati
         study_snapshot_version=manifest.study_snapshot.version,
         input_kind=scope.input_kind,
         channel=scope.channel,
+        post_format=scope.post_format,
         language=scope.language,
         audience=scope.audience,
         jurisdiction=scope.jurisdiction,
@@ -322,6 +331,7 @@ def _applicability(node: PolicyNode) -> RuleApplicabilityRead:
     return RuleApplicabilityRead(
         input_kinds=list(node.input_kinds),
         channels=list(node.channels),
+        post_formats=list(node.post_formats),
         languages=list(node.languages),
         audiences=list(node.audiences),
         jurisdictions=list(node.jurisdictions),

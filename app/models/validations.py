@@ -52,6 +52,8 @@ class ValidationRun(Base):
     study_snapshot_version: Mapped[int]
     # The policy context gathered for this run (NRC-5): evidence only until NRC-7 judges with it.
     context_manifest_id: Mapped[UUID | None]
+    # The manifest's content hash when the run used it, so later changes to its JSON show.
+    context_manifest_sha256: Mapped[str | None] = mapped_column(String(64))
     # gates, rule_results, findings and coverage_gaps; validated by the API schemas on read.
     result: Mapped[dict[str, object]] = mapped_column(JSONB)
     created_by: Mapped[str] = mapped_column(String(128))

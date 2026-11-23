@@ -41,6 +41,13 @@ from tests.conftest import (
 ADMIN = "policy-admin-a"
 
 
+@pytest.fixture
+def seed_graph() -> bool:
+    # These tests count or write their own sources, graph rows and wordings in tenant A, so its
+    # bundle starts without NRC-5's synthetic graph.
+    return False
+
+
 class SourceArgs(TypedDict):
     title: str
     source_ref: str
@@ -373,7 +380,12 @@ async def test_parallel_duplicate_registrations_make_one_source(
         results = await asyncio.gather(*(register_one(u) for u in uploads))
         async with AsyncSession(api, sync_session_class=TenantSession) as session:
             await bind_tenant(session, ctx.tenant_id)
-            rows = await session.scalar(select(func.count()).select_from(PolicySource))
+            # Only this file's sources: the shared committed tenant also has the synthetic graph's.
+            rows = await session.scalar(
+                select(func.count())
+                .select_from(PolicySource)
+                .where(PolicySource.checksum_sha256 == checksum)
+            )
     finally:
         await api.dispose()
 
