@@ -313,7 +313,8 @@ def list_generation_models(settings: Settings) -> GenerationModelList:
 
 def _choose_model(settings: Settings, requested: str | None) -> str | None:
     # The requested model, or the default; only enabled, pinned models. Never another model.
-    model = requested or settings.higgsfield_model
+    # Only a missing model means the default; "" is refused, never replaced.
+    model = settings.higgsfield_model if requested is None else requested
     if model is None:
         return None
     if model not in settings.enabled_image_models or model not in PINNED_MODELS:

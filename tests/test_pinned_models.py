@@ -1,6 +1,7 @@
 # Pinned generation models (F24, Vishnu's 17 Nov review): each enabled model sends only its
 # approved settings, the cost cap defaults to $0.09 and a job can only use an enabled model.
 
+import hashlib
 import json
 from collections.abc import Iterator
 from decimal import Decimal
@@ -11,6 +12,8 @@ import pytest
 from pydantic import SecretStr
 
 from app.core.config import Settings, get_settings
+from app.core.errors import GenerationRequestError
+from app.services.jobs import _choose_model
 from app.services.providers.base import (
     HIGGSFIELD_NAME,
     FetchedImage,
@@ -243,7 +246,9 @@ def three_models() -> Iterator[None]:
 async def _start(
     client: httpx.AsyncClient, auth: AuthHeaders, world: World, creative_id: str, model: str
 ) -> httpx.Response:
-    headers = auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": f"k-{model[:5]}-1"})
+    # Fixed length: the header needs at least 8 characters, whatever the model name.
+    key = f"job-{hashlib.sha256(model.encode()).hexdigest()[:12]}"
+    headers = auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": key})
     body = {
         "creative_id": creative_id,
         "creative_version": 1,
@@ -278,6 +283,39 @@ async def test_a_model_that_is_not_enabled_is_refused(
         "GENERATION_REQUEST_INVALID",
         "MODEL_NOT_ENABLED",
     )
+
+
+@pytest.mark.usefixtures("three_models")
+async def test_an_empty_model_is_refused_not_replaced_by_the_default(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    creative_id = await _creative(client, auth, world.a)
+
+    response = await _start(client, auth, world, creative_id, "")
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "VALIDATION_FAILED"
+    assert [field["loc"] for field in body["details"]["fields"]] == [["body", "model"]]
+
+
+@pytest.mark.usefixtures("three_models")
+async def test_a_blank_model_is_not_an_enabled_model(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    # Only exact enabled names pass, so whitespace needs no pattern of its own.
+    creative_id = await _creative(client, auth, world.a)
+
+    response = await _start(client, auth, world, creative_id, " ")
+
+    assert response.status_code == 422
+    assert response.json()["details"]["reason"] == "MODEL_NOT_ENABLED"
+
+
+def test_an_empty_model_name_never_falls_back_to_the_default() -> None:
+    # Only a missing model (None) means the default; the schema already refuses "".
+    with pytest.raises(GenerationRequestError, match="not available"):
+        _choose_model(settings(), "")
 
 
 @pytest.mark.usefixtures("three_models")

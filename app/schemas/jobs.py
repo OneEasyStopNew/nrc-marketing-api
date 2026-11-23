@@ -21,6 +21,8 @@ class CreativeJobCreate(RequestModel):
     kind: JobKind
     model: str | None = Field(
         default=None,
+        # Only exact enabled names pass (MODEL_NOT_ENABLED), so no pattern is needed here.
+        min_length=1,
         max_length=100,
         description="One of GET /generation-models; omitted means that list's default.",
     )
