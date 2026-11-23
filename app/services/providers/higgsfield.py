@@ -6,14 +6,17 @@ concepts/requests, concepts/idempotency, concepts/errors, concepts/rate-limits a
 The docs publish no per-model page; the model catalog lives in the account console. The
 only text-to-image request schema found is openapi.json "/higgsfield-ai/soul/standard"
 (prompt, num_images, resolution 2K|4K, aspect_ratio enum), while the quickstart example uses
-"higgsfield-ai/soul/v2/standard" with only a prompt. The model path is therefore configuration
-(HIGGSFIELD_MODEL), and the body sent is {"prompt", "aspect_ratio"} plus an optional resolution.
+"higgsfield-ai/soul/v2/standard" with only a prompt. The models a job may use are therefore
+configuration (HIGGSFIELD_MODEL, HIGGSFIELD_MODELS), each with approved settings in PINNED_MODELS
+(app/services/providers/pinned_models.py). The body sent is {"prompt", "aspect_ratio"} plus
+exactly that model's pinned params (F24); only an unpinned model probed by the smoke script's
+estimate gets HIGGSFIELD_RESOLUTION instead, and submit refuses it.
 
 Live run on 9 Nov 2026 with model "higgsfield-ai/soul/v2/standard": aspect_ratio 1:1 was
 accepted, and the status response carries no cost field, so the cost recorded for a job is its
-/estimate price. A free /estimate probe on 10 Nov 2026 gave the accepted aspect ratios and
-resolutions (SUPPORTED_ASPECT_RATIOS, HIGGSFIELD_RESOLUTION). The remaining TODO(NRC-10)
-markers are what a live account must still confirm.
+/estimate price. Free /estimate probes (10, 16 and 17 Nov 2026) gave each pinned model's
+accepted aspect ratios and prompt limit. The remaining TODO(NRC-10) markers are what a live
+account must still confirm.
 """
 
 import json
@@ -185,9 +188,9 @@ class HiggsfieldProvider:
         fetcher: OutputFetcher,
         allowed_output_hosts: frozenset[str],
         max_output_bytes: int,
-        # Live /estimate probe, 10 Nov 2026, higgsfield-ai/soul/v2/standard: aspect_ratio must be
-        # one of SUPPORTED_ASPECT_RATIOS, resolution one of 720p|1080p (else 400 "is not one of"),
-        # width/height are silently ignored. None omits resolution (model default).
+        # Sent only to a model without pinned settings (the smoke script's estimate probe); a
+        # pinned model always sends its own PINNED_MODELS params. Soul 2 takes 720p|1080p (else
+        # 400 "is not one of"); width/height are silently ignored. None omits resolution.
         resolution: str | None = None,
     ) -> None:
         key_id = api_key_id.get_secret_value()
@@ -478,8 +481,10 @@ def create_provider(
 ) -> HiggsfieldProvider:
     """The live provider, with its own API client and SSRF-safe output fetcher.
 
-    The worker calls this with settings only (connector.build_providers); the smoke script
-    picks the model and resolution. Close it with aclose().
+    The worker calls this once per enabled model (connector.build_providers), and each provider
+    sends that model's pinned settings. The smoke script may also pick an unpinned model and a
+    resolution to probe its estimate. With no model, HIGGSFIELD_MODEL is used. Close it with
+    aclose().
     """
     # Output downloads run under the worker's lease too.
     fetch_timeout = min(

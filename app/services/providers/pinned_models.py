@@ -86,10 +86,6 @@ PINNED_MODELS: Final[Mapping[str, PinnedModel]] = MappingProxyType(
         ),
     }
 )
-# Aspect ratios each pinned model accepts; any other ratio is a 400 from Higgsfield.
-SUPPORTED_ASPECT_RATIOS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
-    {model: pinned.aspect_ratios for model, pinned in PINNED_MODELS.items()}
-)
 
 
 def max_brief_chars(model: str) -> int:

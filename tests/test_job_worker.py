@@ -39,7 +39,7 @@ from app.services.providers.base import (
     ProviderUnavailableError,
 )
 from app.services.providers.higgsfield import HiggsfieldProvider, higgsfield_credentials
-from app.services.providers.pinned_models import SUPPORTED_ASPECT_RATIOS
+from app.services.providers.pinned_models import PINNED_MODELS
 from app.services.providers.simulator import SimulatedImageProvider, SimulatorScenario
 from app.workers import connector
 from app.workers.connector import (
@@ -91,8 +91,8 @@ async def _expire_leases(connection: AsyncConnection, world: World) -> None:
     )
 
 
-# A model with probed aspect ratios, so live-mode checks get past the model.
-PROBED_MODEL = next(iter(SUPPORTED_ASPECT_RATIOS))
+# A model with pinned settings, so live-mode checks get past the model.
+PROBED_MODEL = next(iter(PINNED_MODELS))
 
 
 class IdempotencyConflictError(ProviderOutcomeUnknownError):
