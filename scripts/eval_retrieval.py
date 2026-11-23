@@ -46,6 +46,7 @@ from app.models import PolicyBundle, PolicyNode, PolicyRuleRecord, StudySnapshot
 from app.models.enums import (
     BundleLifecycleState,
     Channel,
+    PolicyContextReason,
     PolicyLanguage,
     PostFormat,
     RetrievalMode,
@@ -70,7 +71,9 @@ CHARS_PER_TOKEN: Final = 4
 Mode = Literal["auto", "full", "lexical"]
 # Unavailable reasons that building the index fixes; the others (no graph, bundle not usable,
 # no snapshot) need a different bundle or snapshot.
-INDEX_REASONS: Final = frozenset({"INDEX_NOT_READY", "INDEX_STALE"})
+INDEX_REASONS: Final = frozenset(
+    {PolicyContextReason.INDEX_NOT_READY, PolicyContextReason.INDEX_STALE}
+)
 INDEX_HINT: Final = "; build the index first with scripts.build_policy_index"
 # Below this many timed cases, nearest-rank p95 is simply the slowest case.
 MIN_CASES_FOR_P95: Final = 20

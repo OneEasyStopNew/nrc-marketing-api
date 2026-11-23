@@ -35,6 +35,7 @@ from app.models.enums import (
     ExecutionState,
     Language,
     Outcome,
+    PolicyContextReason,
     PolicyLanguage,
     PostFormat,
     ValidationInputKind,
@@ -363,11 +364,13 @@ async def _gather_context(
     stored manifest.
     """
     language = policy_language(target.language)
+    # A PolicyContextReason; str, because the provider's reason arrives in the error's details.
+    reason: str
     if language is None:
-        reason = "LANGUAGE_NOT_SUPPORTED"
+        reason = PolicyContextReason.LANGUAGE_NOT_SUPPORTED
     elif len(text) > MAX_STATEMENT_CHARS:
         # Possible after NFC normalisation of a text at the length limit.
-        reason = "STATEMENT_TOO_LONG"
+        reason = PolicyContextReason.STATEMENT_TOO_LONG
     else:
         request = ContextRequest(
             policy_bundle_id=policy.policy_bundle_id,
@@ -397,16 +400,19 @@ async def _gather_context(
             # E.g. an older bundle without a graph.
             reason = str((error.details or {}).get("reason", error.code))
         except SQLAlchemyError as error:
-            if getattr(getattr(error, "orig", None), "sqlstate", None) == QUERY_CANCELED_SQLSTATE:
-                reason = "RETRIEVAL_TIMEOUT"
+            sqlstate = getattr(getattr(error, "orig", None), "sqlstate", None)
+            if sqlstate == QUERY_CANCELED_SQLSTATE:
+                reason = PolicyContextReason.RETRIEVAL_TIMEOUT
             else:
-                # The class name only: database errors can quote the statement's parameters.
-                reason = "RETRIEVAL_ERROR"
-                logger.error(
-                    "policy context failed tenant=%s bundle=%s error=%s",
+                reason = PolicyContextReason.RETRIEVAL_ERROR
+                # With the traceback, so the failing query can be found. The engine sets
+                # hide_parameters, so the error text carries the SQL but no parameter values
+                # (the post's text).
+                logger.exception(
+                    "policy context failed tenant=%s bundle=%s sqlstate=%s",
                     ctx.tenant_id,
                     policy.policy_bundle_id,
-                    type(error).__name__,
+                    sqlstate,
                 )
         else:
             return stored, []

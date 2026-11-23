@@ -137,6 +137,25 @@ class MissingContextCode(StrEnum):
     STATEMENTS_TRUNCATED = "STATEMENTS_TRUNCATED"
 
 
+class PolicyContextReason(StrEnum):
+    """Why no policy context was built. Sent as details.reason of POLICY_CONTEXT_UNAVAILABLE (409)
+    and in brackets in a validation run's coverage gap; the frontend branches on these values."""
+
+    # Raised by the context provider and the rules endpoint.
+    BUNDLE_NOT_FOUND = "BUNDLE_NOT_FOUND"
+    BUNDLE_NOT_USABLE = "BUNDLE_NOT_USABLE"
+    SNAPSHOT_NOT_FOUND = "SNAPSHOT_NOT_FOUND"
+    GRAPH_MISSING = "GRAPH_MISSING"
+    INDEX_NOT_READY = "INDEX_NOT_READY"
+    INDEX_STALE = "INDEX_STALE"
+    MANIFEST_STORE_FAILED = "MANIFEST_STORE_FAILED"
+    # Decided by the validation before or around the build.
+    LANGUAGE_NOT_SUPPORTED = "LANGUAGE_NOT_SUPPORTED"
+    STATEMENT_TOO_LONG = "STATEMENT_TOO_LONG"
+    RETRIEVAL_TIMEOUT = "RETRIEVAL_TIMEOUT"
+    RETRIEVAL_ERROR = "RETRIEVAL_ERROR"
+
+
 class CheckType(StrEnum):
     """What makes the final decision for a rule: code alone, or the model after a phrase check."""
 

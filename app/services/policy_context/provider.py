@@ -46,6 +46,7 @@ from app.models.enums import (
     Gate,
     IndexBuildState,
     MissingContextCode,
+    PolicyContextReason,
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
@@ -301,9 +302,11 @@ async def load_context(db: AsyncSession, request: ContextRequest) -> LoadedConte
         )
     ).one_or_none()
     if bundle_row is None:
-        raise _unavailable("BUNDLE_NOT_FOUND")
+        raise _unavailable(PolicyContextReason.BUNDLE_NOT_FOUND)
     if bundle_row.lifecycle_state not in USABLE_BUNDLE_STATES:
-        raise _unavailable("BUNDLE_NOT_USABLE", lifecycle_state=bundle_row.lifecycle_state)
+        raise _unavailable(
+            PolicyContextReason.BUNDLE_NOT_USABLE, lifecycle_state=bundle_row.lifecycle_state
+        )
     snapshot_row = (
         await db.execute(
             select(
@@ -315,12 +318,12 @@ async def load_context(db: AsyncSession, request: ContextRequest) -> LoadedConte
         )
     ).one_or_none()
     if snapshot_row is None:
-        raise _unavailable("SNAPSHOT_NOT_FOUND")
+        raise _unavailable(PolicyContextReason.SNAPSHOT_NOT_FOUND)
     nodes = await _load_nodes(db, bundle_row.id)
     rules = [rule for rule in await _load_rules(db, bundle_row.id) if rule.node_id in nodes]
     if not rules:
         # A legacy bundle without a graph (or with none approved): nothing can be selected.
-        raise _unavailable("GRAPH_MISSING")
+        raise _unavailable(PolicyContextReason.GRAPH_MISSING)
     return LoadedContext(
         bundle=BundleRef(
             id=bundle_row.id, version=bundle_row.version, is_synthetic=bundle_row.is_synthetic
@@ -661,15 +664,15 @@ async def _require_index(db: AsyncSession, loaded: LoadedContext, model_id: str)
         )
     ).one_or_none()
     if row is None:
-        raise _unavailable("INDEX_NOT_READY", embedding_model_id=model_id)
+        raise _unavailable(PolicyContextReason.INDEX_NOT_READY, embedding_model_id=model_id)
     # The index covers the approved searchable nodes, the same set the build embedded.
     indexed = [node for node in loaded.nodes.values() if node.node_type in SEARCHABLE_NODE_TYPES]
     checksum = index_content_checksum((node.id, node.text) for node in indexed)
     if row.node_count != len(indexed) or row.content_checksum != checksum:
-        raise _unavailable("INDEX_STALE", embedding_model_id=model_id)
+        raise _unavailable(PolicyContextReason.INDEX_STALE, embedding_model_id=model_id)
 
 
-def _unavailable(reason: str, **details: object) -> PolicyContextUnavailableError:
+def _unavailable(reason: PolicyContextReason, **details: object) -> PolicyContextUnavailableError:
     return PolicyContextUnavailableError(details={"reason": reason, **details})
 
 
@@ -819,5 +822,5 @@ async def _store(
     existing = await _find(db, key)
     if existing is None:
         # The conflicting row must exist and be visible to this tenant; anything else is a bug.
-        raise _unavailable("MANIFEST_STORE_FAILED")
+        raise _unavailable(PolicyContextReason.MANIFEST_STORE_FAILED)
     return existing

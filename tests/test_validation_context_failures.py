@@ -1,6 +1,7 @@
 # When policy context can't be gathered, a validation never passes (NRC-5): the run is stored,
 # with a coverage gap, as NEEDS_REVIEW (or FAIL, if the rule checks already failed it).
 
+import logging
 from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
@@ -100,6 +101,19 @@ async def test_database_error_makes_a_clean_brief_need_review(
         headers=auth("creator-a", world.a.tenant_id),
     )
     assert context.json()["code"] == "CONTEXT_NOT_AVAILABLE"
+
+
+@pytest.mark.parametrize("app_overrides", [BROKEN], indirect=True)
+async def test_database_error_is_logged_with_traceback_and_sqlstate(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.ERROR, logger="app.services.validations"):
+        await _validate(client, auth, world, CLEAN_PROMPT)
+
+    [record] = [r for r in caplog.records if r.getMessage().startswith("policy context failed")]
+    # 22012: division_by_zero, from BrokenProvider's query.
+    assert "sqlstate=22012" in record.getMessage()
+    assert record.exc_info is not None
 
 
 @pytest.mark.parametrize("app_overrides", [STALLED], indirect=True)

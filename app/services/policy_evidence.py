@@ -24,7 +24,7 @@ from app.models import (
     PolicySourceClause,
     ValidationRun,
 )
-from app.models.enums import PolicyEdgeType, PolicyNodeType
+from app.models.enums import PolicyContextReason, PolicyEdgeType, PolicyNodeType
 from app.schemas.policy_evidence import (
     BundleRuleRead,
     ContextEvidenceRead,
@@ -98,7 +98,8 @@ async def get_bundle_rules(
     ).all()
     if not rules:
         raise PolicyContextUnavailableError(
-            "This policy bundle has no rules to show.", details={"reason": "GRAPH_MISSING"}
+            "This policy bundle has no rules to show.",
+            details={"reason": PolicyContextReason.GRAPH_MISSING},
         )
     linked = await _linked_nodes(db, ctx.tenant_id, bundle.id, [node.id for _, node in rules])
     # Sources are the clauses quoted by rule nodes and by the nodes rules are supported by.

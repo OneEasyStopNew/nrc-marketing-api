@@ -59,6 +59,9 @@ def create_engine(settings: Settings, url: SecretStr | None = None) -> AsyncEngi
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
         pool_pre_ping=True,
+        # Database errors (and their logs) show the SQL but never the bound values, which can be
+        # post text or other customer content.
+        hide_parameters=True,
         # asyncpg: "timeout" bounds connecting, "command_timeout" bounds each statement.
         connect_args={
             "timeout": settings.db_timeout_seconds,
