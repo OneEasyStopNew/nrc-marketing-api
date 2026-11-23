@@ -9,8 +9,8 @@ All paths are under `/v1/marketing`, tag `policy`.
 1. Upload the policy file with `POST /policy-sources/uploads` (see `policy_uploads.json`) and
    poll the upload until `READY`.
 2. `POST /policy-sources` with `upload_id`, `title`, `source_ref`, `language`, `is_synthetic`.
-   `201` = new source, `200` = the same file was registered before (same source returned). Both
-   carry `Location`. Poll `GET /policy-sources/{id}` until `extraction_state` is `EXTRACTED`
+   `201` = new source, `200` = the same file was registered before (same source returned; if its
+   extraction had `FAILED`, it is queued again, which is how to retry). Both carry `Location`. Poll `GET /policy-sources/{id}` until `extraction_state` is `EXTRACTED`
    (or `FAILED`, see `extraction_error_code`), then `GET /policy-sources/{id}/clauses`.
 3. `POST /policy-bundles` (`name`, `source_ref`, `is_synthetic`, optional `based_on_bundle_id` to
    copy a bundle's graph and review into a new draft). The bundle starts as `DRAFT`.

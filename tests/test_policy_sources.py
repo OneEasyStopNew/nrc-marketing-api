@@ -12,7 +12,7 @@ from typing import TypedDict
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -154,6 +154,43 @@ async def test_the_same_upload_twice_returns_the_existing_source(
 
     assert (first_created, created) == (True, False)
     assert again.id == first.id
+    assert await count_sources(connection, world) == 1
+
+
+async def test_registering_a_failed_source_again_queues_its_extraction_again(
+    connection: AsyncConnection, world: World, db: AsyncSession
+) -> None:
+    # Otherwise the checksum would tie the file to a dead source: no way to retry after a fix.
+    checksum = hashlib.sha256(b"[SYNTHETIC] failed once").hexdigest()
+    first_upload = await add_policy_upload(connection, world.a.tenant_id, checksum=checksum)
+    second_upload = await add_policy_upload(connection, world.a.tenant_id, checksum=checksum)
+    first, _ = await register(db, world, first_upload)
+    await db.commit()
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        await connection.execute(
+            update(PolicySource)
+            .where(PolicySource.id == first.id)
+            .values(
+                extraction_state=SourceExtractionState.FAILED,
+                extraction_error_code="STORAGE_UNAVAILABLE",
+                available_at=None,
+                attempts=3,
+                failed_attempts=2,
+            )
+        )
+    db.expire_all()
+
+    again, created = await register(db, world, second_upload)
+    await db.commit()
+    await db.refresh(again)
+
+    assert (created, again.id) == (False, first.id)
+    assert again.extraction_state is SourceExtractionState.PENDING
+    assert (again.extraction_error_code, again.attempts, again.failed_attempts) == (None, 0, 0)
+    assert again.available_at is not None
+    # Read from the new upload (same bytes); the first registration's provenance stays.
+    assert (again.upload_id, again.storage_key) == (second_upload, f"policy/{second_upload}")
+    assert (again.title, again.created_by) == ("[SYNTHETIC] Policy source", ADMIN)
     assert await count_sources(connection, world) == 1
 
 

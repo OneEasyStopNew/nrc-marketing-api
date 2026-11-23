@@ -2978,7 +2978,7 @@
           "policy"
         ],
         "summary": "Register a READY policy upload as a policy source",
-        "description": "201 when a source was created, 200 with the existing source when the same file (checksum) or upload was registered before. Clauses are extracted in the background: poll the source until extraction_state is EXTRACTED or FAILED.",
+        "description": "201 when a source was created, 200 with the existing source when the same file (checksum) or upload was registered before; a source whose extraction FAILED is queued again. Clauses are extracted in the background: poll the source until extraction_state is EXTRACTED or FAILED.",
         "operationId": "register_policy_source",
         "security": [
           {

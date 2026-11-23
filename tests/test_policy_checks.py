@@ -383,6 +383,35 @@ def test_exact_wording_is_checked_against_the_clause_it_cites() -> None:
     assert graph.issues() == {(CheckCode.EXACT_WORDING_NOT_IN_SOURCE, "rule:REC-01")}
 
 
+def test_exact_wording_may_only_cite_a_clause_that_supports_its_rule() -> None:
+    # The other clause holds the very words, but it is not the rule's source.
+    graph = Graph()
+    other = uuid4()
+    graph.clause_texts[other] = CLAUSE_TEXT
+    graph.wordings[0] = replace(graph.wordings[0], source_clause_id=other)
+
+    assert graph.issues() == {(CheckCode.EXACT_WORDING_NOT_IN_SOURCE, "rule:REC-01")}
+
+
+def test_exact_wording_citing_its_supporting_clause_is_clean() -> None:
+    graph = Graph()
+    graph.wordings[0] = replace(graph.wordings[0], source_clause_id=graph.clause_id)
+
+    assert graph.issues() == set()
+
+
+def test_proposals_hanging_off_a_rejected_rule_do_not_block() -> None:
+    graph = Graph()
+    rejected = graph.rule("REC-02", "[SYNTHETIC] Something else.")
+    graph.nodes[-1] = rejected = replace(rejected, review_state=ReviewState.REJECTED)
+    graph.wording(
+        graph.rules[-1], WordingKind.PROHIBITED_PHRASE, "cure", state=ReviewState.PROPOSED
+    )
+    graph.edge(PolicyEdgeType.SUPPORTED_BY, rejected, graph.clause_node, ReviewState.PROPOSED)
+
+    assert graph.issues() == set()
+
+
 async def test_the_imported_synthetic_rulebook_reports_only_its_known_gap(
     connection: AsyncConnection, world: World
 ) -> None:

@@ -81,8 +81,9 @@ class NodeUpdate(RequestModel):
     audiences: list[Tag] | None = Field(default=None, max_length=20)
     jurisdictions: list[Tag] | None = Field(default=None, max_length=20)
     study_ids: list[UUID] | None = Field(default=None, max_length=100)
-    effective_from: datetime | None = None
-    effective_to: datetime | None = None
+    # Aware, as in NodeCreate: a naive time cannot be compared with the stored window.
+    effective_from: AwareDatetime | None = None
+    effective_to: AwareDatetime | None = None
     required_study_fact: Tag | None = None
 
 

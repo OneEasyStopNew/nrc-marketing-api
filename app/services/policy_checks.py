@@ -138,6 +138,9 @@ def check_unreviewed(
     snapshot: BundleSnapshot, languages: Collection[PolicyLanguage]
 ) -> list[Issue]:
     graph = _Graph(snapshot)
+    # Proposals hanging off a rejected node can never take effect; they don't block approval.
+    rejected = {node.id for node in snapshot.nodes if node.review_state is ReviewState.REJECTED}
+    rule_node = {rule.id: rule.node_id for rule in snapshot.rules}
     issues = [
         Issue(CheckCode.UNREVIEWED_ITEM, f"node:{node.key}", "Node has not been reviewed.")
         for node in snapshot.nodes
@@ -147,6 +150,8 @@ def check_unreviewed(
         Issue(CheckCode.UNREVIEWED_ITEM, graph.edge_subject(edge), "Edge has not been reviewed.")
         for edge in snapshot.edges
         if edge.review_state is ReviewState.PROPOSED
+        and edge.from_id not in rejected
+        and edge.to_id not in rejected
     ]
     issues += [
         Issue(
@@ -156,6 +161,7 @@ def check_unreviewed(
         )
         for w in snapshot.wordings
         if w.review_state is ReviewState.PROPOSED
+        and rule_node.get(w.rule_record_id) not in rejected
     ]
     return issues
 
@@ -409,14 +415,15 @@ def check_exact_wording(
         rule = rules.get(wording.rule_record_id)
         if wording.kind is not WordingKind.EXACT_WORDING or rule is None:
             continue
+        candidates = [
+            target.source_clause_id
+            for target in graph.targets(rule.node_id, PolicyEdgeType.SUPPORTED_BY)
+            if target.source_clause_id is not None and target.language is wording.language
+        ]
+        # A cited clause counts only when it supports the rule: any other clause in the tenant
+        # could hold the same words without being this rule's source.
         if wording.source_clause_id is not None:
-            candidates = [wording.source_clause_id]
-        else:
-            candidates = [
-                target.source_clause_id
-                for target in graph.targets(rule.node_id, PolicyEdgeType.SUPPORTED_BY)
-                if target.source_clause_id is not None and target.language is wording.language
-            ]
+            candidates = [c for c in candidates if c == wording.source_clause_id]
         needle = _normalised(wording.text)
         if not any(
             needle in _normalised(snapshot.clause_texts.get(clause_id, ""))

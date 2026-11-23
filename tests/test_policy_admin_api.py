@@ -801,6 +801,30 @@ async def test_edits_return_the_item_and_the_next_revision(
     assert (await api.ok(api.call("GET", path))).headers["ETag"] == '"5"'
 
 
+async def test_a_node_window_needs_a_time_zone(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    # A naive time cannot be compared with the stored, aware window: 422, never a 500.
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+    path = f"/policy-bundles/{bundle['id']}/nodes"
+    body = {**node_body(clause_id), "effective_to": "2027-01-01T00:00:00Z"}
+    node = await api.ok(api.call("POST", path, json=body, if_match=1), 201)
+
+    naive = await api.call(
+        "PATCH",
+        f"{path}/{node.json()['id']}",
+        json={"effective_from": "2026-06-01T00:00:00"},
+        if_match=2,
+    )
+
+    assert naive.status_code == 422
+    assert (await api.ok(api.call("GET", f"/policy-bundles/{bundle['id']}"))).headers[
+        "ETag"
+    ] == '"2"'
+
+
 # ---- Paging
 
 

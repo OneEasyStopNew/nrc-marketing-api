@@ -10,7 +10,6 @@ from pydantic import AwareDatetime
 
 from app.api.deps import DbSession, IfMatch, PolicyManager, PolicyReader, SettingsDep
 from app.api.etags import etag, expected_version
-from app.auth.access import TenantContext
 from app.models.enums import BundleLifecycleState
 from app.schemas.common import ErrorBody
 from app.schemas.policy_admin import (
@@ -61,13 +60,10 @@ _Before = Annotated[
 ]
 
 
-async def _bundle_etag(
-    db: DbSession, ctx: TenantContext, policy_bundle_id: UUID, response: Response
-) -> None:
-    # Every change bumps the bundle revision; the response carries the one to send next.
-    response.headers["ETag"] = etag(
-        (await policy_reads.get_bundle(db, ctx, policy_bundle_id)).revision
-    )
+def _edited(response: Response, revision: int) -> None:
+    # An edit succeeds only at exactly this revision and bumps it once. Re-reading the bundle
+    # instead could hand out a later editor's revision for a change this client never saw.
+    response.headers["ETag"] = etag(revision + 1)
 
 
 def _location(request: Request, name: str, **params: str) -> str:
@@ -82,8 +78,9 @@ def _location(request: Request, name: str, **params: str) -> str:
     status_code=status.HTTP_201_CREATED,
     summary="Register a READY policy upload as a policy source",
     description="201 when a source was created, 200 with the existing source when the same file "
-    "(checksum) or upload was registered before. Clauses are extracted in the background: "
-    "poll the source until extraction_state is EXTRACTED or FAILED.",
+    "(checksum) or upload was registered before; a source whose extraction FAILED is queued "
+    "again. Clauses are extracted in the background: poll the source until extraction_state is "
+    "EXTRACTED or FAILED.",
     responses={
         200: {"model": PolicySourceRead, "description": "The source already existed."},
         404: _NOT_FOUND,
@@ -274,10 +271,9 @@ async def add_policy_node(
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyNodeRead:
-    node = await policy_bundles.add_node(
-        db, ctx, policy_bundle_id, expected_version(if_match), body
-    )
-    await _bundle_etag(db, ctx, policy_bundle_id, response)
+    revision = expected_version(if_match)
+    node = await policy_bundles.add_node(db, ctx, policy_bundle_id, revision, body)
+    _edited(response, revision)
     return PolicyNodeRead.model_validate(node)
 
 
@@ -295,10 +291,9 @@ async def update_policy_node(
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyNodeRead:
-    node = await policy_bundles.update_node(
-        db, ctx, policy_bundle_id, expected_version(if_match), node_id, body
-    )
-    await _bundle_etag(db, ctx, policy_bundle_id, response)
+    revision = expected_version(if_match)
+    node = await policy_bundles.update_node(db, ctx, policy_bundle_id, revision, node_id, body)
+    _edited(response, revision)
     return PolicyNodeRead.model_validate(node)
 
 
@@ -316,10 +311,9 @@ async def add_policy_rule(
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyRuleRead:
-    rule = await policy_bundles.add_rule(
-        db, ctx, policy_bundle_id, expected_version(if_match), body
-    )
-    await _bundle_etag(db, ctx, policy_bundle_id, response)
+    revision = expected_version(if_match)
+    rule = await policy_bundles.add_rule(db, ctx, policy_bundle_id, revision, body)
+    _edited(response, revision)
     return await policy_reads.get_rule(db, ctx, policy_bundle_id, rule.id)
 
 
@@ -338,10 +332,9 @@ async def update_policy_rule(
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyRuleRead:
-    rule = await policy_bundles.update_rule(
-        db, ctx, policy_bundle_id, expected_version(if_match), rule_id, body
-    )
-    await _bundle_etag(db, ctx, policy_bundle_id, response)
+    revision = expected_version(if_match)
+    rule = await policy_bundles.update_rule(db, ctx, policy_bundle_id, revision, rule_id, body)
+    _edited(response, revision)
     return await policy_reads.get_rule(db, ctx, policy_bundle_id, rule.id)
 
 
@@ -359,10 +352,9 @@ async def add_policy_edge(
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyEdgeRead:
-    edge = await policy_bundles.add_edge(
-        db, ctx, policy_bundle_id, expected_version(if_match), body
-    )
-    await _bundle_etag(db, ctx, policy_bundle_id, response)
+    revision = expected_version(if_match)
+    edge = await policy_bundles.add_edge(db, ctx, policy_bundle_id, revision, body)
+    _edited(response, revision)
     return PolicyEdgeRead.model_validate(edge)
 
 
@@ -382,10 +374,9 @@ async def add_policy_wording(
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyWordingRead:
-    wording = await policy_bundles.add_wording(
-        db, ctx, policy_bundle_id, expected_version(if_match), rule_id, body
-    )
-    await _bundle_etag(db, ctx, policy_bundle_id, response)
+    revision = expected_version(if_match)
+    wording = await policy_bundles.add_wording(db, ctx, policy_bundle_id, revision, rule_id, body)
+    _edited(response, revision)
     return PolicyWordingRead.model_validate(wording)
 
 

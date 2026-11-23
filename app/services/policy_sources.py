@@ -41,6 +41,9 @@ async def register_source(
         raise PolicySourceUploadNotReadyError(details={"status": upload.state.value})
     existing = await _existing(db, ctx, upload)
     if existing is not None:
+        if existing.extraction_state is SourceExtractionState.FAILED:
+            _retry_from(existing, upload)
+            await db.flush()
         return existing, False
     source = PolicySource(
         tenant_id=ctx.tenant_id,
@@ -67,6 +70,21 @@ async def register_source(
             raise
         return existing, False
     return source, True
+
+
+def _retry_from(source: PolicySource, upload: MediaUpload) -> None:
+    # Registering the file again is the way to retry a failed extraction (after an outage or a
+    # configuration fix); otherwise the checksum would tie the file to a dead source forever.
+    # The bytes are the same (verified checksum), so title and provenance stay as they were.
+    source.upload_id = upload.id
+    source.storage_key = upload.s3_key
+    source.extraction_state = SourceExtractionState.PENDING
+    source.extraction_error_code = None
+    source.available_at = func.now()
+    source.leased_until = None
+    source.lease_owner = None
+    source.attempts = 0
+    source.failed_attempts = 0
 
 
 async def get_source(db: AsyncSession, ctx: TenantContext, source_id: UUID) -> PolicySource:
