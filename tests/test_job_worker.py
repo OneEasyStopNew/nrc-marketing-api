@@ -1076,6 +1076,20 @@ async def test_live_mode_with_complete_settings_starts_now_the_gate_is_real() ->
             await provider.aclose()
 
 
+def test_live_mode_with_a_simulated_judge_refuses_to_start() -> None:
+    # Paid generation must never open on a PASS the simulated judge gave.
+    settings = _live(
+        app_env="local",
+        validation_model_mode="simulator",
+        higgsfield_api_key=SecretStr("test-id:test-secret"),
+        higgsfield_model=PROBED_MODEL,
+        higgsfield_output_hosts=("images.example.test",),
+    )
+
+    with pytest.raises(WorkerConfigError, match=r"refused: VALIDATION_MODEL_MODE=simulator"):
+        build_providers(settings)
+
+
 def test_live_mode_with_an_unprobed_model_refuses_to_start() -> None:
     # Otherwise every job is estimated and reserved before submit refuses the model.
     settings = _live(

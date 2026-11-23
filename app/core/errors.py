@@ -25,6 +25,12 @@ class TenantNotBoundError(AppError):
     pass
 
 
+class ValidationJobError(AppError):
+    # Worker-only: a validation job can't be checked at all (its creative version or policy
+    # version is unreadable or gone). Fails the job with this code; never served by the API.
+    code = "VALIDATION_JOB_INVALID"
+
+
 class AuthenticationError(AppError):
     code = "UNAUTHENTICATED"
     default_message = "Authentication is required."

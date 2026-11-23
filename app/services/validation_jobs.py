@@ -20,7 +20,7 @@ from typing import Final
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.errors import AppError
+from app.core.errors import AppError, ValidationJobError
 from app.models import Creative, Job
 from app.models.enums import ExecutionState, JobStage
 from app.services import judging, policies, rules, validations
@@ -35,11 +35,6 @@ ATTEMPTS_USED: Final = "MODEL_UNAVAILABLE"
 _ACTIVE: Final = frozenset({ExecutionState.QUEUED, ExecutionState.RUNNING})
 
 logger = logging.getLogger(__name__)
-
-
-class ValidationJobError(AppError):
-    # The job can't be checked at all (its creative version or policy version is gone).
-    code = "VALIDATION_JOB_INVALID"
 
 
 async def run(

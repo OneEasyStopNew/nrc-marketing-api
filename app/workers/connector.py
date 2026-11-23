@@ -40,6 +40,7 @@ from app.core.config import (
     WorkerDatabaseSettings,
     get_settings,
 )
+from app.core.errors import ValidationJobError
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.models import Job, OutboxEvent
@@ -600,7 +601,7 @@ class ValidationJobHandler:
                 heartbeat=step.heartbeat,
                 retry_delay=lambda attempt: backoff_seconds(attempt, step.settings),
             )
-        except validation_jobs.ValidationJobError as error:
+        except ValidationJobError as error:
             await _fail_with(db, job.id, error.code, error.message, billed=False)
             return None
 
@@ -1102,6 +1103,10 @@ def check_live_mode(settings: Settings) -> None:
         problems.append("missing AWS_S3_BUCKET (generated images need storage)")
     if generation_checks.VALIDATION_GATE_IS_STUB:
         problems.append("the validation-PASS gate is still the stub (NRC-7)")
+    if settings.validation_model_mode == "simulator":
+        # A simulated judge can PASS a brief, and the gate opens on any stored PASS. shortcut: a
+        # PASS stored before switching to live still counts; fine while the simulator is local-only.
+        problems.append("VALIDATION_MODEL_MODE=simulator (a simulated PASS is not evidence)")
     if problems:
         raise WorkerConfigError(f"GENERATION_MODE=live refused: {'; '.join(problems)}")
 

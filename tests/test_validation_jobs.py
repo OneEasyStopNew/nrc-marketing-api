@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.config import get_settings
+from app.core.errors import ValidationJobError
 from app.models import Job, ValidationRun
 from app.models.enums import ExecutionState
 from app.services import rules, validation_jobs
@@ -306,7 +307,7 @@ async def test_a_validation_job_whose_pinned_policy_is_gone_fails_cleanly(
 
     assert (job.state, job.failure_code) == (
         ExecutionState.FAILED,
-        validation_jobs.ValidationJobError.code,
+        ValidationJobError.code,
     )
 
 
@@ -322,7 +323,7 @@ async def test_a_validation_job_with_an_unreadable_policy_version_fails_at_once(
 
     assert (job.state, job.failure_code, job.attempt_count) == (
         ExecutionState.FAILED,
-        validation_jobs.ValidationJobError.code,
+        ValidationJobError.code,
         0,
     )
 
