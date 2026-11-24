@@ -98,7 +98,7 @@ class PolicyContextUnavailableError(ConflictError):
 
 
 class PolicyIndexError(ConflictError):
-    # details.reason: NO_APPROVED_NODES or INDEX_CONTENT_CHANGED. Raised by the owner-run index
+    # details.reason is a PolicyIndexReason (app/models/enums.py). Raised by the owner-run index
     # build only; the API never builds an index.
     code = "POLICY_INDEX_ERROR"
     default_message = "The policy index could not be built."
