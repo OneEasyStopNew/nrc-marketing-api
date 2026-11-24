@@ -142,7 +142,8 @@ async def list_policy_source_clauses(
         409: {
             "model": ErrorBody,
             "description": "POLICY_LIMIT_REACHED: the tenant already has "
-            "POLICY_MAX_OPEN_BUNDLES_PER_TENANT bundles in DRAFT or REVIEW (details.limit).",
+            "POLICY_MAX_OPEN_BUNDLES_PER_TENANT bundles in DRAFT or REVIEW, or the bundle to "
+            "copy holds more than POLICY_MAX_ITEMS_PER_BUNDLE items (details.limit).",
         },
     },
 )
@@ -155,7 +156,11 @@ async def create_policy_bundle(
     response: Response,
 ) -> PolicyBundleDetail:
     bundle = await policy_bundles.create_bundle(
-        db, ctx, body, settings.policy_max_open_bundles_per_tenant
+        db,
+        ctx,
+        body,
+        settings.policy_max_open_bundles_per_tenant,
+        settings.policy_max_items_per_bundle,
     )
     response.headers["ETag"] = etag(bundle.revision)
     response.headers["Location"] = _location(

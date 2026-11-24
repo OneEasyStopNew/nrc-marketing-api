@@ -123,7 +123,9 @@ class Env:
         body = BundleCreate.model_validate(
             {"name": "[SYNTHETIC] Policy", "source_ref": SOURCE_REF, "is_synthetic": True} | changes
         )
-        return await bundles.create_bundle(self.db, self.admin, body, TEST_MAX_OPEN_BUNDLES)
+        return await bundles.create_bundle(
+            self.db, self.admin, body, TEST_MAX_OPEN_BUNDLES, TEST_MAX_ITEMS
+        )
 
     async def draft(self) -> Draft:
         # One rule, supported by a clause node that cites the source clause, with exact wording
@@ -296,6 +298,7 @@ async def test_only_policy_admins_create_bundles(env: Env) -> None:
             env.approver,
             BundleCreate(name="[SYNTHETIC] x", source_ref="synthetic:x", is_synthetic=True),
             TEST_MAX_OPEN_BUNDLES,
+            TEST_MAX_ITEMS,
         )
 
 
@@ -877,6 +880,7 @@ async def test_two_editors_with_the_same_revision_one_wins(
                         name="[SYNTHETIC] race", source_ref="synthetic:race", is_synthetic=True
                     ),
                     TEST_MAX_OPEN_BUNDLES,
+                    TEST_MAX_ITEMS,
                 )
             ).id
         results = await asyncio.gather(add("EX-1"), add("EX-2"))

@@ -744,6 +744,86 @@ async def test_items_per_bundle_are_capped(
     assert over.json()["details"] == {"limit": 10}
 
 
+@pytest.mark.usefixtures("tight_policy_caps")
+async def test_rejected_items_do_not_use_up_the_item_cap(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    # Regression (code review): rejected rows can't be deleted, so counting them left a full
+    # draft unable to take any correction.
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+    path = f"/policy-bundles/{bundle['id']}"
+    nodes = [
+        (
+            await api.ok(
+                api.call(
+                    "POST",
+                    f"{path}/nodes",
+                    json=node_body(clause_id, key=f"CL-{i}"),
+                    if_match=i + 1,
+                ),
+                201,
+            )
+        ).json()
+        for i in range(10)
+    ]
+    rejection = {"item_kind": "node", "item_id": nodes[0]["id"], "decision": "REJECTED"}
+    await api.ok(api.call("POST", f"{path}/review-decisions", json=rejection, if_match=11))
+
+    replacement = await api.call(
+        "POST", f"{path}/nodes", json=node_body(clause_id, key="CL-NEW"), if_match=12
+    )
+
+    assert replacement.status_code == 201, replacement.text
+
+
+@pytest.fixture
+def adjustable_settings(
+    app_overrides: dict[Callable[..., object], Callable[..., object]],
+) -> dict[str, Settings]:
+    # The client copies app_overrides when it starts, so a test changes settings through this.
+    current = {"settings": get_settings()}
+    app_overrides[get_settings] = lambda: current["settings"]
+    return current
+
+
+async def test_a_copy_over_the_item_cap_is_refused(
+    adjustable_settings: dict[str, Settings],
+    api: Api,
+    connection: AsyncConnection,
+    world: World,
+) -> None:
+    # Regression (code review): copying skipped the cap, so a copy could start over it.
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    base = await new_bundle(api)
+    for i in range(11):
+        body = node_body(clause_id, key=f"CL-{i}")
+        await api.ok(
+            api.call("POST", f"/policy-bundles/{base['id']}/nodes", json=body, if_match=i + 1),
+            201,
+        )
+    adjustable_settings["settings"] = adjustable_settings["settings"].model_copy(
+        update={"policy_max_items_per_bundle": 10}
+    )
+
+    copy = await api.call(
+        "POST",
+        "/policy-bundles",
+        json={
+            "name": "[SYNTHETIC] copy",
+            "source_ref": "synthetic:copy",
+            "is_synthetic": True,
+            "based_on_bundle_id": base["id"],
+        },
+    )
+
+    assert copy.status_code == 409, copy.text
+    assert copy.json()["code"] == "POLICY_LIMIT_REACHED"
+    assert copy.json()["details"] == {"limit": 10}
+
+
 @pytest.mark.parametrize("field", ["name", "source_ref"])
 @pytest.mark.parametrize("blank", [" ", "\n\t"])
 async def test_a_bundle_name_or_reference_cannot_be_blank(api: Api, field: str, blank: str) -> None:

@@ -149,7 +149,8 @@ class UploadNotAcceptedError(AppError):
 
 class PolicyLimitError(ConflictError):
     # POLICY_MAX_OPEN_BUNDLES_PER_TENANT or POLICY_MAX_ITEMS_PER_BUNDLE reached; details.limit.
-    # Not retryable: nothing frees a slot until someone submits, rejects or edits a bundle.
+    # Not retryable: a place frees only when a bundle in review is approved or rejected, or an
+    # item is rejected (rejected items don't count).
     code = "POLICY_LIMIT_REACHED"
     default_message = "This policy limit has been reached."
 

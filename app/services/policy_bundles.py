@@ -273,11 +273,16 @@ async def _finish(
 
 
 async def create_bundle(
-    db: AsyncSession, ctx: TenantContext, body: BundleCreate, max_open_bundles: int
+    db: AsyncSession,
+    ctx: TenantContext,
+    body: BundleCreate,
+    max_open_bundles: int,
+    max_items: int,
 ) -> PolicyBundle:
     """A new DRAFT with the tenant's next version, empty or copied from based_on_bundle_id.
 
-    Raises PolicyLimitError when the tenant already has max_open_bundles in DRAFT or REVIEW.
+    Raises PolicyLimitError when the tenant already has max_open_bundles in DRAFT or REVIEW, or
+    the bundle to copy holds more than max_items live nodes, edges and wordings.
     """
     _require(ctx, frozenset({Capability.POLICY_MANAGE}))
     # The tenant lock also serialises this count, so parallel creates can't both take the last one.
@@ -289,8 +294,8 @@ async def create_bundle(
     )
     if (open_bundles or 0) >= max_open_bundles:
         raise PolicyLimitError(
-            "The tenant has the most draft and in-review policy bundles it may have. Submit, "
-            "approve or reject one first.",
+            "The tenant has the most draft and in-review policy bundles it may have. A place "
+            "frees when a bundle in review is approved or rejected.",
             details={"limit": max_open_bundles},
         )
     base = None
@@ -303,6 +308,10 @@ async def create_bundle(
         )
         if base is None:
             raise NotFoundError("Policy bundle to copy not found.")
+        # A copy over the cap could take no edit at all (e.g. an owner-imported bundle, or a cap
+        # lowered since): refuse it up front.
+        if await _live_items(db, ctx.tenant_id, base.id) > max_items:
+            raise _limit_reached(max_items)
     latest = await db.scalar(
         select(func.max(PolicyBundle.version)).where(PolicyBundle.tenant_id == ctx.tenant_id)
     )
@@ -435,22 +444,36 @@ async def _in_bundle[M: PolicyNode | PolicyEdge | PolicyRuleRecord | PolicyRuleW
     return item
 
 
-async def _room_for_items(db: AsyncSession, bundle: PolicyBundle, max_items: int) -> None:
-    # Under the bundle row lock (_open), so parallel adds can't both take the last place. One
-    # request adds at most a rule and its node over the line.
+async def _live_items(db: AsyncSession, tenant_id: UUID, bundle_id: UUID) -> int:
+    # Nodes, edges and wordings that are not REJECTED: rejected rows stay for history (no DELETE)
+    # and never take effect, so they don't use up POLICY_MAX_ITEMS_PER_BUNDLE.
     counts = [
         select(func.count())
         .select_from(model)
-        .where(model.tenant_id == bundle.tenant_id, model.policy_bundle_id == bundle.id)
+        .where(
+            model.tenant_id == tenant_id,
+            model.policy_bundle_id == bundle_id,
+            model.review_state != ReviewState.REJECTED,
+        )
         .scalar_subquery()
         for model in (PolicyNode, PolicyEdge, PolicyRuleWording)
     ]
-    items = await db.scalar(select(counts[0] + counts[1] + counts[2]))
-    if (items or 0) >= max_items:
-        raise PolicyLimitError(
-            "This policy bundle holds the most nodes, edges and wordings it may have.",
-            details={"limit": max_items},
-        )
+    return int(await db.scalar(select(counts[0] + counts[1] + counts[2])) or 0)
+
+
+def _limit_reached(max_items: int) -> PolicyLimitError:
+    return PolicyLimitError(
+        "This policy bundle holds the most nodes, edges and wordings it may have. Rejected "
+        "items don't count: reject ones you no longer need, or split the policy.",
+        details={"limit": max_items},
+    )
+
+
+async def _room_for_items(db: AsyncSession, bundle: PolicyBundle, max_items: int) -> None:
+    # Under the bundle row lock (_open), so parallel adds can't both take the last place. One
+    # request adds at most a rule and its node over the line.
+    if await _live_items(db, bundle.tenant_id, bundle.id) >= max_items:
+        raise _limit_reached(max_items)
 
 
 async def _node_key_free(db: AsyncSession, bundle: PolicyBundle, node_key: str) -> None:
