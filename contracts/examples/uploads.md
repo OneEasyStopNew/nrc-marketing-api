@@ -23,6 +23,13 @@ comes later.
 - `409 UPLOAD_NOT_PENDING`: the upload already moved on. Read its current status and show that.
 - `403 FORBIDDEN`: only the person who started the upload can complete it.
 - `422 UPLOAD_NOT_ACCEPTED`: `details.field` names the bad field. Use the limits from step 1.
+- `422 VALIDATION_FAILED` on `authorization.usage_authorization_ref`: the reference is a record
+  id (letters, digits and `. _ : / -`, starting with a letter or digit). Surrounding spaces are
+  removed; blank values and spaces inside are refused.
+- `429 UPLOAD_LIMIT_REACHED` (retryable): the tenant has the most uploads in progress it may
+  have. Uploads waiting for inspection count, and so do pending ones while their URL is valid.
+  Show "too many uploads in progress" and let the user try again later; also possible on
+  `POST /assets/{asset_id}/upload-url` for an upload whose URL expired.
 
 ## Reasons and polling
 
@@ -73,3 +80,4 @@ comes later.
 - `error_upload_not_received`
 - `error_upload_not_pending`
 - `error_forbidden_not_uploader`
+- `error_upload_limit_reached`

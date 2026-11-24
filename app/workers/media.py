@@ -211,8 +211,13 @@ async def _kept_leased(run: _Run, upload_id: UUID, tenant_id: UUID) -> AsyncIter
         yield
     finally:
         task.cancel()
-        with suppress(asyncio.CancelledError):
+        try:
             await task
+        except asyncio.CancelledError:
+            # The renew task's own cancel is expected; one aimed at this task (shutdown, a
+            # timeout around the inspection) must go on, or the worker would carry on.
+            if (current := asyncio.current_task()) is not None and current.cancelling():
+                raise
 
 
 @dataclass(frozen=True, slots=True)

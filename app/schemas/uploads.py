@@ -6,13 +6,16 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, AwareDatetime, Field
+from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints
 
 from app.models.enums import Channel, IdentifiablePerson, UploadPurpose, UploadState
 from app.schemas.common import ApiModel, RequestModel
 
 MAX_UPLOAD_NAME_CHARS = 255
 MAX_AUTHORIZATION_REF_CHARS = 200
+# A record id such as "RELEASE-2026-0142": no spaces or control characters, so a blank or
+# whitespace value can't read as authorization on record.
+AUTHORIZATION_REF_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
 
 
 def _display_name(value: str) -> str:
@@ -20,6 +23,9 @@ def _display_name(value: str) -> str:
     value = unicodedata.normalize("NFC", value).strip()
     if not value:
         raise ValueError("must not be blank")
+    # Checked again after normalizing: NFC can lengthen a string past the column size.
+    if len(value) > MAX_UPLOAD_NAME_CHARS:
+        raise ValueError(f"must be at most {MAX_UPLOAD_NAME_CHARS} characters")
     if any(unicodedata.category(char) in ("Cc", "Cf") for char in value):
         raise ValueError("must not contain control characters")
     return value
@@ -55,7 +61,17 @@ class MediaAuthorizationInput(RequestModel):
         description="Whether a person can be identified in the file. A declaration, not consent."
     )
     usage_authorization_ref: (
-        Annotated[str, Field(min_length=1, max_length=MAX_AUTHORIZATION_REF_CHARS)] | None
+        Annotated[
+            str,
+            # Strips surrounding spaces (a typing slip) before the length and pattern checks.
+            StringConstraints(
+                strip_whitespace=True,
+                min_length=1,
+                max_length=MAX_AUTHORIZATION_REF_CHARS,
+                pattern=AUTHORIZATION_REF_PATTERN,
+            ),
+        ]
+        | None
     ) = Field(
         default=None,
         description="Reference to the signed release or licence record (not the document).",

@@ -9,7 +9,8 @@ import asyncio
 import hashlib
 import io
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -1017,3 +1018,53 @@ async def test_a_type_no_longer_accepted_is_rejected_at_inspection(
     row = await _row(connection, world.a, asset_id)
     assert (row.state, row.reason_code) == ("REJECTED", "MEDIA_UNSUPPORTED_TYPE")
     assert await _assets(connection, world.a) == []
+
+
+async def test_a_cancel_while_renewal_stops_still_cancels_the_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (review, api#23): suppress(CancelledError) around the stopping renew task also
+    # swallowed a cancel aimed at the worker itself (shutdown, a timeout), which carried on.
+    renewing = asyncio.Event()
+
+    @asynccontextmanager
+    async def no_database() -> AsyncIterator[object]:
+        yield object()
+
+    async def bind(db: object, tenant_id: UUID) -> None:
+        return None
+
+    async def slow_to_stop(db: object, run: object, upload_id: UUID, values: object) -> None:
+        renewing.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            # Like a driver cleaning up after a cancel: the renew task takes a moment to stop.
+            await asyncio.sleep(0.2)
+            raise
+
+    monkeypatch.setattr(media_worker, "bind_tenant", bind)
+    monkeypatch.setattr(media_worker, "_change", slow_to_stop)
+    run = media_worker._Run(
+        sessions=cast(Any, no_database),
+        storage=cast(Any, None),
+        policy_storage=None,
+        scanner=cast(Any, None),
+        settings=cast(Any, None),
+        owner="w1",
+        lease_seconds=LEASE_MIN_SECONDS,
+    )
+
+    async def inspect() -> str:
+        async with media_worker._kept_leased(run, uuid4(), uuid4()):
+            await renewing.wait()
+        return "carried on"
+
+    worker = asyncio.create_task(inspect())
+    await asyncio.wait_for(renewing.wait(), timeout=LEASE_MIN_SECONDS)
+    # Let the worker leave the block and start waiting for the renew task to stop.
+    await asyncio.sleep(0.05)
+    worker.cancel()
+    await asyncio.wait([worker])
+
+    assert worker.cancelled()

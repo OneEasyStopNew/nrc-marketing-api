@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Final
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, func, select, update
+from sqlalchemy import ColumnElement, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
@@ -19,6 +19,7 @@ from app.core.errors import (
     DependencyUnavailableError,
     NotFoundError,
     PermissionDeniedError,
+    UploadLimitError,
     UploadNotAcceptedError,
     UploadNotPendingError,
     UploadNotReceivedError,
@@ -289,6 +290,37 @@ async def _check_scope(db: AsyncSession, ctx: TenantContext, body: UploadCreate)
             raise NotFoundError("Creative not found in this study.")
 
 
+def _in_progress() -> ColumnElement[bool]:
+    # Uploads that take one of the tenant's UPLOAD_MAX_PENDING_PER_TENANT slots. A pending upload
+    # counts only while its URL is valid, so abandoned ones can't lock the tenant out before the
+    # cleanup job exists; a new URL for one is admitted like a new upload.
+    return or_(
+        MediaUpload.state.in_((UploadState.QUARANTINED, UploadState.SCANNING)),
+        and_(
+            MediaUpload.state == UploadState.PENDING_UPLOAD,
+            MediaUpload.upload_url_expires_at > func.now(),
+        ),
+    )
+
+
+async def _admit(
+    db: AsyncSession, tenant_id: UUID, settings: Settings, *, reviving: UUID | None = None
+) -> None:
+    # Serialised per tenant until commit, so parallel requests can't both take the last slot.
+    await db.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(f"uploads:{tenant_id}", 0)))
+    )
+    query = (
+        select(func.count())
+        .select_from(MediaUpload)
+        .where(MediaUpload.tenant_id == tenant_id, _in_progress())
+    )
+    if reviving is not None:
+        query = query.where(MediaUpload.id != reviving)
+    if (await db.scalar(query) or 0) >= settings.upload_max_pending_per_tenant:
+        raise UploadLimitError()
+
+
 async def _presign(
     storage: ObjectStorage, upload: MediaUpload, settings: Settings
 ) -> PresignedUpload:
@@ -311,8 +343,13 @@ async def _fresh_target(
     """A new URL for the same key, checksum and owner; the old one simply expires.
 
     Commits. Returns None, and refreshes `upload`, when a concurrent complete moved the upload on
-    after it was read: a URL is only handed out while the file is still awaited.
+    after it was read: a URL is only handed out while the file is still awaited. Raises
+    UploadLimitError when the old URL had expired (the upload held no slot) and the tenant's
+    uploads in progress fill the cap.
     """
+    expires_at = upload.upload_url_expires_at
+    if expires_at is None or expires_at <= datetime.now(UTC):
+        await _admit(db, upload.tenant_id, settings, reviving=upload.id)
     target = await _presign(storage, upload, settings)
     stored = await db.scalar(
         update(MediaUpload)
@@ -343,6 +380,8 @@ async def create_upload(
         UploadNotAcceptedError: the declared type or size breaks a configured limit.
         NotFoundError: the study (or creative) does not exist or is not visible to the caller.
         IdempotencyKeyReusedError: the key was used before with a different payload.
+        UploadLimitError: the tenant already has UPLOAD_MAX_PENDING_PER_TENANT uploads in
+            progress (retryable).
         DependencyUnavailableError: storage could not sign the URL.
     """
     fingerprint = idempotency.request_hash(ctx.principal.sub, body)
@@ -358,6 +397,7 @@ async def create_upload(
 
     _check_limits(UploadPurpose.CREATIVE_MEDIA, body, settings)
     await _check_scope(db, ctx, body)
+    await _admit(db, ctx.tenant_id, settings)
     authorization = body.authorization
     upload = MediaUpload(
         id=uuid4(),

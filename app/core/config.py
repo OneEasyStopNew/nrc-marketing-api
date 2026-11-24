@@ -185,6 +185,10 @@ class Settings(RetrievalSettings):
     upload_image_max_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
     # Accepted MIME types, comma-separated in the environment.
     upload_image_types: Annotated[tuple[str, ...], NoDecode] = ("image/png", "image/jpeg")
+    # Uploads one tenant may have in progress: waiting in quarantine or inspection, or awaiting
+    # their file while the upload URL is still valid. Bounds storage growth until the cleanup job
+    # (NRC-3 item 8) exists.
+    upload_max_pending_per_tenant: int = Field(default=20, ge=1, le=1000)
     # Defaults to the strict value: a deployment that forgets it gets no simulator. The simulator
     # marks its verdicts as simulated; live needs a real scanner, and the media worker refuses to
     # start without one.

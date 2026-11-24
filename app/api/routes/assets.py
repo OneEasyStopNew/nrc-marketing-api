@@ -35,6 +35,11 @@ _NOT_UPLOADER = {
     "model": ErrorBody,
     "description": "Role not allowed, or not the person who started this upload.",
 }
+_UPLOAD_LIMIT = {
+    "model": ErrorBody,
+    "description": "UPLOAD_LIMIT_REACHED (retryable): the tenant has the most uploads in progress "
+    "it may have. Try again when one has finished processing.",
+}
 
 # Upload routes come before /assets/{asset_id}, so "uploads" is never parsed as an id.
 
@@ -59,6 +64,7 @@ async def get_upload_limits(ctx: CreativeReader, settings: SettingsDep) -> Uploa
     responses={
         404: {"model": ErrorBody, "description": "Study or creative not found or not permitted."},
         409: {"model": ErrorBody, "description": "Idempotency-Key reused."},
+        429: _UPLOAD_LIMIT,
         503: _STORAGE_UNAVAILABLE,
     },
 )
@@ -121,11 +127,13 @@ async def get_upload(asset_id: UUID, ctx: CreativeReader, db: DbSession) -> Uplo
 @router.post(
     "/assets/{asset_id}/upload-url",
     summary="A fresh upload URL for a pending upload (same file, same owner)",
-    description="Use when the URL expired or was lost before the file was sent.",
+    description="Use when the URL expired or was lost before the file was sent. An expired upload "
+    "is admitted again like a new one, so it can meet the in-progress limit.",
     responses={
         403: _NOT_UPLOADER,
         404: _UPLOAD_NOT_FOUND,
         409: {"model": ErrorBody, "description": "The upload is no longer waiting for its file."},
+        429: _UPLOAD_LIMIT,
         503: _STORAGE_UNAVAILABLE,
     },
 )
