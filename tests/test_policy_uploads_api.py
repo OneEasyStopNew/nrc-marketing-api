@@ -327,6 +327,30 @@ async def test_create_refuses_a_file_over_the_policy_limit(
     assert exact.status_code == 201
 
 
+@pytest.fixture
+def pending_cap_of_two(
+    app_overrides: dict[Callable[..., object], Callable[..., object]], settings: Settings
+) -> None:
+    capped = settings.model_copy(update={"upload_max_pending_per_tenant": 2})
+    app_overrides[get_settings] = lambda: capped
+
+
+@pytest.mark.usefixtures("pending_cap_of_two")
+async def test_policy_uploads_take_slots_under_the_pending_cap(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World
+) -> None:
+    # Regression (review on api#23, same gap here): policy uploads also add an object and a row.
+    first = await _create(client, auth, world)
+    at_the_cap = await _create(client, auth, world)
+    over = await _create(client, auth, world)
+
+    assert first.status_code == 201
+    assert at_the_cap.status_code == 201
+    assert over.status_code == 429
+    assert over.json()["code"] == "UPLOAD_LIMIT_REACHED"
+    assert over.json()["retryable"] is True
+
+
 # ---- Policy storage is never the media bucket
 
 

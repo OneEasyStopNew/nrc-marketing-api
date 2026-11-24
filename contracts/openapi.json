@@ -2666,6 +2666,16 @@
               }
             }
           },
+          "429": {
+            "description": "UPLOAD_LIMIT_REACHED (retryable): the tenant has the most uploads in progress it may have (creative and policy uploads together). Try again when one has finished.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Policy file storage is not configured or temporarily unavailable.",
             "content": {

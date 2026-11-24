@@ -23,6 +23,11 @@ _STORAGE_UNAVAILABLE = {
     "description": "Policy file storage is not configured or temporarily unavailable.",
 }
 _NOT_FOUND = {"model": ErrorBody, "description": "Upload not found or not permitted."}
+_UPLOAD_LIMIT = {
+    "model": ErrorBody,
+    "description": "UPLOAD_LIMIT_REACHED (retryable): the tenant has the most uploads in progress "
+    "it may have (creative and policy uploads together). Try again when one has finished.",
+}
 _NOT_UPLOADER = {
     "model": ErrorBody,
     "description": "Role not allowed, or not the person who started this upload.",
@@ -39,6 +44,7 @@ _NOT_UPLOADER = {
     "store or log it. A retry with the same Idempotency-Key and body returns the same upload.",
     responses={
         409: {"model": ErrorBody, "description": "Idempotency-Key reused."},
+        429: _UPLOAD_LIMIT,
         503: _STORAGE_UNAVAILABLE,
     },
 )

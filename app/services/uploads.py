@@ -591,6 +591,8 @@ async def create_policy_upload(
     Raises:
         UploadNotAcceptedError: the declared type or size breaks a configured limit.
         IdempotencyKeyReusedError: the key was used before with a different payload.
+        UploadLimitError: the tenant already has UPLOAD_MAX_PENDING_PER_TENANT uploads in
+            progress, creative and policy together (retryable).
         DependencyUnavailableError: storage could not sign the URL.
     """
     purpose = UploadPurpose.POLICY_SOURCE
@@ -606,6 +608,8 @@ async def create_policy_upload(
         return _to_policy_read(upload, target), True
 
     _check_limits(purpose, body, settings)
+    # Same slots as creative uploads: both put an object in storage and a row in media_uploads.
+    await _admit(db, ctx.tenant_id, settings)
     upload = MediaUpload(
         id=uuid4(),
         tenant_id=ctx.tenant_id,
