@@ -39,6 +39,11 @@ _VALIDATIONS: dict[int | str, dict[str, Any]] = {
         "model": ErrorBody,
         "description": "NO_ACTIVE_POLICY, or Idempotency-Key reused with a different body.",
     },
+    429: {
+        "model": ErrorBody,
+        "description": "VALIDATION_LIMIT_REACHED: too many validations queued or running for the "
+        "tenant; retry later.",
+    },
 }
 
 

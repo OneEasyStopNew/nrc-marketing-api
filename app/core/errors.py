@@ -116,6 +116,13 @@ class GenerationLimitError(AppError):
     retryable = True
 
 
+class ValidationLimitError(AppError):
+    # Too many validations queued or running for the tenant (VALIDATION_MAX_ACTIVE_JOBS_PER_TENANT).
+    code = "VALIDATION_LIMIT_REACHED"
+    default_message = "Too many validations are running. Try again when one finishes."
+    retryable = True
+
+
 class VersionRequiredError(AppError):
     code = "PRECONDITION_REQUIRED"
     default_message = 'Send If-Match with the version you edited, e.g. If-Match: "3".'

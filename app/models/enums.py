@@ -185,6 +185,8 @@ class ModelCheckFailure(StrEnum):
     MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
     # Refused in a way retrying can't fix (configuration, rejected request); the log has the code.
     MODEL_REJECTED = "MODEL_REJECTED"
+    # More open rules than one call may cover (text_judge.MAX_RULES_PER_CALL); not called.
+    TOO_MANY_RULES = "TOO_MANY_RULES"
 
 
 class CheckType(StrEnum):

@@ -38,6 +38,7 @@ from app.services.providers.text_judge import (
     SUPPORTED_BEDROCK_JUDGE_MODEL_IDS,
     JudgeReply,
     JudgeRequest,
+    judge_call_budget_seconds,
 )
 
 # Type stubs are a dev dependency only; never import them at runtime.
@@ -66,13 +67,19 @@ class BedrockTextJudge:
     is_simulated = False
 
     def __init__(
-        self, *, model_id: str, client: BedrockRuntimeClient, max_output_tokens: int
+        self,
+        *,
+        model_id: str,
+        client: BedrockRuntimeClient,
+        max_output_tokens: int,
+        call_budget_seconds: float,
     ) -> None:
         if model_id not in SUPPORTED_BEDROCK_JUDGE_MODEL_IDS:
             raise ProviderConfigError(f"Judge model {model_id} is not a supported model")
         self.model_id = model_id
         self._client = client
         self._max_output_tokens = max_output_tokens
+        self._call_budget_seconds = call_budget_seconds
 
     @classmethod
     def from_settings(cls, settings: Settings) -> BedrockTextJudge:
@@ -92,6 +99,7 @@ class BedrockTextJudge:
             model_id=model_id,
             client=client,
             max_output_tokens=settings.validation_model_max_output_tokens,
+            call_budget_seconds=judge_call_budget_seconds(settings),
         )
 
     def __repr__(self) -> str:
@@ -99,7 +107,15 @@ class BedrockTextJudge:
 
     async def judge(self, request: JudgeRequest) -> JudgeReply:
         started = time.monotonic()
-        reply = await asyncio.to_thread(self._converse, request)
+        try:
+            # The worker checks this budget against its lease. The thread can't be stopped: a
+            # call past the budget finishes unseen and the job retries later.
+            async with asyncio.timeout(self._call_budget_seconds):
+                reply = await asyncio.to_thread(self._converse, request)
+        except TimeoutError:
+            raise ProviderUnavailableError(
+                f"Bedrock judge model {self.model_id} did not answer in time"
+            ) from None
         latency_ms = round((time.monotonic() - started) * 1000)
         return JudgeReply(
             raw=reply.raw,

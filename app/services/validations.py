@@ -27,7 +27,7 @@ from types import MappingProxyType
 from typing import Final
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, select
+from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy import text as sql_text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +39,7 @@ from app.core.errors import (
     NoActivePolicyError,
     NotFoundError,
     PolicyContextUnavailableError,
+    ValidationLimitError,
 )
 from app.models import Creative, CreativeVersion, Job, OutboxEvent, StudySnapshot, ValidationRun
 from app.models.enums import (
@@ -175,6 +176,7 @@ async def create_validation(
     key = reuse_key(body.input_kind, text, target, policy, settings, now.date())
     reused = await _reusable(db, ctx.tenant_id, key)
     if reused is None:
+        await _check_active_limit(db, ctx.tenant_id, settings)
         run_id = await _queue(db, ctx, body, target, policy, settings, now)
         await idempotency.complete(db, ctx.tenant_id, VALIDATE_ROUTE, idempotency_key, run_id)
         await db.commit()
@@ -589,6 +591,22 @@ def input_hash(kind: ValidationInputKind, text: str) -> str:
     return hashlib.sha256(f"{kind.value}:{text}".encode()).hexdigest()
 
 
+async def _check_active_limit(db: AsyncSession, tenant_id: UUID, settings: Settings) -> None:
+    # Each queued job may call the paid model, so a tenant's backlog is bounded. A reused result
+    # queues nothing and is never refused.
+    active = await db.scalar(
+        select(func.count())
+        .select_from(Job)
+        .where(
+            Job.tenant_id == tenant_id,
+            Job.kind.in_(tuple(INPUT_BY_JOB_KIND)),
+            Job.state.in_((ExecutionState.QUEUED, ExecutionState.RUNNING)),
+        )
+    )
+    if (active or 0) >= settings.validation_max_active_jobs_per_tenant:
+        raise ValidationLimitError()
+
+
 async def _queue(
     db: AsyncSession,
     ctx: TenantContext,
@@ -617,6 +635,9 @@ async def _queue(
             deadline_at=now + timedelta(seconds=settings.validation_job_deadline_seconds),
             model=judge_model_id(settings),
             created_by=ctx.principal.sub,
+            # The instant the reuse key's day came from: the worker derives the stored run's key
+            # from it, so the two can't straddle midnight.
+            created_at=now,
         )
     )
     # Flush the parent first: there is no ORM relationship to order the inserts.

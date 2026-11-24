@@ -26,6 +26,7 @@ from app.models.enums import ExecutionState, JobStage, ModelCheckFailure
 from app.services import judging, policies, rules, validations
 from app.services.jobs import transition
 from app.services.policy_context import PolicyContextProvider, StoredManifest
+from app.services.providers import text_judge
 from app.services.providers.base import ProviderError
 from app.services.providers.text_judge import TextJudge
 
@@ -95,6 +96,11 @@ async def run(
                 return outcome
             review, judged = outcome
         evaluation = rules.evaluate_graph_rules(text, selected, target.facts, review)
+        if not selected:
+            # No rule matched this channel, format or language: nothing was checked, which is
+            # not the same as nothing broken, so the run can't pass.
+            evaluation = validations.without_pass(evaluation)
+            context_gaps = [*context_gaps, rules.NO_RULES_SELECTED_GAP]
     db.add(
         validations.new_run(
             run_id=job.id,
@@ -144,6 +150,9 @@ async def _review(
     )
     if now >= job.deadline_at:
         return _failed(judge, ModelCheckFailure.DEADLINE_PASSED), judged
+    if len(open_rules) > text_judge.MAX_RULES_PER_CALL:
+        # The answer could never verify, so don't pay for the call.
+        return _failed(judge, ModelCheckFailure.TOO_MANY_RULES), judged
     context = judging.judge_context(
         validations.judged_rules(open_rules), stored.manifest.evidence, stored.manifest.exceptions
     )

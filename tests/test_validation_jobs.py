@@ -2,6 +2,7 @@
 # worker checks with the SIMULATED model and stores the run, GET follows it.
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, tzinfo
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -10,14 +11,16 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.errors import ValidationJobError
 from app.models import Job, ValidationRun
 from app.models.enums import ExecutionState, ModelCheckFailure
-from app.services import rules
+from app.services import rules, validations
 from app.services.jobs import RUN_EVENT
+from app.services.providers import text_judge
 from app.services.providers.base import ProviderRejectedError
 from app.services.providers.text_judge import (
+    NOVA_LITE_MODEL_ID,
     SIMULATED_JUDGE_MODEL_ID,
     JudgeReply,
     JudgeRequest,
@@ -50,11 +53,13 @@ def graph() -> PolicyGraphImport:
 
 
 @pytest.fixture(autouse=True)
-def model_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.setenv("APP_ENV", "local")
-    monkeypatch.setenv("VALIDATION_MODEL_MODE", "simulator")
-    get_settings.cache_clear()
-    yield
+def model_on() -> Iterator[None]:
+    # The env is restored before the cache is cleared, so later tests never see these settings.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("APP_ENV", "local")
+        patch.setenv("VALIDATION_MODEL_MODE", "simulator")
+        get_settings.cache_clear()
+        yield
     get_settings.cache_clear()
 
 
@@ -244,6 +249,134 @@ async def test_past_the_deadline_the_model_is_skipped_and_the_run_needs_review(
     )
 
 
+class CountingJudge(SimulatedTextJudge):
+    def __init__(self) -> None:
+        super().__init__(SCENARIO.PASS_ALL)
+        self.calls = 0
+
+    async def judge(self, request: JudgeRequest) -> JudgeReply:
+        self.calls += 1
+        return await super().judge(request)
+
+
+async def test_more_open_rules_than_one_call_covers_skips_the_model_and_needs_review(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The synthetic graph leaves 5 semantic rules open; a cap of 2 can't cover them.
+    monkeypatch.setattr(text_judge, "MAX_RULES_PER_CALL", 2)
+    _, run_id = await _queued(client, auth, world)
+    judge = CountingJudge()
+    handler = ValidationJobHandler(judge=judge)
+    await run_once(
+        sessions,
+        {},
+        None,
+        get_settings(),
+        event_handlers={
+            VALIDATION_RUN_EVENT: JobRunHandler(dict.fromkeys(JOB_KIND_BY_INPUT.values(), handler))
+        },
+    )
+    done = await _read(client, auth, world, run_id)
+
+    assert judge.calls == 0
+    assert done["outcome"] == "NEEDS_REVIEW"
+    reasons = {r["reason"] for r in done["rule_results"] if r["result"] == "UNABLE_TO_ASSESS"}
+    assert reasons == {rules.MODEL_CHECK_FAILED.format(failure=ModelCheckFailure.TOO_MANY_RULES)}
+
+
+async def test_the_job_is_stamped_with_the_instant_its_reuse_key_used(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One millisecond before midnight UTC by the API's clock: the database clock may already be
+    # on the next day, and the worker's key must still use the day the request looked up.
+    before_midnight = datetime(2026, 11, 23, 23, 59, 59, 999_000, tzinfo=UTC)
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> _Clock:
+            return cls.fromtimestamp(before_midnight.timestamp(), tz=tz)
+
+    monkeypatch.setattr(validations, "datetime", _Clock)
+    _, run_id = await _queued(client, auth, world)
+
+    job = await _job(sessions, run_id)
+    assert job.created_at == before_midnight
+
+
+@pytest.fixture
+def two_active_validations() -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("VALIDATION_MAX_ACTIVE_JOBS_PER_TENANT", "2")
+        get_settings.cache_clear()
+        yield
+    get_settings.cache_clear()
+
+
+@pytest.mark.usefixtures("two_active_validations")
+async def test_a_tenant_can_queue_up_to_its_limit_then_gets_429_until_one_finishes(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> None:
+    # Different texts, so nothing is reused and each one would queue a job.
+    for prompt in (CLEAN_PROMPT, f"{CLEAN_PROMPT} Learn more today."):
+        await _queued(client, auth, world, prompt=prompt)
+
+    third = await _creative(client, auth, world.a, prompt=f"{CLEAN_PROMPT} Call us.")
+    refused = await _validate(client, auth, world.a.tenant_id, third)
+
+    assert refused.status_code == 429
+    body = refused.json()
+    assert (body["code"], body["retryable"]) == ("VALIDATION_LIMIT_REACHED", True)
+    assert await _work(sessions) == 2
+    assert (await _validate(client, auth, world.a.tenant_id, third)).status_code == 202
+
+
+def _spanish_only_graph() -> PolicyGraphImport:
+    # Every rule limited to Spanish, so an English brief selects none of them.
+    base = load_synthetic_graph()
+    rule_nodes = {rule.node_key for rule in base.rules}
+    return base.model_copy(
+        update={
+            "nodes": [
+                node.model_copy(update={"languages": ["es"]})
+                if node.node_key in rule_nodes
+                else node
+                for node in base.nodes
+            ]
+        }
+    )
+
+
+@pytest.mark.parametrize("graph", [_spanish_only_graph()])
+async def test_a_text_no_rule_applies_to_needs_review_instead_of_passing(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> None:
+    # Nothing checked is not the same as nothing broken: no unknown check becomes PASS.
+    creative, run_id = await _queued(client, auth, world)
+
+    await _work(sessions)
+    done = await _read(client, auth, world, run_id)
+
+    assert (done["state"], done["outcome"], done["rule_results"]) == (
+        "SUCCEEDED",
+        "NEEDS_REVIEW",
+        [],
+    )
+    assert rules.NO_RULES_SELECTED_GAP.reason in {g["reason"] for g in done["coverage_gaps"]}
+    eligibility = await client.get(
+        f"/v1/marketing/creatives/{creative['id']}/generation-eligibility",
+        headers=auth("creator-a", world.a.tenant_id),
+    )
+    assert eligibility.json()["eligible"] is False
+
+
 class RejectingJudge:
     # A model refusal that retrying can't fix, like a disabled model or a rejected request.
 
@@ -409,28 +542,44 @@ async def _job(sessions: Sessions, job_id: str) -> Job:
 
 
 def test_the_worker_refuses_a_live_judge_without_a_model() -> None:
-    settings = get_settings().model_copy(
-        update={"validation_model_mode": "live", "bedrock_validation_model_id": None}
+    # A call budget inside the lease, so only the missing model is wrong.
+    settings = _live_judge(timeout=10, retries=3).model_copy(
+        update={"bedrock_validation_model_id": None}
     )
 
-    with pytest.raises(WorkerConfigError, match="BEDROCK_VALIDATION_MODEL_ID"):
+    with pytest.raises(WorkerConfigError, match="missing BEDROCK_VALIDATION_MODEL_ID"):
         check_worker_settings(settings)
 
 
-def test_the_worker_refuses_a_judge_timeout_as_long_as_its_lease() -> None:
-    settings = get_settings().model_copy(
-        update={"validation_model_timeout_seconds": 60, "worker_lease_seconds": 60}
+def _live_judge(timeout: float, retries: int) -> Settings:
+    return get_settings().model_copy(
+        update={
+            "validation_model_mode": "live",
+            "bedrock_validation_model_id": NOVA_LITE_MODEL_ID,
+            "validation_model_timeout_seconds": timeout,
+            "bedrock_max_retries": retries,
+            "worker_lease_seconds": 60,
+        }
     )
 
-    with pytest.raises(WorkerConfigError, match="VALIDATION_MODEL_TIMEOUT_SECONDS"):
-        check_worker_settings(settings)
+
+def test_the_worker_refuses_a_live_judge_call_budget_as_long_as_its_lease() -> None:
+    # 15 s per attempt x 4 attempts = 60 s, the lease: a call could outlive it.
+    with pytest.raises(WorkerConfigError, match=r"BEDROCK_MAX_RETRIES \+ 1\) must be below"):
+        check_worker_settings(_live_judge(timeout=15, retries=3))
 
 
-def test_with_the_model_off_the_judge_timeout_does_not_stop_the_worker() -> None:
-    # No judge calls happen, so the judge timeout can't outlive a lease.
+def test_a_live_judge_call_budget_just_under_the_lease_is_accepted() -> None:
+    # 14.9 s x 4 = 59.6 s < 60 s.
+    check_worker_settings(_live_judge(timeout=14.9, retries=3))
+
+
+@pytest.mark.parametrize("mode", ["off", "simulator"])
+def test_without_a_live_judge_the_call_budget_does_not_stop_the_worker(mode: str) -> None:
+    # No Bedrock call happens, so its timeouts can't outlive a lease.
     settings = get_settings().model_copy(
         update={
-            "validation_model_mode": "off",
+            "validation_model_mode": mode,
             "validation_model_timeout_seconds": 60,
             "worker_lease_seconds": 60,
         }

@@ -190,6 +190,8 @@ class Settings(RetrievalSettings):
     # after either, the run is stored as needing review (never PASS).
     validation_job_max_attempts: int = Field(default=5, ge=1, le=20)
     validation_job_deadline_seconds: int = Field(default=600, ge=60, le=86_400)
+    # Brief and caption validations queued or running at once per tenant; each may call the model.
+    validation_max_active_jobs_per_tenant: int = Field(default=20, ge=1, le=200)
 
     @field_validator("cognito_client_ids", "cors_origins", "higgsfield_output_hosts", mode="before")
     @classmethod

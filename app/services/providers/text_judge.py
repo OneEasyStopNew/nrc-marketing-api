@@ -47,6 +47,9 @@ UNKNOWN_EVIDENCE_KEY: Final = "NOT-IN-CONTEXT"
 _SIMULATED_PREFIX: Final = "SIMULATED: "
 _WORD = re.compile(r"\w+")
 _MAX_EXCERPT_CHARS: Final = 500
+# Rules one judge call may cover: the answer schema allows no more, so a larger request could
+# never verify. Callers check it before calling (no batching until a real corpus needs it).
+MAX_RULES_PER_CALL: Final = 50
 
 
 class _AnswerModel(BaseModel):
@@ -77,7 +80,7 @@ class JudgeAnswer(_AnswerModel):
     evidence keys against the policy context, offsets and excerpts against the text.
     """
 
-    results: list[JudgeRuleAnswer] = Field(min_length=1, max_length=50)
+    results: list[JudgeRuleAnswer] = Field(min_length=1, max_length=MAX_RULES_PER_CALL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +226,12 @@ def missing_live_judge_settings(settings: Settings) -> list[str]:
         supported = ", ".join(sorted(SUPPORTED_BEDROCK_JUDGE_MODEL_IDS))
         return [f"BEDROCK_VALIDATION_MODEL_ID is not a supported model (use one of: {supported})"]
     return []
+
+
+def judge_call_budget_seconds(settings: Settings) -> float:
+    # The longest one judge call may take, the client's retries included. botocore's timeouts
+    # are per connection and per socket read, so the adapter enforces this bound itself.
+    return settings.validation_model_timeout_seconds * (settings.bedrock_max_retries + 1)
 
 
 def text_judge_from_settings(settings: Settings) -> TextJudge | None:

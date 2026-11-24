@@ -84,6 +84,7 @@ from app.services.providers.higgsfield import (
 from app.services.providers.simulator import SIMULATOR_NAME, SimulatedImageProvider
 from app.services.providers.text_judge import (
     TextJudge,
+    judge_call_budget_seconds,
     missing_live_judge_settings,
     text_judge_from_settings,
 )
@@ -1086,12 +1087,13 @@ def check_worker_settings(settings: Settings) -> None:
     # A provider call must end before the lease that covers it expires.
     if settings.http_timeout_seconds >= lease_seconds(settings):
         raise WorkerConfigError("HTTP_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS.")
-    # The handler renews the lease before each judge call. shortcut: botocore's own retries
-    # (BEDROCK_MAX_RETRIES) can stretch one call past the lease; measure when live access exists.
-    judge_on = settings.validation_model_mode != "off"
-    if judge_on and settings.validation_model_timeout_seconds >= lease_seconds(settings):
+    # The handler renews the lease before each judge call, and the adapter stops waiting after
+    # the call budget (timeout per attempt times attempts), so a call ends inside its lease.
+    live_judge = settings.validation_model_mode == "live"
+    if live_judge and judge_call_budget_seconds(settings) >= lease_seconds(settings):
         raise WorkerConfigError(
-            "VALIDATION_MODEL_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS."
+            "VALIDATION_MODEL_TIMEOUT_SECONDS x (BEDROCK_MAX_RETRIES + 1) must be below "
+            "WORKER_LEASE_SECONDS."
         )
     problems = missing_live_judge_settings(settings)
     if problems:

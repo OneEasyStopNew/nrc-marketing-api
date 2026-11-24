@@ -5,6 +5,7 @@ service model, or by a client that raises or answers off-contract. The shapes ar
 ones; they have not been checked against the live service.
 """
 
+import time
 from typing import Any
 
 import boto3
@@ -28,6 +29,8 @@ from app.services.providers.text_judge import (
 )
 
 SECRET_TEXT = "SECRET TEXT UNDER REVIEW"  # noqa: S105  marker proving it is never echoed
+# Long enough that no ordinary test call comes near it.
+CALL_BUDGET_SECONDS = 30.0
 
 
 def _request(max_output_tokens: int = 1500) -> JudgeRequest:
@@ -46,7 +49,10 @@ def _stubbed(max_output_tokens: int = 2000) -> tuple[BedrockTextJudge, Stubber]:
     stubber = Stubber(client)
     stubber.activate()
     judge = BedrockTextJudge(
-        model_id=NOVA_LITE_MODEL_ID, client=client, max_output_tokens=max_output_tokens
+        model_id=NOVA_LITE_MODEL_ID,
+        client=client,
+        max_output_tokens=max_output_tokens,
+        call_budget_seconds=CALL_BUDGET_SECONDS,
     )
     return judge, stubber
 
@@ -74,22 +80,40 @@ def _expected(max_tokens: int) -> dict[str, Any]:
 class _Client:
     # A client that raises, or answers with a fixed body (a Stubber cannot do either off-contract).
 
-    def __init__(self, *, error: Exception | None = None, body: object = None) -> None:
+    def __init__(
+        self, *, error: Exception | None = None, body: object = None, delay: float = 0
+    ) -> None:
         self._error = error
         self._body = body
+        self._delay = delay
 
     def converse(self, **kwargs: object) -> object:
+        # Runs in the adapter's worker thread, so a blocking sleep stands in for a slow call.
+        time.sleep(self._delay)
         if self._error is not None:
             raise self._error
         return self._body
 
 
-def _judge_with(client: _Client) -> BedrockTextJudge:
+def _judge_with(
+    client: _Client, call_budget_seconds: float = CALL_BUDGET_SECONDS
+) -> BedrockTextJudge:
     return BedrockTextJudge(
         model_id=NOVA_LITE_MODEL_ID,
-        client=client,  # type: ignore[arg-type]
+        client=client,  # type: ignore[arg-type]  # a fake with converse() only, not a boto3 client
         max_output_tokens=500,
+        call_budget_seconds=call_budget_seconds,
     )
+
+
+async def test_a_call_past_its_budget_is_unavailable_and_retryable() -> None:
+    # botocore's timeouts are per read, so the adapter bounds the whole call itself.
+    slow = _judge_with(_Client(body={}, delay=0.3), call_budget_seconds=0.05)
+
+    with pytest.raises(ProviderUnavailableError, match="did not answer in time") as raised:
+        await slow.judge(_request())
+
+    assert raised.value.retryable is True
 
 
 async def test_request_has_system_and_user_message_and_the_lower_token_cap() -> None:
@@ -201,12 +225,22 @@ def test_unsupported_model_id_is_a_config_error() -> None:
     client = boto3.Session().client("bedrock-runtime", region_name="us-east-1")
 
     with pytest.raises(ProviderConfigError, match="not a supported model"):
-        BedrockTextJudge(model_id="anthropic.claude-3", client=client, max_output_tokens=500)
+        BedrockTextJudge(
+            model_id="anthropic.claude-3",
+            client=client,
+            max_output_tokens=500,
+            call_budget_seconds=CALL_BUDGET_SECONDS,
+        )
 
 
 def test_every_supported_model_builds_an_adapter_and_repr_shows_only_the_model_id() -> None:
     client = boto3.Session().client("bedrock-runtime", region_name="us-east-1")
 
     for model_id in SUPPORTED_BEDROCK_JUDGE_MODEL_IDS:
-        judge = BedrockTextJudge(model_id=model_id, client=client, max_output_tokens=500)
+        judge = BedrockTextJudge(
+            model_id=model_id,
+            client=client,
+            max_output_tokens=500,
+            call_budget_seconds=CALL_BUDGET_SECONDS,
+        )
         assert repr(judge) == f"BedrockTextJudge(model_id='{model_id}')"

@@ -1116,6 +1116,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "VALIDATION_LIMIT_REACHED: too many validations queued or running for the tenant; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }

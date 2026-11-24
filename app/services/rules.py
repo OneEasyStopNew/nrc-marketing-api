@@ -56,6 +56,10 @@ MODEL_CHECK_FAILED: Final = "The model check failed ({failure}); a person must r
 SIMULATED_REVIEW_GAP: Final = CoverageGap(
     reason="Semantic rules were judged by the SIMULATED model check; this is not evidence."
 )
+NO_RULES_SELECTED_GAP: Final = CoverageGap(
+    reason="The policy context selected no rules for this text, so nothing was checked; a person "
+    "must review it."
+)
 
 
 @dataclass(frozen=True, slots=True)
