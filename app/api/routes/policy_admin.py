@@ -49,8 +49,9 @@ _EDIT_ERRORS: dict[int | str, dict[str, Any]] = {
     409: {
         "model": ErrorBody,
         "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), "
-        "POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding to a bundle that holds "
-        "POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings (details.limit).",
+        "POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding an item, or approving or "
+        "editing a rejected one, in a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges "
+        "and wordings that are not rejected (details.limit).",
     },
     412: {"model": ErrorBody, "description": "Stale If-Match; details.current_version."},
     428: {"model": ErrorBody, "description": "If-Match missing or malformed."},
@@ -311,11 +312,14 @@ async def update_policy_node(
     body: NodeUpdate,
     ctx: PolicyReader,
     db: DbSession,
+    settings: SettingsDep,
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyNodeRead:
     revision = expected_version(if_match)
-    node = await policy_bundles.update_node(db, ctx, policy_bundle_id, revision, node_id, body)
+    node = await policy_bundles.update_node(
+        db, ctx, policy_bundle_id, revision, node_id, body, settings.policy_max_items_per_bundle
+    )
     _edited(response, revision)
     return PolicyNodeRead.model_validate(node)
 
@@ -355,11 +359,14 @@ async def update_policy_rule(
     body: RuleUpdate,
     ctx: PolicyReader,
     db: DbSession,
+    settings: SettingsDep,
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyRuleRead:
     revision = expected_version(if_match)
-    rule = await policy_bundles.update_rule(db, ctx, policy_bundle_id, revision, rule_id, body)
+    rule = await policy_bundles.update_rule(
+        db, ctx, policy_bundle_id, revision, rule_id, body, settings.policy_max_items_per_bundle
+    )
     _edited(response, revision)
     return await policy_reads.get_rule(db, ctx, policy_bundle_id, rule.id)
 
@@ -422,11 +429,19 @@ async def decide_policy_item(
     body: ReviewDecisionRequest,
     ctx: PolicyReader,
     db: DbSession,
+    settings: SettingsDep,
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyBundleDetail:
     await policy_bundles.review_item(
-        db, ctx, policy_bundle_id, expected_version(if_match), body.item_kind, body.item_id, body
+        db,
+        ctx,
+        policy_bundle_id,
+        expected_version(if_match),
+        body.item_kind,
+        body.item_id,
+        body,
+        settings.policy_max_items_per_bundle,
     )
     detail = await policy_reads.bundle_detail(db, ctx, policy_bundle_id)
     response.headers["ETag"] = etag(detail.revision)

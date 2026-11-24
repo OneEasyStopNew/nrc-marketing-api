@@ -1109,7 +1109,7 @@
             }
           },
           "409": {
-            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding to a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings (details.limit).",
+            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding an item, or approving or editing a rejected one, in a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings that are not rejected (details.limit).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4005,7 +4005,7 @@
             }
           },
           "409": {
-            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding to a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings (details.limit).",
+            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding an item, or approving or editing a rejected one, in a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings that are not rejected (details.limit).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4241,7 +4241,7 @@
             }
           },
           "409": {
-            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding to a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings (details.limit).",
+            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding an item, or approving or editing a rejected one, in a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings that are not rejected (details.limit).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4610,7 +4610,7 @@
             }
           },
           "409": {
-            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding to a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings (details.limit).",
+            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding an item, or approving or editing a rejected one, in a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings that are not rejected (details.limit).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4769,7 +4769,7 @@
             }
           },
           "409": {
-            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding to a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings (details.limit).",
+            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding an item, or approving or editing a rejected one, in a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings that are not rejected (details.limit).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4928,7 +4928,7 @@
             }
           },
           "409": {
-            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding to a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings (details.limit).",
+            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding an item, or approving or editing a rejected one, in a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings that are not rejected (details.limit).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5076,7 +5076,7 @@
             }
           },
           "409": {
-            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding to a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings (details.limit).",
+            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding an item, or approving or editing a rejected one, in a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings that are not rejected (details.limit).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5225,7 +5225,7 @@
             }
           },
           "409": {
-            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding to a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings (details.limit).",
+            "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding an item, or approving or editing a rejected one, in a bundle that holds POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings that are not rejected (details.limit).",
             "content": {
               "application/json": {
                 "schema": {

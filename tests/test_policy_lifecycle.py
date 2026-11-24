@@ -205,6 +205,7 @@ class Env:
                 kind,
                 item_id,
                 ReviewDecision(decision=decision),
+                TEST_MAX_ITEMS,
             )
             draft.revision += 1
 
@@ -375,6 +376,7 @@ async def test_a_stale_revision_is_refused(env: Env) -> None:
             draft.revision - 1,
             draft.clause_node,
             NodeUpdate(text="[SYNTHETIC] Changed."),
+            TEST_MAX_ITEMS,
         )
     assert error.value.details == {"current_version": draft.revision}
 
@@ -390,6 +392,7 @@ async def test_editing_a_node_sends_it_back_to_review(env: Env) -> None:
         draft.revision,
         draft.clause_node,
         NodeUpdate(jurisdictions=["US"]),
+        TEST_MAX_ITEMS,
     )
 
     assert node.jurisdictions == ["US"]
@@ -403,7 +406,13 @@ async def test_editing_a_rule_sends_its_node_back_to_review(env: Env) -> None:
     await env.review_all(draft)
 
     rule = await bundles.update_rule(
-        env.db, env.admin, draft.id, draft.revision, draft.rule, RuleUpdate(severity=Severity.MAJOR)
+        env.db,
+        env.admin,
+        draft.id,
+        draft.revision,
+        draft.rule,
+        RuleUpdate(severity=Severity.MAJOR),
+        TEST_MAX_ITEMS,
     )
 
     assert rule.severity is Severity.MAJOR
@@ -423,6 +432,7 @@ async def test_a_required_field_cannot_be_cleared(env: Env) -> None:
             draft.revision,
             draft.clause_node,
             NodeUpdate.model_validate({"text": None}),
+            TEST_MAX_ITEMS,
         )
     assert error.value.details == {"fields": ["text"]}
 
@@ -632,6 +642,7 @@ async def test_approvers_cannot_submit_or_review_items(env: Env) -> None:
             ReviewItemKind.NODE,
             draft.clause_node,
             ReviewDecision(decision="APPROVED"),
+            TEST_MAX_ITEMS,
         )
 
 
@@ -764,6 +775,7 @@ async def test_a_bundle_in_review_cannot_be_edited(env: Env) -> None:
             draft.revision,
             draft.clause_node,
             NodeUpdate(text="[SYNTHETIC] Changed."),
+            TEST_MAX_ITEMS,
         )
 
 
@@ -782,6 +794,7 @@ async def test_an_approved_bundle_cannot_be_edited_or_reviewed(env: Env) -> None
             ReviewItemKind.NODE,
             draft.clause_node,
             ReviewDecision(decision="REJECTED"),
+            TEST_MAX_ITEMS,
         )
 
 
@@ -809,6 +822,7 @@ async def test_an_edge_without_provenance_cannot_be_approved(env: Env) -> None:
             ReviewItemKind.EDGE,
             edge.id,
             ReviewDecision(decision="APPROVED"),
+            TEST_MAX_ITEMS,
         )
 
 
@@ -832,6 +846,7 @@ async def test_rejected_items_do_not_block_approval(env: Env) -> None:
         ReviewItemKind.NODE,
         example.id,
         ReviewDecision(decision="REJECTED", note="[SYNTHETIC] not needed"),
+        TEST_MAX_ITEMS,
     )
     draft.revision += 1
     await env.move(draft, Command.SUBMIT)

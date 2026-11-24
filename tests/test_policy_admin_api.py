@@ -698,13 +698,45 @@ async def test_a_reason_is_required_to_reject(api: Api) -> None:
 
 
 @pytest.fixture
-def tight_policy_caps(
+def adjustable_settings(
     app_overrides: dict[Callable[..., object], Callable[..., object]],
-) -> None:
-    capped: Settings = get_settings().model_copy(
+) -> dict[str, Settings]:
+    # The client copies app_overrides when it starts, so a test changes settings through this.
+    current = {"settings": get_settings()}
+    app_overrides[get_settings] = lambda: current["settings"]
+    return current
+
+
+@pytest.fixture
+def tight_policy_caps(adjustable_settings: dict[str, Settings]) -> None:
+    adjustable_settings["settings"] = adjustable_settings["settings"].model_copy(
         update={"policy_max_open_bundles_per_tenant": 2, "policy_max_items_per_bundle": 10}
     )
-    app_overrides[get_settings] = lambda: capped
+
+
+async def fill_with_nodes(
+    api: Api, connection: AsyncConnection, world: World, count: int
+) -> tuple[str, UUID, list[dict[str, Any]]]:
+    # A draft holding `count` clause nodes; returns its path, the cited clause and the nodes.
+    # The bundle's revision is then count + 1.
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+    path = f"/policy-bundles/{bundle['id']}"
+    nodes = []
+    for index in range(count):
+        body = node_body(clause_id, key=f"CL-{index}")
+        created = await api.ok(
+            api.call("POST", f"{path}/nodes", json=body, if_match=index + 1), 201
+        )
+        nodes.append(created.json())
+    return path, clause_id, nodes
+
+
+def assert_cap_reached(response: httpx.Response) -> None:
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "POLICY_LIMIT_REACHED"
+    assert response.json()["details"] == {"limit": 10}
 
 
 @pytest.mark.usefixtures("tight_policy_caps")
@@ -729,19 +761,17 @@ async def test_open_bundles_are_capped_per_tenant(api: Api) -> None:
 async def test_items_per_bundle_are_capped(
     api: Api, connection: AsyncConnection, world: World
 ) -> None:
-    source = (await api.ok(register_source(api, connection), 201)).json()
-    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
-    bundle = await new_bundle(api)
-    path = f"/policy-bundles/{bundle['id']}/nodes"
-    for index in range(10):
-        body = node_body(clause_id, key=f"CL-{index}")
-        await api.ok(api.call("POST", path, json=body, if_match=index + 1), 201)
+    path, clause_id, _ = await fill_with_nodes(api, connection, world, 10)
 
-    over = await api.call("POST", path, json=node_body(clause_id, key="CL-X"), if_match=11)
+    over = await api.call(
+        "POST", f"{path}/nodes", json=node_body(clause_id, key="CL-X"), if_match=11
+    )
 
-    assert over.status_code == 409, over.text
-    assert over.json()["code"] == "POLICY_LIMIT_REACHED"
-    assert over.json()["details"] == {"limit": 10}
+    assert_cap_reached(over)
+
+
+def _decision(node: dict[str, Any], decision: str) -> dict[str, Any]:
+    return {"item_kind": "node", "item_id": node["id"], "decision": decision}
 
 
 @pytest.mark.usefixtures("tight_policy_caps")
@@ -750,25 +780,8 @@ async def test_rejected_items_do_not_use_up_the_item_cap(
 ) -> None:
     # Regression (code review): rejected rows can't be deleted, so counting them left a full
     # draft unable to take any correction.
-    source = (await api.ok(register_source(api, connection), 201)).json()
-    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
-    bundle = await new_bundle(api)
-    path = f"/policy-bundles/{bundle['id']}"
-    nodes = [
-        (
-            await api.ok(
-                api.call(
-                    "POST",
-                    f"{path}/nodes",
-                    json=node_body(clause_id, key=f"CL-{i}"),
-                    if_match=i + 1,
-                ),
-                201,
-            )
-        ).json()
-        for i in range(10)
-    ]
-    rejection = {"item_kind": "node", "item_id": nodes[0]["id"], "decision": "REJECTED"}
+    path, clause_id, nodes = await fill_with_nodes(api, connection, world, 10)
+    rejection = _decision(nodes[0], "REJECTED")
     await api.ok(api.call("POST", f"{path}/review-decisions", json=rejection, if_match=11))
 
     replacement = await api.call(
@@ -778,14 +791,37 @@ async def test_rejected_items_do_not_use_up_the_item_cap(
     assert replacement.status_code == 201, replacement.text
 
 
-@pytest.fixture
-def adjustable_settings(
-    app_overrides: dict[Callable[..., object], Callable[..., object]],
-) -> dict[str, Settings]:
-    # The client copies app_overrides when it starts, so a test changes settings through this.
-    current = {"settings": get_settings()}
-    app_overrides[get_settings] = lambda: current["settings"]
-    return current
+@pytest.mark.usefixtures("tight_policy_caps")
+async def test_a_rejected_item_cannot_come_back_over_the_cap(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    # Regression (altitude review): approving or editing a REJECTED item makes it count again,
+    # so add-reject-add-revive would otherwise pass the cap without limit.
+    path, clause_id, nodes = await fill_with_nodes(api, connection, world, 10)
+    await api.ok(
+        api.call(
+            "POST", f"{path}/review-decisions", json=_decision(nodes[0], "REJECTED"), if_match=11
+        )
+    )
+    await api.ok(
+        api.call("POST", f"{path}/nodes", json=node_body(clause_id, key="CL-NEW"), if_match=12),
+        201,
+    )
+
+    approved = await api.call(
+        "POST", f"{path}/review-decisions", json=_decision(nodes[0], "APPROVED"), if_match=13
+    )
+    edited = await api.call(
+        "PATCH", f"{path}/nodes/{nodes[0]['id']}", json={"channels": ["facebook"]}, if_match=13
+    )
+    rejected_again = await api.call(
+        "POST", f"{path}/review-decisions", json=_decision(nodes[1], "REJECTED"), if_match=13
+    )
+
+    assert_cap_reached(approved)
+    assert_cap_reached(edited)
+    # Rejecting never needs a place.
+    assert rejected_again.status_code == 200, rejected_again.text
 
 
 async def test_a_copy_over_the_item_cap_is_refused(
@@ -795,15 +831,7 @@ async def test_a_copy_over_the_item_cap_is_refused(
     world: World,
 ) -> None:
     # Regression (code review): copying skipped the cap, so a copy could start over it.
-    source = (await api.ok(register_source(api, connection), 201)).json()
-    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
-    base = await new_bundle(api)
-    for i in range(11):
-        body = node_body(clause_id, key=f"CL-{i}")
-        await api.ok(
-            api.call("POST", f"/policy-bundles/{base['id']}/nodes", json=body, if_match=i + 1),
-            201,
-        )
+    path, _, _ = await fill_with_nodes(api, connection, world, 11)
     adjustable_settings["settings"] = adjustable_settings["settings"].model_copy(
         update={"policy_max_items_per_bundle": 10}
     )
@@ -815,13 +843,11 @@ async def test_a_copy_over_the_item_cap_is_refused(
             "name": "[SYNTHETIC] copy",
             "source_ref": "synthetic:copy",
             "is_synthetic": True,
-            "based_on_bundle_id": base["id"],
+            "based_on_bundle_id": path.rsplit("/", 1)[1],
         },
     )
 
-    assert copy.status_code == 409, copy.text
-    assert copy.json()["code"] == "POLICY_LIMIT_REACHED"
-    assert copy.json()["details"] == {"limit": 10}
+    assert_cap_reached(copy)
 
 
 @pytest.mark.parametrize("field", ["name", "source_ref"])

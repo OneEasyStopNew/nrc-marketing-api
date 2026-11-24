@@ -512,6 +512,18 @@ def _changes(body: NodeUpdate | RuleUpdate, *, nullable: frozenset[str]) -> dict
     return changes
 
 
+async def _room_to_revive(
+    db: AsyncSession,
+    bundle: PolicyBundle,
+    item: PolicyNode | PolicyEdge | PolicyRuleWording,
+    max_items: int,
+) -> None:
+    # A REJECTED item doesn't count toward POLICY_MAX_ITEMS_PER_BUNDLE; one leaving REJECTED
+    # (a review decision, or an edit that proposes it again) takes a place like an add does.
+    if item.review_state is ReviewState.REJECTED:
+        await _room_for_items(db, bundle, max_items)
+
+
 def _back_to_proposed(item: PolicyNode | PolicyEdge | PolicyRuleWording) -> None:
     # A changed item has to be reviewed again before it can count.
     item.review_state = ReviewState.PROPOSED
@@ -559,10 +571,12 @@ async def update_node(
     revision: int,
     node_id: UUID,
     body: NodeUpdate,
+    max_items: int,
 ) -> PolicyNode:
     _require(ctx, frozenset({Capability.POLICY_MANAGE}))
     bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
     node = await _in_bundle(db, PolicyNode, bundle, node_id, "Node")
+    await _room_to_revive(db, bundle, node, max_items)
     changes = _changes(body, nullable=_NULLABLE_NODE_FIELDS)
     await _require_clause(db, ctx.tenant_id, body.source_clause_id)
     _check_window(
@@ -636,11 +650,13 @@ async def update_rule(
     revision: int,
     rule_record_id: UUID,
     body: RuleUpdate,
+    max_items: int,
 ) -> PolicyRuleRecord:
     _require(ctx, frozenset({Capability.POLICY_MANAGE}))
     bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
     rule = await _in_bundle(db, PolicyRuleRecord, bundle, rule_record_id, "Rule")
     node = await _in_bundle(db, PolicyNode, bundle, rule.node_id, "Rule node")
+    await _room_to_revive(db, bundle, node, max_items)
     for name, value in _changes(body, nullable=frozenset()).items():
         setattr(rule, name, value)
     _back_to_proposed(node)
@@ -760,12 +776,15 @@ async def review_item(
     kind: ReviewItemKind,
     item_id: UUID,
     body: ReviewDecision,
+    max_items: int,
 ) -> None:
     """Approve or reject one node, edge or wording while the bundle is a draft or in review."""
     _require(ctx, frozenset({Capability.POLICY_MANAGE}))
     bundle = await _open(db, ctx, bundle_id, revision, REVIEWABLE)
     item = await _in_bundle(db, _REVIEW_MODELS[kind], bundle, item_id, kind.value.capitalize())
     decision = ReviewState(body.decision)
+    if decision is not ReviewState.REJECTED:
+        await _room_to_revive(db, bundle, item, max_items)
     if (
         decision is ReviewState.APPROVED
         and isinstance(item, PolicyEdge)
