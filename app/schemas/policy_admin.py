@@ -27,16 +27,14 @@ from app.models.enums import (
     ValidationInputKind,
     WordingKind,
 )
-from app.models.policy_graph import RULE_ID_PATTERN
+from app.models.policy_graph import NODE_KEY_PATTERN, RULE_ID_PATTERN
 from app.schemas.common import ApiModel, RequestModel
 
-Text = Annotated[str, StringConstraints(min_length=1, max_length=20_000, pattern=r"\S")]
-Tag = Annotated[str, StringConstraints(min_length=1, max_length=64, pattern=r"\S")]
-Note = Annotated[str, StringConstraints(min_length=1, max_length=1000, pattern=r"\S")]
-# Names, titles and references need a visible character: " " would pass min_length=1.
+# Names, titles, references and texts need a visible character: " " would pass min_length=1.
 NOT_BLANK = r"\S"
-# Node keys appear in paths, audit details and import files: letters, digits, '.', '_' and '-'.
-NODE_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+Text = Annotated[str, StringConstraints(min_length=1, max_length=20_000, pattern=NOT_BLANK)]
+Tag = Annotated[str, StringConstraints(min_length=1, max_length=64, pattern=NOT_BLANK)]
+Note = Annotated[str, StringConstraints(min_length=1, max_length=1000, pattern=NOT_BLANK)]
 # A RULE node is created together with its rule (RuleCreate), never on its own.
 NonRuleNodeType = Literal[
     PolicyNodeType.CLAUSE,

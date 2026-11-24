@@ -50,7 +50,7 @@ from app.models.enums import (
     Severity,
     WordingKind,
 )
-from app.models.policy_graph import RULE_ID_PATTERN
+from app.models.policy_graph import NODE_KEY_PATTERN, RULE_ID_PATTERN
 from app.schemas.tenancy import StudyFacts
 
 SYNTHETIC_GRAPH_PATH: Final = (
@@ -103,7 +103,7 @@ class SourceImport(_ImportModel):
 
 
 class NodeImport(_ImportModel):
-    node_key: str = Field(min_length=1, max_length=80)
+    node_key: str = Field(min_length=1, max_length=80, pattern=NODE_KEY_PATTERN)
     node_type: PolicyNodeType
     text: str = Field(min_length=1)
     language: PolicyLanguage = PolicyLanguage.EN

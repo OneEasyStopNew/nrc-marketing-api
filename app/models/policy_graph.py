@@ -49,6 +49,9 @@ from app.models.enums import (
 EMBEDDING_DIMENSIONS = 1024
 # Same pattern as app.schemas.policies.PolicyRule.rule_id (which imports it from here).
 RULE_ID_PATTERN = r"^[A-Z][A-Z0-9-]{1,39}$"
+# Node keys (policy_nodes.node_key, 80 chars) appear in paths, audit details and import files:
+# letters, digits, '.', '_' and '-'. Used by the API schemas and the import script.
+NODE_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
 # What search returns and the embedding index covers: supporting text. Rules are selected by
 # their conditions and exceptions reached through the graph, so neither is searched or embedded.
 SEARCHABLE_NODE_TYPES: Final = (

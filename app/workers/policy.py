@@ -383,7 +383,9 @@ async def _build(run: _Run, bundle_id: UUID, tenant_id: UUID) -> None:
             await _fail_build(db, run, bundle_id, tenant_id, _failure_code(error), None)
         except ProviderError as error:
             await db.rollback()
-            # The response carries the grouped code only; the exact provider code is logged here.
+            # The response carries the grouped code only; the exact provider code is logged here
+            # and kept on the internal build row.
+            code = _failure_code(error)
             logger.warning(
                 "policy bundle build embedding error bundle=%s tenant=%s provider_code=%s",
                 bundle_id,
@@ -391,18 +393,10 @@ async def _build(run: _Run, bundle_id: UUID, tenant_id: UUID) -> None:
                 error.code,
             )
             if error.retryable and attempts < run.settings.policy_worker_max_attempts:
-                await _retry_build_later(
-                    db,
-                    run,
-                    bundle_id,
-                    tenant_id,
-                    attempts,
-                    PolicyBuildFailure.EMBEDDING_UNAVAILABLE,
-                )
+                await _retry_build_later(db, run, bundle_id, tenant_id, attempts, code)
             else:
-                await _fail_build(
-                    db, run, bundle_id, tenant_id, _failure_code(error), model_id, error.code
-                )
+                failed_build = (model_id, error.code) if model_id is not None else None
+                await _fail_build(db, run, bundle_id, tenant_id, code, failed_build)
 
 
 def _failure_code(error: PolicyIndexError | ProviderError) -> PolicyBuildFailure:
@@ -410,11 +404,10 @@ def _failure_code(error: PolicyIndexError | ProviderError) -> PolicyBuildFailure
         if error.retryable:
             return PolicyBuildFailure.EMBEDDING_UNAVAILABLE
         return PolicyBuildFailure.EMBEDDING_FAILED
+    # PolicyBuildFailure reuses every PolicyIndexReason value.
     reason = (error.details or {}).get("reason")
-    if reason == PolicyIndexReason.NO_APPROVED_NODES:
-        return PolicyBuildFailure.NO_APPROVED_NODES
-    if reason == PolicyIndexReason.INDEX_CONTENT_CHANGED:
-        return PolicyBuildFailure.INDEX_CONTENT_CHANGED
+    if isinstance(reason, str) and reason in PolicyIndexReason:
+        return PolicyBuildFailure(reason)
     return PolicyBuildFailure.INDEX_REFUSED
 
 
@@ -485,12 +478,12 @@ async def _fail_build(
     bundle_id: UUID,
     tenant_id: UUID,
     code: PolicyBuildFailure,
-    failed_model_id: str | None,
-    provider_code: str | None = None,
+    failed_build: tuple[str, str] | None,
 ) -> None:
     # Back to APPROVED and out of the queue (available_at NULL) until BUILD runs again. The
-    # fenced change comes first, so a worker that lost its lease writes nothing. The internal
-    # build row keeps the exact provider code; the bundle shows the grouped one.
+    # fenced change comes first, so a worker that lost its lease writes nothing. failed_build is
+    # (model id, exact provider code) when an embedding call failed: the internal build row keeps
+    # the exact code, the bundle shows the grouped one.
     await _change(
         db,
         run,
@@ -503,8 +496,8 @@ async def _fail_build(
         },
         _BUILDS,
     )
-    if failed_model_id is not None:
-        await record_failed_build(db, tenant_id, bundle_id, failed_model_id, provider_code or code)
+    if failed_build is not None:
+        await record_failed_build(db, tenant_id, bundle_id, *failed_build)
     await _audit(
         db,
         tenant_id,

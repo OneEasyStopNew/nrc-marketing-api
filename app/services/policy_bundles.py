@@ -67,7 +67,7 @@ from app.schemas.policy_admin import (
     WordingCreate,
 )
 from app.schemas.validations import SourceReference
-from app.services.policy_checks import load_snapshot, run_checks
+from app.services.policy_checks import Issue, load_snapshot, run_checks
 from app.services.policy_index import stale_ready_builds
 
 State = BundleLifecycleState
@@ -512,6 +512,17 @@ def _changes(body: NodeUpdate | RuleUpdate, *, nullable: frozenset[str]) -> dict
     return changes
 
 
+async def _open_for_add(
+    db: AsyncSession, ctx: TenantContext, bundle_id: UUID, revision: int, max_items: int
+) -> PolicyBundle:
+    # Every add: policy:manage, the draft locked at the expected revision, and room under the cap
+    # (checked under that lock).
+    _require(ctx, frozenset({Capability.POLICY_MANAGE}))
+    bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
+    await _room_for_items(db, bundle, max_items)
+    return bundle
+
+
 async def _room_to_revive(
     db: AsyncSession,
     bundle: PolicyBundle,
@@ -542,9 +553,7 @@ async def add_node(
     body: NodeCreate,
     max_items: int,
 ) -> PolicyNode:
-    _require(ctx, frozenset({Capability.POLICY_MANAGE}))
-    bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
-    await _room_for_items(db, bundle, max_items)
+    bundle = await _open_for_add(db, ctx, bundle_id, revision, max_items)
     await _node_key_free(db, bundle, body.node_key)
     await _require_clause(db, ctx.tenant_id, body.source_clause_id)
     values = body.model_dump()
@@ -608,9 +617,7 @@ async def add_rule(
     max_items: int,
 ) -> PolicyRuleRecord:
     """A rule and its RULE node (node_key = rule_id), both PROPOSED."""
-    _require(ctx, frozenset({Capability.POLICY_MANAGE}))
-    bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
-    await _room_for_items(db, bundle, max_items)
+    bundle = await _open_for_add(db, ctx, bundle_id, revision, max_items)
     await _node_key_free(db, bundle, body.rule_id)
     rule_fields = {"rule_id", "rule_version", "title", "requirement", "gate", "severity"}
     rule_fields |= {"mandatory", "check_type"}
@@ -679,9 +686,7 @@ async def add_edge(
     body: EdgeCreate,
     max_items: int,
 ) -> PolicyEdge:
-    _require(ctx, frozenset({Capability.POLICY_MANAGE}))
-    bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
-    await _room_for_items(db, bundle, max_items)
+    bundle = await _open_for_add(db, ctx, bundle_id, revision, max_items)
     if body.from_node_id == body.to_node_id:
         raise PolicyItemInvalidError("An edge must join two different nodes.")
     await _in_bundle(db, PolicyNode, bundle, body.from_node_id, "Node")
@@ -723,9 +728,7 @@ async def add_wording(
     max_items: int,
 ) -> PolicyRuleWording:
     """Required wording or a prohibited phrase for a rule. Kept exactly as given (AC7)."""
-    _require(ctx, frozenset({Capability.POLICY_MANAGE}))
-    bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
-    await _room_for_items(db, bundle, max_items)
+    bundle = await _open_for_add(db, ctx, bundle_id, revision, max_items)
     await _in_bundle(db, PolicyRuleRecord, bundle, rule_record_id, "Rule")
     await _require_clause(db, ctx.tenant_id, body.source_clause_id)
     if body.translation_of_id is not None:
@@ -871,23 +874,17 @@ async def _activate(
     # Under the tenant lock: re-check the bundle and its index, then retire the active bundle
     # first, because a tenant may have only one ACTIVE bundle (unique index). Returns its id.
     snapshot = await load_snapshot(db, bundle.tenant_id, bundle.id)
-    issues = [
-        {"code": i.code.value, "subject": i.subject, "message": i.message}
-        for i in run_checks(snapshot, supported_languages)
-    ]
+    issues = run_checks(snapshot, supported_languages)
     issues += [
-        {
-            "code": CheckCode.INDEX_STALE.value,
-            "subject": f"build:{build_id}",
-            "message": "The index no longer matches the bundle's approved nodes.",
-        }
+        Issue(
+            CheckCode.INDEX_STALE,
+            f"build:{build_id}",
+            "The index no longer matches the bundle's approved nodes.",
+        )
         for build_id in await stale_ready_builds(db, bundle.tenant_id, bundle.id)
     ]
     if issues:
-        raise PolicyBundleHasIssuesError(
-            "The policy bundle has open issues and cannot be activated.",
-            details={"issues": issues},
-        )
+        raise _has_issues(issues, "The policy bundle has open issues and cannot be activated.")
     previous = await db.scalar(
         select(PolicyBundle)
         .where(
@@ -923,6 +920,18 @@ async def _activate(
     return previous.id if previous else None
 
 
+def _has_issues(issues: Sequence[Issue], message: str | None = None) -> PolicyBundleHasIssuesError:
+    # The one place the issues' response shape (details.issues) is written.
+    return PolicyBundleHasIssuesError(
+        message,
+        details={
+            "issues": [
+                {"code": i.code.value, "subject": i.subject, "message": i.message} for i in issues
+            ]
+        },
+    )
+
+
 async def _approve(
     db: AsyncSession,
     ctx: TenantContext,
@@ -933,14 +942,7 @@ async def _approve(
     snapshot = await load_snapshot(db, bundle.tenant_id, bundle.id)
     issues = run_checks(snapshot, supported_languages)
     if issues:
-        raise PolicyBundleHasIssuesError(
-            details={
-                "issues": [
-                    {"code": i.code.value, "subject": i.subject, "message": i.message}
-                    for i in issues
-                ]
-            }
-        )
+        raise _has_issues(issues)
     projection = await _project_rules(db, bundle)
     # Write the rules' wording columns now, while the bundle is still REVIEW: once it is
     # APPROVED the graph trigger refuses them.
