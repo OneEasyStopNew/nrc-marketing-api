@@ -37,9 +37,8 @@ from tests.conftest import (
 
 # Far longer than a cancel needs; only a cancel stuck behind the worker's lock reaches it.
 CANCEL_WAIT_SECONDS = 15
-# Time a cancel gets to reach its update of the job row before the worker commits (well under
-# the 2 s default JOB_CANCEL_LOCK_TIMEOUT_SECONDS).
-CANCEL_REACH_SECONDS = 0.5
+# How often the closing-event test checks whether the cancel is already waiting on a lock.
+LOCK_WAIT_POLL_SECONDS = 0.02
 
 Hook = Callable[[], Awaitable[None]]
 
@@ -88,6 +87,29 @@ async def _owner(test_env: IntegrationEnv, sql: str, tenant: SeededTenant) -> li
         rows = list(result.all()) if result.returns_rows else []
     await engine.dispose()
     return rows
+
+
+async def _until_a_session_waits_on_a_lock(test_env: IntegrationEnv) -> None:
+    # Returns as soon as a session on this test database is blocked on a lock (the cancel
+    # queued behind the worker), instead of sleeping and hoping it got there. Bounded.
+    engine = create_async_engine(
+        test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
+    )
+    try:
+        async with asyncio.timeout(CANCEL_WAIT_SECONDS), engine.connect() as conn:
+            # Another session's lock wait has no event to await, so this polls (bounded above).
+            while True:
+                waiting = await conn.scalar(
+                    text(
+                        "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid"
+                        " WHERE NOT l.granted AND a.datname = current_database()"
+                    )
+                )
+                if waiting:
+                    return
+                await asyncio.sleep(LOCK_WAIT_POLL_SECONDS)
+    finally:
+        await engine.dispose()
 
 
 async def _queued_job(
@@ -247,7 +269,7 @@ async def test_cancel_while_the_worker_closes_its_event_still_leaves_one_to_fini
                     )
                 )
             )
-            await asyncio.sleep(CANCEL_REACH_SECONDS)
+            await _until_a_session_waits_on_a_lock(test_env)
         await real_finish(db, run, event_id, retry_after, **kwargs)
 
     monkeypatch.setattr(connector, "_finish_event", finish_while_a_cancel_lands)

@@ -42,6 +42,17 @@ def test_operator_limits_have_an_upper_bound(field: str, too_high: object) -> No
         _settings(**{field: too_high})
 
 
+def test_cancel_lock_timeout_never_rounds_to_postgres_no_timeout() -> None:
+    # The value becomes SET LOCAL lock_timeout in whole milliseconds, and 0 ms there means wait
+    # forever: anything that rounds to 0 is refused.
+    assert _settings(job_cancel_lock_timeout_seconds=0.001).job_cancel_lock_timeout_seconds == 0.001
+    assert _settings(job_cancel_lock_timeout_seconds=30).job_cancel_lock_timeout_seconds == 30
+
+    for bad in (0, 0.0004, 0.0009, 30.001):
+        with pytest.raises(ValidationError, match="job_cancel_lock_timeout_seconds"):
+            _settings(job_cancel_lock_timeout_seconds=bad)
+
+
 def test_client_upload_defaults() -> None:
     settings = _settings()
 
