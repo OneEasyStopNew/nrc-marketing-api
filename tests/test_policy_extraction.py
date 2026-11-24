@@ -9,11 +9,8 @@ import io
 import pytest
 from pypdf import PdfWriter
 
-from app.services.policy_extraction import (
-    ExtractionCode,
-    ExtractionError,
-    extract_clauses,
-)
+from app.models.enums import ExtractionCode
+from app.services.policy_extraction import ExtractionError, extract_clauses
 from tests.conftest import make_pdf
 
 PDF = "application/pdf"

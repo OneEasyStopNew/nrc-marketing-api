@@ -25,6 +25,7 @@ from app.models.enums import (
     BundleLifecycleState,
     Command,
     PolicyAuditAction,
+    PolicyBuildFailure,
     PolicyLanguage,
     PolicyNodeType,
     ReviewState,
@@ -277,7 +278,7 @@ async def test_a_permanent_failure_sends_the_bundle_back_and_is_not_leased_again
 
     failed = await bundle_row(connection, tenant, bundle_id)
     assert (failed.lifecycle_state, failed.available_at) == ("APPROVED", None)
-    assert failed.last_error_code == EmbeddingResponseError.code
+    assert failed.last_error_code == PolicyBuildFailure.EMBEDDING_FAILED
     assert (failed.leased_until, failed.lease_owner) == (None, None)
     (build,) = await index_builds(connection, tenant, bundle_id)
     assert (build.state, build.model_id, build.failure_code) == (
@@ -288,7 +289,7 @@ async def test_a_permanent_failure_sends_the_bundle_back_and_is_not_leased_again
     assert await embedding_count(connection, tenant, bundle_id) == 0
     (event,) = await audit(connection, tenant, bundle_id, PolicyAuditAction.BUILD_FAILED)
     assert (event.actor, event.from_state, event.to_state) == (BUILD_ACTOR, "BUILDING", "APPROVED")
-    assert event.details == {"error_code": EmbeddingResponseError.code}
+    assert event.details == {"error_code": PolicyBuildFailure.EMBEDDING_FAILED}
     assert await audit(connection, tenant, bundle_id, PolicyAuditAction.BUILD_READY) == []
     # Only BUILD queues it again.
     assert await work(sessions, settings, embedder) == 0
@@ -347,7 +348,7 @@ async def test_a_rejected_request_is_a_permanent_failure(
     assert (failed.lifecycle_state, failed.available_at, failed.last_error_code) == (
         "APPROVED",
         None,
-        ProviderRejectedError.code,
+        PolicyBuildFailure.EMBEDDING_FAILED,
     )
     assert embedder.calls == 1
 
@@ -393,7 +394,7 @@ async def test_an_outage_is_retried_with_backoff_then_fails_after_the_attempt_ca
     waiting = await bundle_row(connection, tenant, bundle_id)
     assert (waiting.lifecycle_state, waiting.last_error_code) == (
         "APPROVED",
-        ProviderUnavailableError.code,
+        PolicyBuildFailure.EMBEDDING_UNAVAILABLE,
     )
     assert waiting.deferred is True
     assert (waiting.leased_until, waiting.lease_owner, waiting.attempts) == (None, None, 1)
@@ -410,7 +411,7 @@ async def test_an_outage_is_retried_with_backoff_then_fails_after_the_attempt_ca
     assert (failed.lifecycle_state, failed.available_at, failed.last_error_code) == (
         "APPROVED",
         None,
-        ProviderUnavailableError.code,
+        PolicyBuildFailure.EMBEDDING_UNAVAILABLE,
     )
     (build,) = await index_builds(connection, tenant, bundle_id)
     assert (build.state, build.failure_code) == ("FAILED", ProviderUnavailableError.code)
@@ -530,7 +531,7 @@ async def test_a_bundle_that_keeps_crashing_is_failed_without_being_built(
         failed.available_at,
         failed.last_error_code,
         failed.failed_attempts,
-    ) == ("APPROVED", None, policy_worker.BUILD_ABANDONED_CODE, 3)
+    ) == ("APPROVED", None, PolicyBuildFailure.BUILD_ABANDONED, 3)
     assert embedder.calls == 0
     assert await index_builds(connection, tenant, bundle_id) == []
     assert len(await audit(connection, tenant, bundle_id, PolicyAuditAction.BUILD_FAILED)) == 1

@@ -11,12 +11,12 @@ import hashlib
 import io
 import re
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Final
 
 from pypdf import PdfReader
 
 from app.core.errors import AppError
+from app.models.enums import ExtractionCode
 
 PDF_TYPE: Final = "application/pdf"
 TEXT_TYPES: Final = frozenset({"text/plain", "text/markdown"})
@@ -31,18 +31,6 @@ _MARKDOWN_HEADING: Final = re.compile(r"^#{1,6}\s+(\S.*)$")
 _NUMBERED_HEADING: Final = re.compile(r"^\d+(\.\d+)*\.?\s+\S.*$")
 _NUMBERED_HEADING_MAX_CHARS: Final = 120
 _SENTENCE_END: Final = (".", ";", ":", ",", "!", "?")
-
-
-class ExtractionCode(StrEnum):
-    # Stored in policy_sources.extraction_error_code; the first four are permanent failures of the
-    # file itself, the rest are the worker's.
-    UNREADABLE = "SOURCE_UNREADABLE"
-    EMPTY = "SOURCE_EMPTY"
-    TOO_MANY_PAGES = "SOURCE_TOO_MANY_PAGES"
-    TOO_MANY_CLAUSES = "SOURCE_TOO_MANY_CLAUSES"
-    STORAGE_UNAVAILABLE = "SOURCE_STORAGE_UNAVAILABLE"
-    TIMEOUT = "SOURCE_EXTRACTION_TIMEOUT"
-    FAILED = "SOURCE_EXTRACTION_FAILED"
 
 
 class ExtractionError(AppError):

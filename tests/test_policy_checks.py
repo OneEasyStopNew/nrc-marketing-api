@@ -112,7 +112,8 @@ def test_the_clean_graph_has_no_issues() -> None:
 
 
 def test_every_check_code_has_a_check() -> None:
-    assert len(CHECKS) == len(CheckCode) - 1  # check_supersedes reports two codes
+    # check_supersedes reports two codes; INDEX_STALE comes from activation, not from a check.
+    assert len(CHECKS) == len(CheckCode) - 2
 
 
 def test_a_bundle_without_rules_is_empty() -> None:

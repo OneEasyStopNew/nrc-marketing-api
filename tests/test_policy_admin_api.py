@@ -696,6 +696,57 @@ async def test_a_reason_is_required_to_reject(api: Api) -> None:
     assert response.json()["details"] == {"field": "reason"}
 
 
+@pytest.mark.parametrize("field", ["name", "source_ref"])
+@pytest.mark.parametrize("blank", [" ", "\n\t"])
+async def test_a_bundle_name_or_reference_cannot_be_blank(api: Api, field: str, blank: str) -> None:
+    # Regression (review lesson from api#23): min_length=1 alone let " " through.
+    body = {"name": "[SYNTHETIC] Policy", "source_ref": "synthetic:nrc-4-api", "is_synthetic": True}
+
+    response = await api.call("POST", "/policy-bundles", json=body | {field: blank})
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "VALIDATION_FAILED"
+
+
+@pytest.mark.parametrize("field", ["title", "source_ref"])
+async def test_a_source_title_or_reference_cannot_be_blank(
+    api: Api, connection: AsyncConnection, field: str
+) -> None:
+    response = await register_source(api, connection, **{field: "   "})
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "VALIDATION_FAILED"
+
+
+@pytest.mark.parametrize("key", [" ", "-CL-1", "CL 1", "CL/1", "A" * 81])
+async def test_a_node_key_must_be_a_plain_key(api: Api, key: str) -> None:
+    bundle = await new_bundle(api)
+
+    response = await api.call(
+        "POST", f"/policy-bundles/{bundle['id']}/nodes", json=node_body(key=key), if_match=1
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "VALIDATION_FAILED"
+
+
+async def test_a_node_key_at_the_length_limit_is_accepted(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+
+    response = await api.call(
+        "POST",
+        f"/policy-bundles/{bundle['id']}/nodes",
+        json=node_body(clause_id, key="A" * 80),
+        if_match=1,
+    )
+
+    assert response.status_code == 201, response.text
+
+
 async def test_an_unknown_command_is_a_validation_error(api: Api) -> None:
     bundle = await new_bundle(api)
 

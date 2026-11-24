@@ -47,13 +47,15 @@ from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.models import MediaUpload, PolicyAuditEvent, PolicyBundle, PolicySource, PolicySourceClause
 from app.models.enums import (
     BundleLifecycleState,
+    ExtractionCode,
     PolicyAuditAction,
+    PolicyBuildFailure,
+    PolicyIndexReason,
     SourceExtractionState,
     UploadState,
 )
 from app.services.policy_extraction import (
     Extraction,
-    ExtractionCode,
     ExtractionError,
     extract_clauses,
 )
@@ -79,8 +81,6 @@ _BUILD_STATES: Final = (BundleLifecycleState.APPROVED, BundleLifecycleState.BUIL
 BUILD_ACTOR: Final = "system:policy-worker"
 # Audit label (Q5): with EMBEDDING_MODE=off the bundle is READY with full-text search only.
 LEXICAL_ONLY: Final = "lexical_only"
-# last_error_code of a bundle whose leases kept expiring unfinished (crashes), up to the cap.
-BUILD_ABANDONED_CODE: Final = "POLICY_BUILD_ABANDONED"
 _RELEASE: Final[Mapping[str, object]] = {
     "leased_until": None,
     "lease_owner": None,
@@ -361,7 +361,10 @@ async def _build(run: _Run, bundle_id: UUID, tenant_id: UUID) -> None:
         attempts = bundle.attempts
         model_id = run.embedder.model_id if run.embedder else None
         if bundle.failed_attempts >= run.settings.policy_worker_max_attempts:
-            await _fail_build(db, run, bundle_id, tenant_id, BUILD_ABANDONED_CODE, None)
+            # Its leases kept expiring unfinished (crashes), up to the cap.
+            await _fail_build(
+                db, run, bundle_id, tenant_id, PolicyBuildFailure.BUILD_ABANDONED, None
+            )
             return
         await _change(
             db,
@@ -380,18 +383,39 @@ async def _build(run: _Run, bundle_id: UUID, tenant_id: UUID) -> None:
             await _fail_build(db, run, bundle_id, tenant_id, _failure_code(error), None)
         except ProviderError as error:
             await db.rollback()
+            # The response carries the grouped code only; the exact provider code is logged here.
+            logger.warning(
+                "policy bundle build embedding error bundle=%s tenant=%s provider_code=%s",
+                bundle_id,
+                tenant_id,
+                error.code,
+            )
             if error.retryable and attempts < run.settings.policy_worker_max_attempts:
-                await _retry_build_later(db, run, bundle_id, tenant_id, attempts, error.code)
+                await _retry_build_later(
+                    db,
+                    run,
+                    bundle_id,
+                    tenant_id,
+                    attempts,
+                    PolicyBuildFailure.EMBEDDING_UNAVAILABLE,
+                )
             else:
-                await _fail_build(db, run, bundle_id, tenant_id, _failure_code(error), model_id)
+                await _fail_build(
+                    db, run, bundle_id, tenant_id, _failure_code(error), model_id, error.code
+                )
 
 
-def _failure_code(error: PolicyIndexError | ProviderError) -> str:
-    if isinstance(error, PolicyIndexError) and error.details:
-        reason = error.details.get("reason")
-        if isinstance(reason, str):
-            return reason
-    return error.code
+def _failure_code(error: PolicyIndexError | ProviderError) -> PolicyBuildFailure:
+    if isinstance(error, ProviderError):
+        if error.retryable:
+            return PolicyBuildFailure.EMBEDDING_UNAVAILABLE
+        return PolicyBuildFailure.EMBEDDING_FAILED
+    reason = (error.details or {}).get("reason")
+    if reason == PolicyIndexReason.NO_APPROVED_NODES:
+        return PolicyBuildFailure.NO_APPROVED_NODES
+    if reason == PolicyIndexReason.INDEX_CONTENT_CHANGED:
+        return PolicyBuildFailure.INDEX_CONTENT_CHANGED
+    return PolicyBuildFailure.INDEX_REFUSED
 
 
 async def _index_and_publish(db: AsyncSession, run: _Run, bundle_id: UUID, tenant_id: UUID) -> None:
@@ -460,11 +484,13 @@ async def _fail_build(
     run: _Run,
     bundle_id: UUID,
     tenant_id: UUID,
-    code: str,
+    code: PolicyBuildFailure,
     failed_model_id: str | None,
+    provider_code: str | None = None,
 ) -> None:
     # Back to APPROVED and out of the queue (available_at NULL) until BUILD runs again. The
-    # fenced change comes first, so a worker that lost its lease writes nothing.
+    # fenced change comes first, so a worker that lost its lease writes nothing. The internal
+    # build row keeps the exact provider code; the bundle shows the grouped one.
     await _change(
         db,
         run,
@@ -478,7 +504,7 @@ async def _fail_build(
         _BUILDS,
     )
     if failed_model_id is not None:
-        await record_failed_build(db, tenant_id, bundle_id, failed_model_id, code)
+        await record_failed_build(db, tenant_id, bundle_id, failed_model_id, provider_code or code)
     await _audit(
         db,
         tenant_id,
@@ -495,7 +521,12 @@ async def _fail_build(
 
 
 async def _retry_build_later(
-    db: AsyncSession, run: _Run, bundle_id: UUID, tenant_id: UUID, attempts: int, code: str
+    db: AsyncSession,
+    run: _Run,
+    bundle_id: UUID,
+    tenant_id: UUID,
+    attempts: int,
+    code: PolicyBuildFailure,
 ) -> None:
     delay = backoff_seconds(attempts, run.settings)
     await _change(

@@ -5434,12 +5434,14 @@
             "type": "string",
             "maxLength": 200,
             "minLength": 1,
+            "pattern": "\\S",
             "title": "Name"
           },
           "source_ref": {
             "type": "string",
             "maxLength": 300,
             "minLength": 1,
+            "pattern": "\\S",
             "title": "Source Ref"
           },
           "is_synthetic": {
@@ -5633,7 +5635,8 @@
           "UNRESOLVED_EXCEPTION",
           "UNSUPPORTED_LANGUAGE",
           "DUPLICATE_OBLIGATION",
-          "EXACT_WORDING_NOT_IN_SOURCE"
+          "EXACT_WORDING_NOT_IN_SOURCE",
+          "INDEX_STALE"
         ],
         "title": "CheckCode"
       },
@@ -6481,6 +6484,19 @@
         "title": "ExportManifest",
         "description": "A review draft. It carries no approval and causes no publication."
       },
+      "ExtractionCode": {
+        "type": "string",
+        "enum": [
+          "SOURCE_UNREADABLE",
+          "SOURCE_EMPTY",
+          "SOURCE_TOO_MANY_PAGES",
+          "SOURCE_TOO_MANY_CLAUSES",
+          "SOURCE_STORAGE_UNAVAILABLE",
+          "SOURCE_EXTRACTION_TIMEOUT",
+          "SOURCE_EXTRACTION_FAILED"
+        ],
+        "title": "ExtractionCode"
+      },
       "Finding": {
         "properties": {
           "rule_id": {
@@ -7231,7 +7247,8 @@
             "items": {
               "type": "string",
               "maxLength": 64,
-              "minLength": 1
+              "minLength": 1,
+              "pattern": "\\S"
             },
             "type": "array",
             "maxItems": 20,
@@ -7241,7 +7258,8 @@
             "items": {
               "type": "string",
               "maxLength": 64,
-              "minLength": 1
+              "minLength": 1,
+              "pattern": "\\S"
             },
             "type": "array",
             "maxItems": 10,
@@ -7251,7 +7269,8 @@
             "items": {
               "type": "string",
               "maxLength": 64,
-              "minLength": 1
+              "minLength": 1,
+              "pattern": "\\S"
             },
             "type": "array",
             "maxItems": 20,
@@ -7261,7 +7280,8 @@
             "items": {
               "type": "string",
               "maxLength": 64,
-              "minLength": 1
+              "minLength": 1,
+              "pattern": "\\S"
             },
             "type": "array",
             "maxItems": 20,
@@ -7305,7 +7325,8 @@
               {
                 "type": "string",
                 "maxLength": 64,
-                "minLength": 1
+                "minLength": 1,
+                "pattern": "\\S"
               },
               {
                 "type": "null"
@@ -7317,6 +7338,7 @@
             "type": "string",
             "maxLength": 80,
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$",
             "title": "Node Key"
           },
           "node_type": {
@@ -7412,7 +7434,8 @@
                 "items": {
                   "type": "string",
                   "maxLength": 64,
-                  "minLength": 1
+                  "minLength": 1,
+                  "pattern": "\\S"
                 },
                 "type": "array",
                 "maxItems": 20
@@ -7429,7 +7452,8 @@
                 "items": {
                   "type": "string",
                   "maxLength": 64,
-                  "minLength": 1
+                  "minLength": 1,
+                  "pattern": "\\S"
                 },
                 "type": "array",
                 "maxItems": 10
@@ -7446,7 +7470,8 @@
                 "items": {
                   "type": "string",
                   "maxLength": 64,
-                  "minLength": 1
+                  "minLength": 1,
+                  "pattern": "\\S"
                 },
                 "type": "array",
                 "maxItems": 20
@@ -7463,7 +7488,8 @@
                 "items": {
                   "type": "string",
                   "maxLength": 64,
-                  "minLength": 1
+                  "minLength": 1,
+                  "pattern": "\\S"
                 },
                 "type": "array",
                 "maxItems": 20
@@ -7519,7 +7545,8 @@
               {
                 "type": "string",
                 "maxLength": 64,
-                "minLength": 1
+                "minLength": 1,
+                "pattern": "\\S"
               },
               {
                 "type": "null"
@@ -7673,6 +7700,18 @@
         ],
         "title": "PolicyAuditRead"
       },
+      "PolicyBuildFailure": {
+        "type": "string",
+        "enum": [
+          "POLICY_BUILD_ABANDONED",
+          "NO_APPROVED_NODES",
+          "INDEX_CONTENT_CHANGED",
+          "POLICY_INDEX_REFUSED",
+          "EMBEDDING_UNAVAILABLE",
+          "EMBEDDING_FAILED"
+        ],
+        "title": "PolicyBuildFailure"
+      },
       "PolicyBundleChecks": {
         "properties": {
           "issues": {
@@ -7782,13 +7821,12 @@
           "last_error_code": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/PolicyBuildFailure"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Last Error Code",
             "description": "Why the last index build failed, if it did."
           },
           "created_at": {
@@ -8548,12 +8586,14 @@
             "type": "string",
             "maxLength": 300,
             "minLength": 1,
+            "pattern": "\\S",
             "title": "Title"
           },
           "source_ref": {
             "type": "string",
             "maxLength": 300,
             "minLength": 1,
+            "pattern": "\\S",
             "title": "Source Ref"
           },
           "language": {
@@ -8651,13 +8691,12 @@
           "extraction_error_code": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/ExtractionCode"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Extraction Error Code"
+            ]
           },
           "page_count": {
             "anyOf": [
@@ -9241,7 +9280,8 @@
             "items": {
               "type": "string",
               "maxLength": 64,
-              "minLength": 1
+              "minLength": 1,
+              "pattern": "\\S"
             },
             "type": "array",
             "maxItems": 20,
@@ -9251,7 +9291,8 @@
             "items": {
               "type": "string",
               "maxLength": 64,
-              "minLength": 1
+              "minLength": 1,
+              "pattern": "\\S"
             },
             "type": "array",
             "maxItems": 10,
@@ -9261,7 +9302,8 @@
             "items": {
               "type": "string",
               "maxLength": 64,
-              "minLength": 1
+              "minLength": 1,
+              "pattern": "\\S"
             },
             "type": "array",
             "maxItems": 20,
@@ -9271,7 +9313,8 @@
             "items": {
               "type": "string",
               "maxLength": 64,
-              "minLength": 1
+              "minLength": 1,
+              "pattern": "\\S"
             },
             "type": "array",
             "maxItems": 20,
@@ -9315,7 +9358,8 @@
               {
                 "type": "string",
                 "maxLength": 64,
-                "minLength": 1
+                "minLength": 1,
+                "pattern": "\\S"
               },
               {
                 "type": "null"
@@ -9341,12 +9385,14 @@
             "type": "string",
             "maxLength": 200,
             "minLength": 1,
+            "pattern": "\\S",
             "title": "Title"
           },
           "requirement": {
             "type": "string",
             "maxLength": 1000,
             "minLength": 1,
+            "pattern": "\\S",
             "title": "Requirement"
           },
           "gate": {
@@ -9556,7 +9602,8 @@
               {
                 "type": "string",
                 "maxLength": 200,
-                "minLength": 1
+                "minLength": 1,
+                "pattern": "\\S"
               },
               {
                 "type": "null"
@@ -9569,7 +9616,8 @@
               {
                 "type": "string",
                 "maxLength": 1000,
-                "minLength": 1
+                "minLength": 1,
+                "pattern": "\\S"
               },
               {
                 "type": "null"

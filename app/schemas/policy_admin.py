@@ -12,8 +12,10 @@ from app.models.enums import (
     CheckCode,
     CheckType,
     Command,
+    ExtractionCode,
     Gate,
     PolicyAuditAction,
+    PolicyBuildFailure,
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
@@ -29,8 +31,12 @@ from app.models.policy_graph import RULE_ID_PATTERN
 from app.schemas.common import ApiModel, RequestModel
 
 Text = Annotated[str, StringConstraints(min_length=1, max_length=20_000, pattern=r"\S")]
-Tag = Annotated[str, StringConstraints(min_length=1, max_length=64)]
+Tag = Annotated[str, StringConstraints(min_length=1, max_length=64, pattern=r"\S")]
 Note = Annotated[str, StringConstraints(min_length=1, max_length=1000, pattern=r"\S")]
+# Names, titles and references need a visible character: " " would pass min_length=1.
+NOT_BLANK = r"\S"
+# Node keys appear in paths, audit details and import files: letters, digits, '.', '_' and '-'.
+NODE_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
 # A RULE node is created together with its rule (RuleCreate), never on its own.
 NonRuleNodeType = Literal[
     PolicyNodeType.CLAUSE,
@@ -42,8 +48,8 @@ NonRuleNodeType = Literal[
 
 
 class BundleCreate(RequestModel):
-    name: str = Field(min_length=1, max_length=200)
-    source_ref: str = Field(min_length=1, max_length=300)
+    name: str = Field(min_length=1, max_length=200, pattern=NOT_BLANK)
+    source_ref: str = Field(min_length=1, max_length=300, pattern=NOT_BLANK)
     is_synthetic: bool = Field(description="True until the bundle holds the client's real policy.")
     based_on_bundle_id: UUID | None = Field(
         default=None, description="Copy this bundle's graph into the new draft, review included."
@@ -64,7 +70,7 @@ class Applicability(RequestModel):
 
 
 class NodeCreate(Applicability):
-    node_key: str = Field(min_length=1, max_length=80)
+    node_key: str = Field(min_length=1, max_length=80, pattern=NODE_KEY_PATTERN)
     node_type: NonRuleNodeType
     text: Text
     language: PolicyLanguage = PolicyLanguage.EN
@@ -90,8 +96,8 @@ class NodeUpdate(RequestModel):
 class RuleCreate(Applicability):
     rule_id: str = Field(pattern=RULE_ID_PATTERN, examples=["REC-01"])
     rule_version: int = Field(default=1, ge=1)
-    title: str = Field(min_length=1, max_length=200)
-    requirement: str = Field(min_length=1, max_length=1000)
+    title: str = Field(min_length=1, max_length=200, pattern=NOT_BLANK)
+    requirement: str = Field(min_length=1, max_length=1000, pattern=NOT_BLANK)
     gate: Gate
     severity: Severity
     mandatory: bool
@@ -102,8 +108,8 @@ class RuleCreate(Applicability):
 
 class RuleUpdate(RequestModel):
     # Only the fields sent change. Any change sends the rule's node back to PROPOSED.
-    title: str | None = Field(default=None, min_length=1, max_length=200)
-    requirement: str | None = Field(default=None, min_length=1, max_length=1000)
+    title: str | None = Field(default=None, min_length=1, max_length=200, pattern=NOT_BLANK)
+    requirement: str | None = Field(default=None, min_length=1, max_length=1000, pattern=NOT_BLANK)
     gate: Gate | None = None
     severity: Severity | None = None
     mandatory: bool | None = None
@@ -129,7 +135,7 @@ class WordingCreate(RequestModel):
 
 
 class ReviewDecision(RequestModel):
-    decision: Literal["APPROVED", "REJECTED"]
+    decision: Literal[ReviewState.APPROVED, ReviewState.REJECTED]
     note: Note | None = None
 
 
@@ -151,8 +157,8 @@ class TransitionCommandRequest(TransitionRequest):
 
 class PolicySourceCreate(RequestModel):
     upload_id: UUID = Field(description="A READY policy upload (POST /policy-sources/uploads).")
-    title: str = Field(min_length=1, max_length=300)
-    source_ref: str = Field(min_length=1, max_length=300)
+    title: str = Field(min_length=1, max_length=300, pattern=NOT_BLANK)
+    source_ref: str = Field(min_length=1, max_length=300, pattern=NOT_BLANK)
     language: PolicyLanguage = PolicyLanguage.EN
     is_synthetic: bool = Field(description="True until the file is the client's real policy.")
 
@@ -171,7 +177,7 @@ class PolicySourceRead(ApiModel):
     extraction_state: SourceExtractionState = Field(
         description="Clauses can be cited once this is EXTRACTED."
     )
-    extraction_error_code: str | None
+    extraction_error_code: ExtractionCode | None
     page_count: int | None
     extracted_at: datetime | None
     created_by: str
@@ -210,7 +216,9 @@ class PolicyBundleDetail(ApiModel):
     approved_at: datetime | None
     activated_by: str | None
     activated_at: datetime | None
-    last_error_code: str | None = Field(description="Why the last index build failed, if it did.")
+    last_error_code: PolicyBuildFailure | None = Field(
+        description="Why the last index build failed, if it did."
+    )
     created_at: datetime
     updated_at: datetime
     rule_count: int

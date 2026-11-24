@@ -191,6 +191,30 @@ class PolicyIndexReason(StrEnum):
     INDEX_CONTENT_CHANGED = "INDEX_CONTENT_CHANGED"
 
 
+class PolicyBuildFailure(StrEnum):
+    # Why the policy worker's last index build of a bundle failed (policy_bundles.last_error_code).
+    # The two index reasons keep PolicyIndexReason's values. Provider errors are grouped into
+    # unavailable (retried until the attempt cap) and failed; the worker logs the exact code.
+    BUILD_ABANDONED = "POLICY_BUILD_ABANDONED"
+    NO_APPROVED_NODES = PolicyIndexReason.NO_APPROVED_NODES.value
+    INDEX_CONTENT_CHANGED = PolicyIndexReason.INDEX_CONTENT_CHANGED.value
+    INDEX_REFUSED = "POLICY_INDEX_REFUSED"
+    EMBEDDING_UNAVAILABLE = "EMBEDDING_UNAVAILABLE"
+    EMBEDDING_FAILED = "EMBEDDING_FAILED"
+
+
+class ExtractionCode(StrEnum):
+    # policy_sources.extraction_error_code. The first four are permanent failures of the file
+    # itself, the rest are the worker's.
+    UNREADABLE = "SOURCE_UNREADABLE"
+    EMPTY = "SOURCE_EMPTY"
+    TOO_MANY_PAGES = "SOURCE_TOO_MANY_PAGES"
+    TOO_MANY_CLAUSES = "SOURCE_TOO_MANY_CLAUSES"
+    STORAGE_UNAVAILABLE = "SOURCE_STORAGE_UNAVAILABLE"
+    TIMEOUT = "SOURCE_EXTRACTION_TIMEOUT"
+    FAILED = "SOURCE_EXTRACTION_FAILED"
+
+
 class PolicyContextReason(StrEnum):
     """Why no policy context was built. Sent as details.reason of POLICY_CONTEXT_UNAVAILABLE (409)
     and in brackets in a validation run's coverage gap; the frontend branches on these values."""
@@ -300,6 +324,8 @@ class CheckCode(StrEnum):
     UNSUPPORTED_LANGUAGE = "UNSUPPORTED_LANGUAGE"
     DUPLICATE_OBLIGATION = "DUPLICATE_OBLIGATION"
     EXACT_WORDING_NOT_IN_SOURCE = "EXACT_WORDING_NOT_IN_SOURCE"
+    # Activation only: a READY index build no longer matches the approved nodes.
+    INDEX_STALE = "INDEX_STALE"
 
 
 class Command(StrEnum):

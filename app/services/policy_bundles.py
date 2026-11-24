@@ -42,6 +42,7 @@ from app.models import (
 )
 from app.models.enums import (
     BundleLifecycleState,
+    CheckCode,
     Command,
     PolicyAuditAction,
     PolicyEdgeType,
@@ -737,7 +738,10 @@ async def transition(
         if command is Command.ROLLBACK and bundle.activated_at is None:
             raise PolicyBundleStateError(
                 "Only a bundle that was active before can be rolled back to.",
-                details={"state": bundle.lifecycle_state.value, "allowed": ["RETIRED"]},
+                details={
+                    "state": bundle.lifecycle_state.value,
+                    "allowed": [BundleLifecycleState.RETIRED.value],
+                },
             )
         previous = await _activate(db, ctx, bundle, supported_languages, body.reason)
         details = event = {"previous_bundle_id": str(previous) if previous else None}
@@ -773,7 +777,7 @@ async def _activate(
     ]
     issues += [
         {
-            "code": "INDEX_STALE",
+            "code": CheckCode.INDEX_STALE.value,
             "subject": f"build:{build_id}",
             "message": "The index no longer matches the bundle's approved nodes.",
         }
