@@ -222,6 +222,15 @@ def _result_of(evaluation: rules.Evaluation, rule_id: str = "R-1") -> RuleResult
     return next(r.result for r in evaluation.rule_results if r.rule_id == rule_id)
 
 
+def test_no_selected_rules_needs_review_instead_of_passing() -> None:
+    # Nothing checked is not the same as nothing broken.
+    evaluation = rules.evaluate_graph_rules("Join our study.", [], FACTS)
+
+    assert evaluation.outcome is Outcome.NEEDS_REVIEW
+    assert all(gate.outcome is not Outcome.PASS for gate in evaluation.gates)
+    assert rules.NO_RULES_SELECTED_GAP in evaluation.coverage_gaps
+
+
 def test_graph_phrase_hit_fails_with_code_point_span() -> None:
     text = "🙂 Café: results GUARANTEED for you."
     evaluation = rules.evaluate_graph_rules(text, [_graph_rule(phrases=("guaranteed",))], FACTS)

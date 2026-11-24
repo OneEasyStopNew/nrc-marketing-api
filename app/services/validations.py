@@ -21,7 +21,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from types import MappingProxyType
 from typing import Final
@@ -558,20 +558,6 @@ def new_run(
     )
 
 
-def without_pass(evaluation: rules.Evaluation) -> rules.Evaluation:
-    # The run's outcome and gates, with every PASS turned into NEEDS_REVIEW.
-    def demote(outcome: Outcome) -> Outcome:
-        return Outcome.NEEDS_REVIEW if outcome is Outcome.PASS else outcome
-
-    return replace(
-        evaluation,
-        outcome=demote(evaluation.outcome),
-        gates=[
-            gate.model_copy(update={"outcome": demote(gate.outcome)}) for gate in evaluation.gates
-        ],
-    )
-
-
 def policy_language(language: Language | str) -> PolicyLanguage | None:
     # Policy text may support a language before the public enum does (F33), and the reverse must
     # not crash validation: a language without policy text gets no context and a gap.
@@ -593,7 +579,11 @@ def input_hash(kind: ValidationInputKind, text: str) -> str:
 
 async def _check_active_limit(db: AsyncSession, tenant_id: UUID, settings: Settings) -> None:
     # Each queued job may call the paid model, so a tenant's backlog is bounded. A reused result
-    # queues nothing and is never refused.
+    # queues nothing and is never refused. Admission is serialised per tenant (as for
+    # generation), so two requests cannot both take the last slot.
+    await db.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(f"validation:{tenant_id}", 0)))
+    )
     active = await db.scalar(
         select(func.count())
         .select_from(Job)

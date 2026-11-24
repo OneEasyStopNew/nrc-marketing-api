@@ -1,6 +1,7 @@
 # Brief and caption validation as a worker job (VALIDATION_MODEL_MODE on): POST queues, the
 # worker checks with the SIMULATED model and stores the run, GET follows it.
 
+import asyncio
 from collections.abc import Iterator
 from datetime import UTC, datetime, tzinfo
 from typing import Any
@@ -8,13 +9,18 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from asgi_lifespan import LifespanManager
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+from sqlalchemy.pool import NullPool
 
+from app.api.deps import get_signing_keys
 from app.core.config import Settings, get_settings
 from app.core.errors import ValidationJobError
+from app.main import create_app
 from app.models import Job, ValidationRun
-from app.models.enums import ExecutionState, ModelCheckFailure
+from app.models.enums import ExecutionState, JudgeFailure, ModelCheckFailure
 from app.services import rules, validations
 from app.services.jobs import RUN_EVENT
 from app.services.providers import text_judge
@@ -27,7 +33,7 @@ from app.services.providers.text_judge import (
     SimulatedJudgeScenario,
     SimulatedTextJudge,
 )
-from app.services.validations import JOB_KIND_BY_INPUT, VALIDATION_RUN_EVENT
+from app.services.validations import INPUT_BY_JOB_KIND, JOB_KIND_BY_INPUT, VALIDATION_RUN_EVENT
 from app.workers.connector import (
     EVENT_HANDLERS,
     JOB_HANDLERS,
@@ -38,7 +44,14 @@ from app.workers.connector import (
     run_once,
 )
 from scripts.import_policy_graph import PolicyGraphImport, load_synthetic_graph
-from tests.conftest import AuthHeaders, SeededTenant, Sessions, World
+from tests.conftest import (
+    AuthHeaders,
+    IntegrationEnv,
+    SeededTenant,
+    Sessions,
+    StaticKeys,
+    World,
+)
 
 API = "/v1/marketing"
 CLEAN_PROMPT = "Invite adults with high blood pressure to learn about our research study."
@@ -285,7 +298,7 @@ async def test_more_open_rules_than_one_call_covers_skips_the_model_and_needs_re
     assert judge.calls == 0
     assert done["outcome"] == "NEEDS_REVIEW"
     reasons = {r["reason"] for r in done["rule_results"] if r["result"] == "UNABLE_TO_ASSESS"}
-    assert reasons == {rules.MODEL_CHECK_FAILED.format(failure=ModelCheckFailure.TOO_MANY_RULES)}
+    assert reasons == {rules.MODEL_CHECK_FAILED.format(failure=JudgeFailure.TOO_MANY_RULES)}
 
 
 async def test_the_job_is_stamped_with_the_instant_its_reuse_key_used(
@@ -336,6 +349,62 @@ async def test_a_tenant_can_queue_up_to_its_limit_then_gets_429_until_one_finish
     assert (body["code"], body["retryable"]) == ("VALIDATION_LIMIT_REACHED", True)
     assert await _work(sessions) == 2
     assert (await _validate(client, auth, world.a.tenant_id, third)).status_code == 202
+
+
+@pytest.fixture
+def one_active_validation() -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("VALIDATION_MAX_ACTIVE_JOBS_PER_TENANT", "1")
+        get_settings.cache_clear()
+        yield
+    get_settings.cache_clear()
+
+
+@pytest.mark.usefixtures("one_active_validation")
+async def test_parallel_validations_never_take_more_than_the_last_slot(
+    committed_tenant: SeededTenant,
+    signing_key: RSAPrivateKey,
+    test_env: IntegrationEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Committed data and a connection per request: on one shared connection the admission lock
+    # would never be contended. A pause between the count and the insert makes every request
+    # count before any inserts, which is what the lock must prevent.
+    queue = validations._queue
+
+    async def slow_queue(*args: Any, **kwargs: Any) -> UUID:
+        await asyncio.sleep(0.2)
+        return await queue(*args, **kwargs)
+
+    monkeypatch.setattr(validations, "_queue", slow_queue)
+    app = create_app()
+    app.dependency_overrides[get_signing_keys] = lambda: StaticKeys(signing_key)
+    auth = AuthHeaders(signing_key)
+    async with (
+        LifespanManager(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http,
+    ):
+        creatives = [
+            await _creative(http, auth, committed_tenant, prompt=f"{CLEAN_PROMPT} Variant {n}.")
+            for n in range(5)
+        ]
+        responses = await asyncio.gather(
+            *(_validate(http, auth, committed_tenant.tenant_id, c) for c in creatives)
+        )
+
+    assert sorted(r.status_code for r in responses) == [202, 429, 429, 429, 429]
+    engine = create_async_engine(
+        test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
+    )
+    try:
+        async with engine.connect() as conn:
+            queued = await conn.scalar(
+                text("SELECT count(*) FROM jobs WHERE tenant_id = :t AND kind = ANY(:kinds)"),
+                {"t": committed_tenant.tenant_id, "kinds": list(INPUT_BY_JOB_KIND)},
+            )
+    finally:
+        await engine.dispose()
+    assert queued == 1
 
 
 def _spanish_only_graph() -> PolicyGraphImport:

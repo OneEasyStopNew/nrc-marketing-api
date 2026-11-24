@@ -17,7 +17,7 @@ points: the contract's unit (see TextSpan).
 
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, Protocol
 
 from app.models.enums import (
@@ -310,12 +310,32 @@ def evaluate_graph_rules(
             not_applicable[rule.rule_id] = outcome.reason
         else:
             hits[rule.rule_id] = outcome
-    return summarise(
+    gaps = [SIMULATED_REVIEW_GAP] if review is not None and review.is_simulated else []
+    if not rules:
+        gaps.append(NO_RULES_SELECTED_GAP)
+    evaluation = summarise(
         {rule.rule_id: rule for rule in rules},
         hits,
-        extra_gaps=[SIMULATED_REVIEW_GAP] if review is not None and review.is_simulated else [],
+        extra_gaps=gaps,
         unassessed=unassessed,
         not_applicable=not_applicable,
+    )
+    # No rule matched this channel, format or language: nothing was checked, which is not the
+    # same as nothing broken, so it can't pass.
+    return evaluation if rules else without_pass(evaluation)
+
+
+def without_pass(evaluation: Evaluation) -> Evaluation:
+    # The outcome and gates, with every PASS turned into NEEDS_REVIEW.
+    def demote(outcome: Outcome) -> Outcome:
+        return Outcome.NEEDS_REVIEW if outcome is Outcome.PASS else outcome
+
+    return replace(
+        evaluation,
+        outcome=demote(evaluation.outcome),
+        gates=[
+            gate.model_copy(update={"outcome": demote(gate.outcome)}) for gate in evaluation.gates
+        ],
     )
 
 

@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from app.models.enums import Applicability, JudgeFailure
 from app.schemas.validations import RuleResultValue
 from app.services.policy_context.manifest import EvidenceItem, ExceptionItem
+from app.services.providers import text_judge
 from app.services.providers.text_judge import (
     JudgeAnswer,
     JudgeReply,
@@ -229,8 +230,18 @@ async def run_judge(
     Provider errors (timeout, throttling, refusal) are not retried here: they propagate, so the
     job decides when to try again and the run is never stored as judged.
     """
-    request = build_request(text, context, max_output_tokens)
     suspicious = aimed_at_checker(text)
+    if len(context.rules) > text_judge.MAX_RULES_PER_CALL:
+        # The answer schema can't hold them all, so the call could never verify: don't pay for it.
+        return Judgement(
+            answers=None,
+            failure=JudgeFailure.TOO_MANY_RULES,
+            attempts=0,
+            model_id=judge.model_id,
+            is_simulated=judge.is_simulated,
+            aimed_at_checker=suspicious,
+        )
+    request = build_request(text, context, max_output_tokens)
     failure: JudgeFailure | None = None
     for attempt in range(1, max_attempts + 1):
         if before_call is not None:
