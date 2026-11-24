@@ -131,6 +131,8 @@ def test_policy_extraction_defaults() -> None:
     assert settings.policy_extraction_max_clauses == 5000
     assert settings.policy_extraction_timeout_seconds == 30
     assert settings.policy_worker_max_attempts == 3
+    assert settings.policy_max_open_bundles_per_tenant == 10
+    assert settings.policy_max_items_per_bundle == 2000
 
 
 @pytest.mark.parametrize(
@@ -144,6 +146,10 @@ def test_policy_extraction_defaults() -> None:
         ("policy_extraction_timeout_seconds", 301),
         ("policy_worker_max_attempts", 0),
         ("policy_worker_max_attempts", 11),
+        ("policy_max_open_bundles_per_tenant", 0),
+        ("policy_max_open_bundles_per_tenant", 101),
+        ("policy_max_items_per_bundle", 9),
+        ("policy_max_items_per_bundle", 20_001),
     ],
 )
 def test_policy_extraction_settings_are_bounded(field: str, bad_value: float) -> None:

@@ -48,8 +48,9 @@ _EDIT_ERRORS: dict[int | str, dict[str, Any]] = {
     404: _NOT_FOUND,
     409: {
         "model": ErrorBody,
-        "description": "POLICY_BUNDLE_STATE (details.state, details.allowed) or "
-        "POLICY_ITEM_INVALID.",
+        "description": "POLICY_BUNDLE_STATE (details.state, details.allowed), "
+        "POLICY_ITEM_INVALID, or POLICY_LIMIT_REACHED when adding to a bundle that holds "
+        "POLICY_MAX_ITEMS_PER_BUNDLE nodes, edges and wordings (details.limit).",
     },
     412: {"model": ErrorBody, "description": "Stale If-Match; details.current_version."},
     428: {"model": ErrorBody, "description": "If-Match missing or malformed."},
@@ -136,12 +137,26 @@ async def list_policy_source_clauses(
     "/policy-bundles",
     status_code=status.HTTP_201_CREATED,
     summary="Create a draft policy bundle, empty or copied from another bundle",
-    responses={404: _NOT_FOUND},
+    responses={
+        404: _NOT_FOUND,
+        409: {
+            "model": ErrorBody,
+            "description": "POLICY_LIMIT_REACHED: the tenant already has "
+            "POLICY_MAX_OPEN_BUNDLES_PER_TENANT bundles in DRAFT or REVIEW (details.limit).",
+        },
+    },
 )
 async def create_policy_bundle(
-    body: BundleCreate, ctx: PolicyReader, db: DbSession, request: Request, response: Response
+    body: BundleCreate,
+    ctx: PolicyReader,
+    db: DbSession,
+    settings: SettingsDep,
+    request: Request,
+    response: Response,
 ) -> PolicyBundleDetail:
-    bundle = await policy_bundles.create_bundle(db, ctx, body)
+    bundle = await policy_bundles.create_bundle(
+        db, ctx, body, settings.policy_max_open_bundles_per_tenant
+    )
     response.headers["ETag"] = etag(bundle.revision)
     response.headers["Location"] = _location(
         request, "get_policy_bundle", policy_bundle_id=str(bundle.id)
@@ -268,11 +283,14 @@ async def add_policy_node(
     body: NodeCreate,
     ctx: PolicyReader,
     db: DbSession,
+    settings: SettingsDep,
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyNodeRead:
     revision = expected_version(if_match)
-    node = await policy_bundles.add_node(db, ctx, policy_bundle_id, revision, body)
+    node = await policy_bundles.add_node(
+        db, ctx, policy_bundle_id, revision, body, settings.policy_max_items_per_bundle
+    )
     _edited(response, revision)
     return PolicyNodeRead.model_validate(node)
 
@@ -308,11 +326,14 @@ async def add_policy_rule(
     body: RuleCreate,
     ctx: PolicyReader,
     db: DbSession,
+    settings: SettingsDep,
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyRuleRead:
     revision = expected_version(if_match)
-    rule = await policy_bundles.add_rule(db, ctx, policy_bundle_id, revision, body)
+    rule = await policy_bundles.add_rule(
+        db, ctx, policy_bundle_id, revision, body, settings.policy_max_items_per_bundle
+    )
     _edited(response, revision)
     return await policy_reads.get_rule(db, ctx, policy_bundle_id, rule.id)
 
@@ -349,11 +370,14 @@ async def add_policy_edge(
     body: EdgeCreate,
     ctx: PolicyReader,
     db: DbSession,
+    settings: SettingsDep,
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyEdgeRead:
     revision = expected_version(if_match)
-    edge = await policy_bundles.add_edge(db, ctx, policy_bundle_id, revision, body)
+    edge = await policy_bundles.add_edge(
+        db, ctx, policy_bundle_id, revision, body, settings.policy_max_items_per_bundle
+    )
     _edited(response, revision)
     return PolicyEdgeRead.model_validate(edge)
 
@@ -371,11 +395,14 @@ async def add_policy_wording(
     body: WordingCreate,
     ctx: PolicyReader,
     db: DbSession,
+    settings: SettingsDep,
     response: Response,
     if_match: IfMatch = None,
 ) -> PolicyWordingRead:
     revision = expected_version(if_match)
-    wording = await policy_bundles.add_wording(db, ctx, policy_bundle_id, revision, rule_id, body)
+    wording = await policy_bundles.add_wording(
+        db, ctx, policy_bundle_id, revision, rule_id, body, settings.policy_max_items_per_bundle
+    )
     _edited(response, revision)
     return PolicyWordingRead.model_validate(wording)
 

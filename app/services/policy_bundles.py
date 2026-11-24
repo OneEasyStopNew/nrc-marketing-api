@@ -26,6 +26,7 @@ from app.core.errors import (
     PolicyBundleHasIssuesError,
     PolicyBundleStateError,
     PolicyItemInvalidError,
+    PolicyLimitError,
     VersionConflictError,
 )
 from app.core.request_context import request_id_var
@@ -71,6 +72,8 @@ from app.services.policy_index import stale_ready_builds
 
 State = BundleLifecycleState
 EDITABLE: Final = frozenset({State.DRAFT})
+# Bundles still being written: what POLICY_MAX_OPEN_BUNDLES_PER_TENANT counts.
+OPEN: Final = frozenset({State.DRAFT, State.REVIEW})
 REVIEWABLE: Final = frozenset({State.DRAFT, State.REVIEW})
 
 
@@ -269,10 +272,27 @@ async def _finish(
         await db.refresh(item)
 
 
-async def create_bundle(db: AsyncSession, ctx: TenantContext, body: BundleCreate) -> PolicyBundle:
-    """A new DRAFT with the tenant's next version, empty or copied from based_on_bundle_id."""
+async def create_bundle(
+    db: AsyncSession, ctx: TenantContext, body: BundleCreate, max_open_bundles: int
+) -> PolicyBundle:
+    """A new DRAFT with the tenant's next version, empty or copied from based_on_bundle_id.
+
+    Raises PolicyLimitError when the tenant already has max_open_bundles in DRAFT or REVIEW.
+    """
     _require(ctx, frozenset({Capability.POLICY_MANAGE}))
+    # The tenant lock also serialises this count, so parallel creates can't both take the last one.
     await lock_tenant_bundles(db, ctx.tenant_id)
+    open_bundles = await db.scalar(
+        select(func.count()).where(
+            PolicyBundle.tenant_id == ctx.tenant_id, PolicyBundle.lifecycle_state.in_(OPEN)
+        )
+    )
+    if (open_bundles or 0) >= max_open_bundles:
+        raise PolicyLimitError(
+            "The tenant has the most draft and in-review policy bundles it may have. Submit, "
+            "approve or reject one first.",
+            details={"limit": max_open_bundles},
+        )
     base = None
     if body.based_on_bundle_id is not None:
         base = await db.scalar(
@@ -415,6 +435,24 @@ async def _in_bundle[M: PolicyNode | PolicyEdge | PolicyRuleRecord | PolicyRuleW
     return item
 
 
+async def _room_for_items(db: AsyncSession, bundle: PolicyBundle, max_items: int) -> None:
+    # Under the bundle row lock (_open), so parallel adds can't both take the last place. One
+    # request adds at most a rule and its node over the line.
+    counts = [
+        select(func.count())
+        .select_from(model)
+        .where(model.tenant_id == bundle.tenant_id, model.policy_bundle_id == bundle.id)
+        .scalar_subquery()
+        for model in (PolicyNode, PolicyEdge, PolicyRuleWording)
+    ]
+    items = await db.scalar(select(counts[0] + counts[1] + counts[2]))
+    if (items or 0) >= max_items:
+        raise PolicyLimitError(
+            "This policy bundle holds the most nodes, edges and wordings it may have.",
+            details={"limit": max_items},
+        )
+
+
 async def _node_key_free(db: AsyncSession, bundle: PolicyBundle, node_key: str) -> None:
     taken = await db.scalar(
         select(PolicyNode.id).where(
@@ -462,10 +500,16 @@ def _back_to_proposed(item: PolicyNode | PolicyEdge | PolicyRuleWording) -> None
 
 
 async def add_node(
-    db: AsyncSession, ctx: TenantContext, bundle_id: UUID, revision: int, body: NodeCreate
+    db: AsyncSession,
+    ctx: TenantContext,
+    bundle_id: UUID,
+    revision: int,
+    body: NodeCreate,
+    max_items: int,
 ) -> PolicyNode:
     _require(ctx, frozenset({Capability.POLICY_MANAGE}))
     bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
+    await _room_for_items(db, bundle, max_items)
     await _node_key_free(db, bundle, body.node_key)
     await _require_clause(db, ctx.tenant_id, body.source_clause_id)
     values = body.model_dump()
@@ -519,11 +563,17 @@ async def update_node(
 
 
 async def add_rule(
-    db: AsyncSession, ctx: TenantContext, bundle_id: UUID, revision: int, body: RuleCreate
+    db: AsyncSession,
+    ctx: TenantContext,
+    bundle_id: UUID,
+    revision: int,
+    body: RuleCreate,
+    max_items: int,
 ) -> PolicyRuleRecord:
     """A rule and its RULE node (node_key = rule_id), both PROPOSED."""
     _require(ctx, frozenset({Capability.POLICY_MANAGE}))
     bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
+    await _room_for_items(db, bundle, max_items)
     await _node_key_free(db, bundle, body.rule_id)
     rule_fields = {"rule_id", "rule_version", "title", "requirement", "gate", "severity"}
     rule_fields |= {"mandatory", "check_type"}
@@ -583,10 +633,16 @@ async def update_rule(
 
 
 async def add_edge(
-    db: AsyncSession, ctx: TenantContext, bundle_id: UUID, revision: int, body: EdgeCreate
+    db: AsyncSession,
+    ctx: TenantContext,
+    bundle_id: UUID,
+    revision: int,
+    body: EdgeCreate,
+    max_items: int,
 ) -> PolicyEdge:
     _require(ctx, frozenset({Capability.POLICY_MANAGE}))
     bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
+    await _room_for_items(db, bundle, max_items)
     if body.from_node_id == body.to_node_id:
         raise PolicyItemInvalidError("An edge must join two different nodes.")
     await _in_bundle(db, PolicyNode, bundle, body.from_node_id, "Node")
@@ -625,10 +681,12 @@ async def add_wording(
     revision: int,
     rule_record_id: UUID,
     body: WordingCreate,
+    max_items: int,
 ) -> PolicyRuleWording:
     """Required wording or a prohibited phrase for a rule. Kept exactly as given (AC7)."""
     _require(ctx, frozenset({Capability.POLICY_MANAGE}))
     bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
+    await _room_for_items(db, bundle, max_items)
     await _in_bundle(db, PolicyRuleRecord, bundle, rule_record_id, "Rule")
     await _require_clause(db, ctx.tenant_id, body.source_clause_id)
     if body.translation_of_id is not None:

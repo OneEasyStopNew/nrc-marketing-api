@@ -4,7 +4,7 @@ The services are tested in test_policy_sources.py and test_policy_lifecycle.py; 
 what the routes add: status codes, ETags, bodies, capabilities and tenant isolation.
 """
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -13,6 +13,7 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from app.core.config import Settings, get_settings
 from app.models.enums import (
     BundleLifecycleState,
     CheckType,
@@ -694,6 +695,53 @@ async def test_a_reason_is_required_to_reject(api: Api) -> None:
     assert response.status_code == 409, response.text
     assert response.json()["code"] == "POLICY_ITEM_INVALID"
     assert response.json()["details"] == {"field": "reason"}
+
+
+@pytest.fixture
+def tight_policy_caps(
+    app_overrides: dict[Callable[..., object], Callable[..., object]],
+) -> None:
+    capped: Settings = get_settings().model_copy(
+        update={"policy_max_open_bundles_per_tenant": 2, "policy_max_items_per_bundle": 10}
+    )
+    app_overrides[get_settings] = lambda: capped
+
+
+@pytest.mark.usefixtures("tight_policy_caps")
+async def test_open_bundles_are_capped_per_tenant(api: Api) -> None:
+    # Regression (review lesson from api#23): nothing bounded how many drafts a tenant could make.
+    await new_bundle(api)
+    at_the_cap = await new_bundle(api)
+
+    over = await api.call(
+        "POST",
+        "/policy-bundles",
+        json={"name": "[SYNTHETIC] x", "source_ref": "synthetic:x", "is_synthetic": True},
+    )
+
+    assert at_the_cap["lifecycle_state"] == "DRAFT"
+    assert over.status_code == 409, over.text
+    assert over.json()["code"] == "POLICY_LIMIT_REACHED"
+    assert over.json()["details"] == {"limit": 2}
+
+
+@pytest.mark.usefixtures("tight_policy_caps")
+async def test_items_per_bundle_are_capped(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+    path = f"/policy-bundles/{bundle['id']}/nodes"
+    for index in range(10):
+        body = node_body(clause_id, key=f"CL-{index}")
+        await api.ok(api.call("POST", path, json=body, if_match=index + 1), 201)
+
+    over = await api.call("POST", path, json=node_body(clause_id, key="CL-X"), if_match=11)
+
+    assert over.status_code == 409, over.text
+    assert over.json()["code"] == "POLICY_LIMIT_REACHED"
+    assert over.json()["details"] == {"limit": 10}
 
 
 @pytest.mark.parametrize("field", ["name", "source_ref"])

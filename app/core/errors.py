@@ -147,6 +147,13 @@ class UploadNotAcceptedError(AppError):
     default_message = "This file cannot be uploaded."
 
 
+class PolicyLimitError(ConflictError):
+    # POLICY_MAX_OPEN_BUNDLES_PER_TENANT or POLICY_MAX_ITEMS_PER_BUNDLE reached; details.limit.
+    # Not retryable: nothing frees a slot until someone submits, rejects or edits a bundle.
+    code = "POLICY_LIMIT_REACHED"
+    default_message = "This policy limit has been reached."
+
+
 class UploadLimitError(AppError):
     # The tenant has UPLOAD_MAX_PENDING_PER_TENANT uploads in progress.
     code = "UPLOAD_LIMIT_REACHED"

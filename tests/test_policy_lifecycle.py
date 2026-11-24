@@ -76,6 +76,9 @@ ADMIN, APPROVER = "policy-admin-a", "policy-approver-a"
 CLAUSE_TEXT = "[SYNTHETIC] Every post must say: This is a research study. Taking part is voluntary."
 SOURCE_REF = "synthetic:nrc-4-lifecycle"
 NO_REASON = TransitionRequest()
+# Bundle and item caps are tested in test_policy_admin_api; these tests stay well under them.
+TEST_MAX_OPEN_BUNDLES = 100
+TEST_MAX_ITEMS = 20_000
 
 
 def ctx_for(tenant_id: UUID, sub: str, role: Role) -> TenantContext:
@@ -120,7 +123,7 @@ class Env:
         body = BundleCreate.model_validate(
             {"name": "[SYNTHETIC] Policy", "source_ref": SOURCE_REF, "is_synthetic": True} | changes
         )
-        return await bundles.create_bundle(self.db, self.admin, body)
+        return await bundles.create_bundle(self.db, self.admin, body, TEST_MAX_OPEN_BUNDLES)
 
     async def draft(self) -> Draft:
         # One rule, supported by a clause node that cites the source clause, with exact wording
@@ -138,6 +141,7 @@ class Env:
                 text=CLAUSE_TEXT,
                 source_clause_id=self.clause_id,
             ),
+            TEST_MAX_ITEMS,
         )
         rule = await bundles.add_rule(
             self.db,
@@ -154,6 +158,7 @@ class Env:
                 check_type=CheckType.DETERMINISTIC,
                 text="[SYNTHETIC] Say that this is a research study.",
             ),
+            TEST_MAX_ITEMS,
         )
         edge = await bundles.add_edge(
             self.db,
@@ -166,6 +171,7 @@ class Env:
                 to_node_id=clause.id,
                 provenance_clause_id=self.clause_id,
             ),
+            TEST_MAX_ITEMS,
         )
         wording = await bundles.add_wording(
             self.db,
@@ -177,6 +183,7 @@ class Env:
                 kind=WordingKind.EXACT_WORDING,
                 text="This is a research study. Taking part is voluntary.",
             ),
+            TEST_MAX_ITEMS,
         )
         return Draft(bundle.id, rev + 4, clause.id, rule.id, rule.node_id, edge.id, wording.id)
 
@@ -288,6 +295,7 @@ async def test_only_policy_admins_create_bundles(env: Env) -> None:
             env.db,
             env.approver,
             BundleCreate(name="[SYNTHETIC] x", source_ref="synthetic:x", is_synthetic=True),
+            TEST_MAX_OPEN_BUNDLES,
         )
 
 
@@ -426,6 +434,7 @@ async def test_a_node_key_is_used_once_per_bundle(env: Env) -> None:
             draft.id,
             draft.revision,
             NodeCreate(node_key="REC-07", node_type=PolicyNodeType.EXAMPLE, text="[SYNTHETIC] x"),
+            TEST_MAX_ITEMS,
         )
 
 
@@ -440,6 +449,7 @@ async def test_a_rule_has_one_live_exact_wording_per_language(env: Env) -> None:
             draft.revision,
             draft.rule,
             WordingCreate(kind=WordingKind.EXACT_WORDING, text="This is a research study."),
+            TEST_MAX_ITEMS,
         )
 
 
@@ -459,6 +469,7 @@ async def test_an_edge_must_join_nodes_of_the_same_bundle(env: Env, world: World
                 to_node_id=other.clause_node,
                 provenance_note="[SYNTHETIC] note",
             ),
+            TEST_MAX_ITEMS,
         )
 
 
@@ -477,6 +488,7 @@ async def test_an_unknown_source_clause_is_not_found(env: Env) -> None:
                 text="[SYNTHETIC] x",
                 source_clause_id=uuid4(),
             ),
+            TEST_MAX_ITEMS,
         )
 
 
@@ -490,6 +502,7 @@ async def test_approvers_cannot_edit(env: Env) -> None:
             bundle.id,
             bundle.revision,
             NodeCreate(node_key="EX-1", node_type=PolicyNodeType.EXAMPLE, text="[SYNTHETIC] x"),
+            TEST_MAX_ITEMS,
         )
 
 
@@ -505,6 +518,7 @@ async def test_another_tenants_bundle_is_not_found(
             other,
             1,
             NodeCreate(node_key="EX-1", node_type=PolicyNodeType.EXAMPLE, text="[SYNTHETIC] x"),
+            TEST_MAX_ITEMS,
         )
 
 
@@ -780,6 +794,7 @@ async def test_an_edge_without_provenance_cannot_be_approved(env: Env) -> None:
             from_node_id=draft.rule_node,
             to_node_id=draft.clause_node,
         ),
+        TEST_MAX_ITEMS,
     )
 
     with pytest.raises(PolicyItemInvalidError, match="needs a source clause or a note"):
@@ -802,6 +817,7 @@ async def test_rejected_items_do_not_block_approval(env: Env) -> None:
         draft.id,
         draft.revision,
         NodeCreate(node_key="EX-1", node_type=PolicyNodeType.EXAMPLE, text="[SYNTHETIC] x"),
+        TEST_MAX_ITEMS,
     )
     draft.revision += 1
     await env.review_all(draft)
@@ -845,6 +861,7 @@ async def test_two_editors_with_the_same_revision_one_wins(
                     bundle_id,
                     1,
                     NodeCreate(node_key=key, node_type=PolicyNodeType.EXAMPLE, text="[SYNTHETIC]"),
+                    TEST_MAX_ITEMS,
                 )
             except VersionConflictError:
                 return "stale"
@@ -859,6 +876,7 @@ async def test_two_editors_with_the_same_revision_one_wins(
                     BundleCreate(
                         name="[SYNTHETIC] race", source_ref="synthetic:race", is_synthetic=True
                     ),
+                    TEST_MAX_OPEN_BUNDLES,
                 )
             ).id
         results = await asyncio.gather(add("EX-1"), add("EX-2"))
