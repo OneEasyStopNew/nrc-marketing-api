@@ -184,6 +184,13 @@ class MissingContextCode(StrEnum):
     STATEMENTS_TRUNCATED = "STATEMENTS_TRUNCATED"
 
 
+class PolicyIndexReason(StrEnum):
+    """Why an index build was refused: details.reason of POLICY_INDEX_ERROR (owner-run build)."""
+
+    NO_APPROVED_NODES = "NO_APPROVED_NODES"
+    INDEX_CONTENT_CHANGED = "INDEX_CONTENT_CHANGED"
+
+
 class PolicyContextReason(StrEnum):
     """Why no policy context was built. Sent as details.reason of POLICY_CONTEXT_UNAVAILABLE (409)
     and in brackets in a validation run's coverage gap; the frontend branches on these values."""

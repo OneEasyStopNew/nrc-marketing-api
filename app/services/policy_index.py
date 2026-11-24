@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import PolicyIndexError
 from app.models import PolicyIndexBuild, PolicyNode, PolicyNodeEmbedding
-from app.models.enums import IndexBuildState
+from app.models.enums import IndexBuildState, PolicyIndexReason
 from app.models.policy_graph import EMBEDDING_DIMENSIONS, SEARCHABLE_NODE_TYPES
 from app.services.providers.embeddings import (
     EmbeddingProvider,
@@ -93,7 +93,8 @@ async def build_policy_index(
     ]
     if not nodes:
         raise PolicyIndexError(
-            "The bundle has no approved nodes to index", details={"reason": "NO_APPROVED_NODES"}
+            "The bundle has no approved nodes to index",
+            details={"reason": PolicyIndexReason.NO_APPROVED_NODES},
         )
     checksum = index_content_checksum(nodes)
 
@@ -109,7 +110,10 @@ async def build_policy_index(
         if ready.content_checksum != checksum:
             raise PolicyIndexError(
                 "The bundle's nodes changed since its index was built",
-                details={"reason": "INDEX_CONTENT_CHANGED", "build_id": str(ready.id)},
+                details={
+                    "reason": PolicyIndexReason.INDEX_CONTENT_CHANGED,
+                    "build_id": str(ready.id),
+                },
             )
         return IndexBuildResult(
             build_id=ready.id,
