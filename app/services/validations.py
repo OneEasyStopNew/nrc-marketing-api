@@ -12,7 +12,7 @@ Image validation (D4) is not built here; the routes answer it from the demo stub
 
 import hashlib
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 from uuid import UUID, uuid4
@@ -69,9 +69,11 @@ QUERY_CANCELED_SQLSTATE: Final = "57014"
 # Recorded when the policy context couldn't be gathered; the rule checks still ran. The reason
 # in brackets is a code (e.g. GRAPH_MISSING): CoverageGap has no code field.
 CONTEXT_UNAVAILABLE_GAP: Final = (
-    "Policy evidence was not gathered for this run ({reason}); the result comes from the rule "
-    "checks only."
+    "Policy evidence was not gathered for this run ({reason}), so its mandatory rules can't be "
+    "assessed."
 )
+# Saved on each mandatory rule (that didn't fail) of a run without policy context.
+CONTEXT_UNAVAILABLE_RULE: Final = "No policy context was gathered for this rule."
 
 logger = logging.getLogger(__name__)
 
@@ -133,10 +135,15 @@ async def create_validation(
         policy,
         evaluated_at,
     )
+    # What the policy context couldn't settle is part of the saved result, so the generation gate
+    # sees it (policy bundle contract, "Retrieval gaps"; Vishnu's review of #26).
+    checked = rules.applicable_rules(policy, body.input_kind)
     if stored is None:
-        # Without its policy context a run can't be shown to pass (17 Nov decision superseded on
-        # 20 Nov, Dinesh's review): PASS becomes NEEDS_REVIEW; FAIL is already stricter.
-        evaluation = without_pass(evaluation)
+        evaluation = rules.apply_missing_policy_context(
+            evaluation, checked, CONTEXT_UNAVAILABLE_RULE
+        )
+    else:
+        evaluation = rules.apply_policy_context(evaluation, checked, stored.manifest)
     run = _new_run(ctx, body, text, target, policy, evaluation, evaluated_at, stored, context_gaps)
     db.add(run)
     await idempotency.complete(db, ctx.tenant_id, VALIDATE_ROUTE, idempotency_key, run.id)
@@ -423,20 +430,6 @@ async def _gather_context(
         reason,
     )
     return None, [CoverageGap(reason=CONTEXT_UNAVAILABLE_GAP.format(reason=reason))]
-
-
-def without_pass(evaluation: rules.Evaluation) -> rules.Evaluation:
-    # The run's outcome and gates, with every PASS turned into NEEDS_REVIEW.
-    def demote(outcome: Outcome) -> Outcome:
-        return Outcome.NEEDS_REVIEW if outcome is Outcome.PASS else outcome
-
-    return replace(
-        evaluation,
-        outcome=demote(evaluation.outcome),
-        gates=[
-            gate.model_copy(update={"outcome": demote(gate.outcome)}) for gate in evaluation.gates
-        ],
-    )
 
 
 def policy_language(language: Language | str) -> PolicyLanguage | None:
