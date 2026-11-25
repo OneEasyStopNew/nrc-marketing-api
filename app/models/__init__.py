@@ -1,6 +1,7 @@
 # Database models. Importing this package registers every table on Base.metadata.
 
 from app.models.assets import Asset
+from app.models.channel_accounts import ChannelAccount, MetaConnectSession
 from app.models.creatives import Creative, CreativeVersion
 from app.models.idempotency import IdempotencyRecord
 from app.models.jobs import CreditReservation, Job, OutboxEvent, ProviderSpend
@@ -11,6 +12,7 @@ from app.models.validations import ValidationRun
 
 __all__ = [
     "Asset",
+    "ChannelAccount",
     "Creative",
     "CreativeVersion",
     "CreditReservation",
@@ -18,6 +20,7 @@ __all__ = [
     "Job",
     "Membership",
     "MembershipStudy",
+    "MetaConnectSession",
     "OutboxEvent",
     "PolicyBundle",
     "ProviderSpend",
