@@ -278,6 +278,10 @@ async def test_capabilities_list_formats_and_text_limits(
         "caption_max_chars": 2200,
         "image_text_max_chars": 300,
         "image_text_max_lines": 6,
+        "headline_max_chars": 150,
+        "audience_max_chars": 500,
+        "visual_instructions_max_chars": 2000,
+        "destination_url_max_chars": 2048,
         "generation_text_max_chars": 1448,
     }
 

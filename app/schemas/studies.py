@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import Field
 
-from app.models.enums import Language
+from app.models.enums import CallToAction, Language
 from app.schemas.common import ApiModel
 from app.schemas.tenancy import PostFormatOption, StudySnapshotRead
 
@@ -45,6 +45,10 @@ class TextLimits(ApiModel):
     caption_max_chars: int
     image_text_max_chars: int
     image_text_max_lines: int
+    headline_max_chars: int
+    audience_max_chars: int
+    visual_instructions_max_chars: int
+    destination_url_max_chars: int
     generation_text_max_chars: int = Field(
         description="Prompt plus image text together. Checked when generation starts, not on "
         "save, because drafts that are only validated never generate."
@@ -54,4 +58,5 @@ class TextLimits(ApiModel):
 class PlatformCapabilities(ApiModel):
     languages: list[Language]
     post_formats: list[PostFormatOption]
+    call_to_actions: list[CallToAction]
     text_limits: TextLimits

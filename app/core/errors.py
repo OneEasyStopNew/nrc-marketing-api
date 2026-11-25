@@ -19,6 +19,18 @@ class AppError(Exception):
         super().__init__(self.message)
 
 
+class FieldValidationError(AppError):
+    # A field check that needs the database. Same body as request validation, so clients map
+    # details.fields[].loc to their form fields the same way.
+    code = "VALIDATION_FAILED"
+    default_message = "The request has invalid fields."
+
+    def __init__(self, field: str, msg: str, error_type: str) -> None:
+        super().__init__(
+            details={"fields": [{"loc": ["body", field], "msg": msg, "type": error_type}]}
+        )
+
+
 class AuthenticationError(AppError):
     code = "UNAUTHENTICATED"
     default_message = "Authentication is required."

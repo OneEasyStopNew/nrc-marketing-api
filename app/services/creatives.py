@@ -1,6 +1,7 @@
 # Creative drafts: explicit creation, immutable versions and optimistic concurrency.
 
-from typing import Final
+from collections.abc import Mapping
+from typing import Any, Final
 from uuid import UUID, uuid4
 
 from sqlalchemy import ColumnElement, ScalarSelect, and_, func, select, update
@@ -8,13 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
 from app.core.errors import (
+    FieldValidationError,
     NotFoundError,
     StudyClosedError,
     StudySnapshotMissingError,
     VersionConflictError,
 )
 from app.models import Asset, Creative, CreativeVersion, Membership, StudySnapshot
-from app.models.enums import RecruitmentStatus
+from app.models.enums import BriefField, RecruitmentStatus
 from app.schemas.creatives import (
     CreativeCreate,
     CreativeRead,
@@ -22,9 +24,18 @@ from app.schemas.creatives import (
     CreativeVersionPage,
     CreativeVersionRead,
 )
-from app.services import idempotency
+from app.services import briefs, idempotency
 
 CREATE_ROUTE: Final = "POST /creatives"
+# Columns of creative_versions that hold the brief fields, named like the API fields.
+BRIEF_COLUMNS: Final = (
+    CreativeVersion.headline,
+    CreativeVersion.call_to_action,
+    CreativeVersion.destination_url,
+    CreativeVersion.site,
+    CreativeVersion.audience,
+    CreativeVersion.visual_instructions,
+)
 
 
 async def create_creative(
@@ -45,6 +56,8 @@ async def create_creative(
         return await get_creative(db, ctx, existing_id), True
 
     snapshot = await _latest_open_snapshot(db, ctx, data.study_id)
+    brief = _brief_values(data.model_dump(mode="json", include=set(_BRIEF_NAMES)))
+    briefs.check_site(brief["site"], snapshot.facts)
     creative_id = uuid4()
     db.add(
         Creative(
@@ -67,6 +80,7 @@ async def create_creative(
             prompt=data.prompt,
             caption=data.caption,
             image_text=data.image_text,
+            **brief,
             study_snapshot_id=snapshot.id,
             language=data.language,
             channel=data.channel,
@@ -89,6 +103,7 @@ async def get_creative(db: AsyncSession, ctx: TenantContext, creative_id: UUID) 
             CreativeVersion.prompt.label("current_prompt"),
             CreativeVersion.caption,
             CreativeVersion.image_text,
+            *BRIEF_COLUMNS,
             CreativeVersion.language,
             CreativeVersion.channel,
             CreativeVersion.post_format,
@@ -112,7 +127,10 @@ async def get_creative(db: AsyncSession, ctx: TenantContext, creative_id: UUID) 
     row = (await db.execute(current_view)).one_or_none()
     if row is None:
         raise NotFoundError("Creative not found.")
-    return CreativeRead.model_validate(row)
+    creative = CreativeRead.model_validate(row)
+    values = {field: getattr(creative, field.value) for field in BriefField}
+    creative.brief_issues = briefs.brief_issues(creative.post_format, values)
+    return creative
 
 
 async def update_creative(
@@ -155,7 +173,20 @@ async def update_creative(
             )
         )
     ).scalar_one()
-    fields = changes.model_dump(exclude_unset=True)
+    fields = changes.model_dump(mode="json", exclude_unset=True)
+    brief = _brief_values({name: getattr(base, name) for name in _BRIEF_NAMES} | fields)
+    if "site" in fields:
+        # Against the snapshot this draft is pinned to, not the study's latest one.
+        pinned = (
+            await db.execute(
+                select(StudySnapshot.facts).where(StudySnapshot.id == base.study_snapshot_id)
+            )
+        ).scalar_one()
+        try:
+            briefs.check_site(brief["site"], pinned)
+        except FieldValidationError:
+            await db.rollback()  # undo the version bump above
+            raise
     db.add(
         CreativeVersion(
             id=uuid4(),
@@ -165,6 +196,7 @@ async def update_creative(
             prompt=fields.get("current_prompt", base.prompt),
             caption=fields.get("caption", base.caption),
             image_text=fields.get("image_text", base.image_text),
+            **brief,
             study_snapshot_id=base.study_snapshot_id,
             language=base.language,
             channel=base.channel,
@@ -192,6 +224,7 @@ async def list_versions(
             CreativeVersion.prompt.label("current_prompt"),
             CreativeVersion.caption,
             CreativeVersion.image_text,
+            *BRIEF_COLUMNS,
             CreativeVersion.study_snapshot_id,
             CreativeVersion.language,
             CreativeVersion.channel,
@@ -258,3 +291,11 @@ async def _latest_open_snapshot(
     if snapshot.recruitment_status is RecruitmentStatus.CLOSED:
         raise StudyClosedError()
     return snapshot
+
+
+_BRIEF_NAMES: Final = frozenset(field.value for field in BriefField)
+
+
+def _brief_values(values: Mapping[str, Any]) -> dict[str, Any]:
+    # The brief fields of a new version, keyed by column name; missing ones are None.
+    return {name: values.get(name) for name in sorted(_BRIEF_NAMES)}

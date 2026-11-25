@@ -575,6 +575,7 @@ async def test_story_format_is_offered_and_accepted(
         "aspect_ratio": "9:16",
         "width_px": 1080,
         "height_px": 1920,
+        "link_fields": ["call_to_action", "destination_url"],
     }
     assert created.status_code == 201
     assert created.json()["post_format"] == "story_image"

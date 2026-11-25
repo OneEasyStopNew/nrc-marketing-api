@@ -2058,6 +2058,51 @@
         "title": "AssetRead",
         "description": "Immutable stored bytes: any change produces a new asset_id and needs new validation."
       },
+      "BriefField": {
+        "type": "string",
+        "enum": [
+          "headline",
+          "call_to_action",
+          "destination_url",
+          "site",
+          "audience",
+          "visual_instructions"
+        ],
+        "title": "BriefField"
+      },
+      "BriefIssue": {
+        "properties": {
+          "field": {
+            "$ref": "#/components/schemas/BriefField"
+          },
+          "code": {
+            "$ref": "#/components/schemas/BriefIssueCode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "code"
+        ],
+        "title": "BriefIssue"
+      },
+      "BriefIssueCode": {
+        "type": "string",
+        "enum": [
+          "REQUIRED_WITH_LINK"
+        ],
+        "title": "BriefIssueCode"
+      },
+      "CallToAction": {
+        "type": "string",
+        "enum": [
+          "learn_more",
+          "sign_up",
+          "apply_now",
+          "contact_us"
+        ],
+        "title": "CallToAction"
+      },
       "Capability": {
         "type": "string",
         "enum": [
@@ -2125,6 +2170,13 @@
             "type": "array",
             "title": "Post Formats"
           },
+          "call_to_actions": {
+            "items": {
+              "$ref": "#/components/schemas/CallToAction"
+            },
+            "type": "array",
+            "title": "Call To Actions"
+          },
           "active_policy": {
             "anyOf": [
               {
@@ -2146,6 +2198,7 @@
           "studies",
           "languages",
           "post_formats",
+          "call_to_actions",
           "active_policy"
         ],
         "title": "ContextRead"
@@ -2223,6 +2276,83 @@
           },
           "post_format": {
             "$ref": "#/components/schemas/PostFormat"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 150,
+                "description": "Link headline under the image, one line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "call_to_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallToAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Url",
+            "description": "https only."
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "description": "One of the study snapshot's sites, exactly."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site",
+            "description": "One of the study snapshot's sites, exactly; leave out when not tied to one site."
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "description": "Who the post is for, one line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "visual_instructions": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Instructions"
           }
         },
         "additionalProperties": false,
@@ -2263,6 +2393,73 @@
       },
       "CreativeRead": {
         "properties": {
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline",
+            "description": "Link headline under the image, not on it."
+          },
+          "call_to_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallToAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Url"
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "visual_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Instructions",
+            "description": "Stored with the brief; image generation uses the prompt and image text only."
+          },
           "id": {
             "type": "string",
             "format": "uuid",
@@ -2361,10 +2558,24 @@
             },
             "type": "array",
             "title": "Validation Runs"
+          },
+          "brief_issues": {
+            "items": {
+              "$ref": "#/components/schemas/BriefIssue"
+            },
+            "type": "array",
+            "title": "Brief Issues",
+            "description": "What the current version still needs before it can be approved. Saving works regardless; empty when the brief is complete."
           }
         },
         "type": "object",
         "required": [
+          "headline",
+          "call_to_action",
+          "destination_url",
+          "site",
+          "audience",
+          "visual_instructions",
           "id",
           "study_id",
           "version",
@@ -2424,12 +2635,89 @@
               }
             ],
             "title": "Image Text"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 150,
+                "description": "Link headline under the image, one line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "call_to_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallToAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Url",
+            "description": "https only."
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "description": "One of the study snapshot's sites, exactly."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site",
+            "description": "One of the study snapshot's sites, exactly; leave out when not tied to one site."
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "description": "Who the post is for, one line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "visual_instructions": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Instructions"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "CreativeUpdate",
-        "description": "Fields to change. Omitted fields keep their value; send caption or image_text: null to\nclear it."
+        "description": "Fields to change. Omitted fields keep their value; send any field but current_prompt as\nnull to clear it."
       },
       "CreativeVersionPage": {
         "properties": {
@@ -2462,6 +2750,73 @@
       },
       "CreativeVersionRead": {
         "properties": {
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline",
+            "description": "Link headline under the image, not on it."
+          },
+          "call_to_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallToAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Url"
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "visual_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Instructions",
+            "description": "Stored with the brief; image generation uses the prompt and image text only."
+          },
           "version": {
             "type": "integer",
             "title": "Version"
@@ -2530,6 +2885,12 @@
         },
         "type": "object",
         "required": [
+          "headline",
+          "call_to_action",
+          "destination_url",
+          "site",
+          "audience",
+          "visual_instructions",
           "version",
           "current_prompt",
           "caption",
@@ -3249,6 +3610,13 @@
             "type": "array",
             "title": "Post Formats"
           },
+          "call_to_actions": {
+            "items": {
+              "$ref": "#/components/schemas/CallToAction"
+            },
+            "type": "array",
+            "title": "Call To Actions"
+          },
           "text_limits": {
             "$ref": "#/components/schemas/TextLimits"
           }
@@ -3257,6 +3625,7 @@
         "required": [
           "languages",
           "post_formats",
+          "call_to_actions",
           "text_limits"
         ],
         "title": "PlatformCapabilities"
@@ -3443,6 +3812,14 @@
           "height_px": {
             "type": "integer",
             "title": "Height Px"
+          },
+          "link_fields": {
+            "items": {
+              "$ref": "#/components/schemas/BriefField"
+            },
+            "type": "array",
+            "title": "Link Fields",
+            "description": "A post with a link fills all of these, or none. Not enforced on save; missing ones show in the creative's brief_issues."
           }
         },
         "type": "object",
@@ -3451,7 +3828,8 @@
           "post_format",
           "aspect_ratio",
           "width_px",
-          "height_px"
+          "height_px",
+          "link_fields"
         ],
         "title": "PostFormatOption"
       },
@@ -3896,6 +4274,22 @@
             "type": "integer",
             "title": "Image Text Max Lines"
           },
+          "headline_max_chars": {
+            "type": "integer",
+            "title": "Headline Max Chars"
+          },
+          "audience_max_chars": {
+            "type": "integer",
+            "title": "Audience Max Chars"
+          },
+          "visual_instructions_max_chars": {
+            "type": "integer",
+            "title": "Visual Instructions Max Chars"
+          },
+          "destination_url_max_chars": {
+            "type": "integer",
+            "title": "Destination Url Max Chars"
+          },
           "generation_text_max_chars": {
             "type": "integer",
             "title": "Generation Text Max Chars",
@@ -3908,6 +4302,10 @@
           "caption_max_chars",
           "image_text_max_chars",
           "image_text_max_lines",
+          "headline_max_chars",
+          "audience_max_chars",
+          "visual_instructions_max_chars",
+          "destination_url_max_chars",
           "generation_text_max_chars"
         ],
         "title": "TextLimits"

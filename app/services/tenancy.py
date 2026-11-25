@@ -12,7 +12,7 @@ from app.auth.tokens import Principal
 from app.core.errors import PermissionDeniedError
 from app.db.session import bind_tenant
 from app.models import Membership, MembershipStudy, Study, StudySnapshot, Tenant
-from app.models.enums import Language
+from app.models.enums import CallToAction, Language
 from app.schemas.tenancy import ContextRead, MeRead, TenantMembershipRead
 from app.services import policies, studies
 
@@ -119,5 +119,6 @@ async def get_context(db: AsyncSession, ctx: TenantContext) -> ContextRead:
         studies=snapshots,
         languages=list(Language),
         post_formats=studies.post_format_options(),
+        call_to_actions=list(CallToAction),
         active_policy=await policies.get_active_policy_summary(db, ctx.tenant_id),
     )

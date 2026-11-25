@@ -10,13 +10,17 @@ from sqlalchemy.orm import aliased
 from app.auth.access import TenantContext
 from app.core.errors import NotFoundError
 from app.models import Study, StudySnapshot
-from app.models.enums import FORMAT_SPECS, Language, RecruitmentStatus
+from app.models.enums import FORMAT_SPECS, BriefField, CallToAction, Language, RecruitmentStatus
 from app.schemas.common import (
+    MAX_AUDIENCE_CHARS,
     MAX_CAPTION_CHARS,
+    MAX_DESTINATION_URL_CHARS,
     MAX_GENERATION_TEXT_CHARS,
+    MAX_HEADLINE_CHARS,
     MAX_IMAGE_TEXT_CHARS,
     MAX_IMAGE_TEXT_LINES,
     MAX_PROMPT_CHARS,
+    MAX_VISUAL_INSTRUCTIONS_CHARS,
 )
 from app.schemas.studies import (
     PlatformCapabilities,
@@ -100,11 +104,16 @@ def platform_capabilities() -> PlatformCapabilities:
     return PlatformCapabilities(
         languages=list(Language),
         post_formats=post_format_options(),
+        call_to_actions=list(CallToAction),
         text_limits=TextLimits(
             prompt_max_chars=MAX_PROMPT_CHARS,
             caption_max_chars=MAX_CAPTION_CHARS,
             image_text_max_chars=MAX_IMAGE_TEXT_CHARS,
             image_text_max_lines=MAX_IMAGE_TEXT_LINES,
+            headline_max_chars=MAX_HEADLINE_CHARS,
+            audience_max_chars=MAX_AUDIENCE_CHARS,
+            visual_instructions_max_chars=MAX_VISUAL_INSTRUCTIONS_CHARS,
+            destination_url_max_chars=MAX_DESTINATION_URL_CHARS,
             generation_text_max_chars=MAX_GENERATION_TEXT_CHARS,
         ),
     )
@@ -118,6 +127,7 @@ def post_format_options() -> list[PostFormatOption]:
             aspect_ratio=spec.aspect_ratio,
             width_px=spec.width_px,
             height_px=spec.height_px,
+            link_fields=[field for field in BriefField if field in spec.link_fields],
         )
         for post_format, spec in FORMAT_SPECS.items()
     ]
