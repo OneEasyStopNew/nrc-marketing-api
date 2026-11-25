@@ -47,6 +47,52 @@ reactivates the membership. Admin is not a super-role; it only manages membershi
 Add `--display-name "<sub>=Priya Shah"` (once per member) to show a name instead of the sub in
 version history and the media library. Re-running without it keeps the name already set.
 
+## Importing approved study facts
+
+Until Study Management exists, approved study facts come in as one reviewed JSON file per
+snapshot. Marketing stores exactly what the file says. It never fills in a fact, and the file holds
+no patient data (unknown fields are refused).
+
+```powershell
+uv run python -m scripts.import_study_snapshot --tenant-id <tenant-uuid> --file snapshot.json
+```
+
+```json
+{
+  "external_ref": "SM-2026-0142",
+  "source_ref": "study-management:SM-2026-0142:v7",
+  "title": "[SYNTHETIC] Blood pressure study",
+  "recruitment_status": "recruiting",
+  "language": "en",
+  "facts": {
+    "condition": "high blood pressure",
+    "eligibility_summary": "Adults aged 18 to 75 who have been told they have high blood pressure.",
+    "min_age": 18,
+    "max_age": 75,
+    "sites": ["Synthetic Site North"],
+    "approved_claims": ["The study is testing an investigational treatment."],
+    "required_disclosures": ["This is a research study. Taking part is voluntary."],
+    "compensation_statement": null,
+    "contact_url": "https://example.org/synthetic-bp-study"
+  },
+  "approved_by": "reviewer.synthetic@example.org",
+  "approved_at": "2026-11-20T09:30:00+00:00",
+  "is_synthetic": true
+}
+```
+
+- `external_ref` is the study's id at the source, one study per id in a tenant. `source_ref` is
+  the source version of these facts.
+- A new `source_ref` adds the next snapshot version. A new version with `"recruitment_status":
+  "closed"` closes the study: no new drafts, and existing ones stay readable.
+- Importing the same file again changes nothing. A `source_ref` that was already imported with
+  different content, an older `source_ref`, or mixing synthetic and real snapshots is refused
+  (exit code 2) and nothing is written.
+- Synthetic studies need `"is_synthetic": true` and a title starting with `[SYNTHETIC]`. Real
+  studies have neither.
+- Drafts, validation runs and jobs keep the snapshot they were created with.
+- A new study is visible to nobody until `scripts.grant_access` runs again for its members.
+
 ### Local object storage (SeaweedFS)
 
 `docker compose up -d --wait` also starts SeaweedFS, an S3-compatible server on
