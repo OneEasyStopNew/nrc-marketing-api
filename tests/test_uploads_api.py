@@ -751,6 +751,127 @@ async def test_a_replay_is_not_refused_by_the_pending_cap(
     assert replay.json()["asset_id"] == first.json()["asset_id"]
 
 
+def _stored_as_declared(monkeypatch: pytest.MonkeyPatch, content: bytes, **reported: Any) -> None:
+    # HEAD reports the declared file (or what `reported` overrides), so complete needs no PUT.
+    head_values: dict[str, Any] = {
+        "size_bytes": len(content),
+        "checksum_sha256": hashlib.sha256(content).hexdigest(),
+        "version_id": "v1",
+        "content_type": "image/png",
+        **reported,
+    }
+
+    async def head(self: ObjectStorage, key: str, *, version_id: str | None = None) -> ObjectHead:
+        return ObjectHead(**head_values)
+
+    monkeypatch.setattr(ObjectStorage, "head", head)
+
+
+async def test_completing_an_expired_upload_at_the_pending_cap_is_refused(
+    pending_cap_of_two: Settings,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (review, api#23): an upload whose link expired holds no slot, and completing it
+    # moved it to QUARANTINED without admission, taking the tenant over the cap.
+    content = _png()
+    old = await _created(client, auth, world, content)
+    await _set_upload(
+        connection, world, old["asset_id"], "upload_url_expires_at = now() - interval '1 second'"
+    )
+    await _created(client, auth, world)
+    third = await _created(client, auth, world)
+    _stored_as_declared(monkeypatch, content)
+
+    refused = await _complete(client, auth, world, old["asset_id"])
+
+    assert refused.status_code == 429, refused.text
+    assert refused.json()["code"] == "UPLOAD_LIMIT_REACHED"
+    assert refused.json()["retryable"] is True
+    row = await _upload_row(connection, world, old["asset_id"])
+    assert row.state == "PENDING_UPLOAD"
+    assert row.available_at is None
+    assert row.completed_at is None
+
+    # Once a slot frees, the same complete goes through.
+    await _set_upload(
+        connection, world, third["asset_id"], "state = 'REJECTED', reason_code = 'SIZE_MISMATCH'"
+    )
+    accepted = await _complete(client, auth, world, old["asset_id"])
+    assert accepted.status_code == 202, accepted.text
+    assert accepted.json()["status"] == "QUARANTINED"
+
+
+async def test_completing_with_a_valid_link_at_the_pending_cap_uses_its_own_slot(
+    pending_cap_of_two: Settings,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = _png()
+    upload = await _created(client, auth, world, content)
+    await _created(client, auth, world)
+    _stored_as_declared(monkeypatch, content)
+
+    response = await _complete(client, auth, world, upload["asset_id"])
+
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "QUARANTINED"
+
+
+async def test_a_repeated_complete_at_the_pending_cap_returns_the_current_status(
+    pending_cap_of_two: Settings,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = _png()
+    upload = await _created(client, auth, world, content)
+    await _created(client, auth, world)
+    _stored_as_declared(monkeypatch, content)
+    assert (await _complete(client, auth, world, upload["asset_id"])).status_code == 202
+    # Its link has long expired; only the state decides, and it already holds its slot.
+    await _set_upload(
+        connection, world, upload["asset_id"], "upload_url_expires_at = now() - interval '1 day'"
+    )
+
+    repeated = await _complete(client, auth, world, upload["asset_id"])
+
+    assert repeated.status_code == 202, repeated.text
+    assert repeated.json()["status"] == "QUARANTINED"
+
+
+async def test_a_mismatched_expired_upload_at_the_pending_cap_is_rejected_not_refused(
+    pending_cap_of_two: Settings,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A rejection takes no slot, so the cap doesn't hide why the file was refused.
+    content = _png()
+    old = await _created(client, auth, world, content)
+    await _set_upload(
+        connection, world, old["asset_id"], "upload_url_expires_at = now() - interval '1 second'"
+    )
+    await _created(client, auth, world)
+    await _created(client, auth, world)
+    _stored_as_declared(monkeypatch, content, size_bytes=len(content) + 1)
+
+    response = await _complete(client, auth, world, old["asset_id"])
+
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "REJECTED"
+    assert response.json()["reason"]["code"] == "SIZE_MISMATCH"
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

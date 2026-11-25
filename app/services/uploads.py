@@ -243,32 +243,55 @@ async def _check_scope(db: AsyncSession, ctx: TenantContext, body: UploadCreate)
 def _in_progress() -> ColumnElement[bool]:
     # Uploads that take one of the tenant's UPLOAD_MAX_PENDING_PER_TENANT slots. A pending upload
     # counts only while its URL is valid, so abandoned ones can't lock the tenant out before the
-    # cleanup job exists; a new URL for one is admitted like a new upload.
+    # cleanup job exists; reviving one (a new URL, or completing it) is admitted like a new
+    # upload. statement_timestamp(), not now(): now() is when the transaction began, which can be
+    # before a storage call and the wait for the admission lock.
     return or_(
         MediaUpload.state.in_((UploadState.QUARANTINED, UploadState.SCANNING)),
         and_(
             MediaUpload.state == UploadState.PENDING_UPLOAD,
-            MediaUpload.upload_url_expires_at > func.now(),
+            MediaUpload.upload_url_expires_at > func.statement_timestamp(),
         ),
     )
 
 
 async def _admit(
     db: AsyncSession, tenant_id: UUID, settings: Settings, *, reviving: UUID | None = None
-) -> None:
-    # Serialised per tenant until commit, so parallel requests can't both take the last slot.
+) -> bool:
+    """Admit a new upload, or one going back into progress, into the tenant's pending slots.
+
+    Every way into the counted set (create, a new URL, complete) comes through here. The lock
+    serialises them per tenant until commit, so parallel requests can't both take the last slot.
+    With `reviving`, that upload is re-read under the lock: False means it is no longer pending
+    (a concurrent call moved it on) and the caller reports its current status; while its URL is
+    still valid it already holds a slot and is admitted without counting.
+
+    Raises:
+        UploadLimitError: the tenant's uploads in progress fill the cap.
+    """
     await db.execute(
         select(func.pg_advisory_xact_lock(func.hashtextextended(f"uploads:{tenant_id}", 0)))
     )
+    if reviving is not None:
+        current = (
+            await db.execute(
+                select(MediaUpload.state, _in_progress().label("holds_slot")).where(
+                    MediaUpload.tenant_id == tenant_id, MediaUpload.id == reviving
+                )
+            )
+        ).one()
+        if current.state is not UploadState.PENDING_UPLOAD:
+            return False
+        if current.holds_slot:
+            return True
     query = (
         select(func.count())
         .select_from(MediaUpload)
         .where(MediaUpload.tenant_id == tenant_id, _in_progress())
     )
-    if reviving is not None:
-        query = query.where(MediaUpload.id != reviving)
     if (await db.scalar(query) or 0) >= settings.upload_max_pending_per_tenant:
         raise UploadLimitError()
+    return True
 
 
 async def _presign(
@@ -296,9 +319,10 @@ async def _fresh_target(
     UploadLimitError when the old URL had expired (the upload held no slot) and the tenant's
     uploads in progress fill the cap.
     """
-    expires_at = upload.upload_url_expires_at
-    if expires_at is None or expires_at <= datetime.now(UTC):
-        await _admit(db, upload.tenant_id, settings, reviving=upload.id)
+    if not await _admit(db, upload.tenant_id, settings, reviving=upload.id):
+        await db.commit()
+        await db.refresh(upload)
+        return None
     target = await _presign(storage, upload, settings)
     stored = await db.scalar(
         update(MediaUpload)
@@ -398,15 +422,22 @@ async def reissue_upload_url(
 
 
 async def complete_upload(
-    db: AsyncSession, ctx: TenantContext, asset_id: UUID, storage: ObjectStorage
+    db: AsyncSession,
+    ctx: TenantContext,
+    asset_id: UUID,
+    storage: ObjectStorage,
+    settings: Settings,
 ) -> UploadRead:
     """Check the stored file against the declaration and queue it for inspection.
 
     Idempotent: a repeated or concurrent call returns the current status, and only one call
-    moves the upload to QUARANTINED, so it is inspected once.
+    moves the upload to QUARANTINED, so it is inspected once. Going to QUARANTINED takes a
+    pending slot when the upload's URL had expired, like a new upload; a rejection takes none.
 
     Raises:
         UploadNotReceivedError: the file is not in storage yet (retryable).
+        UploadLimitError: the URL had expired and the tenant's uploads in progress fill the cap
+            (retryable).
         DependencyUnavailableError: storage could not be reached.
     """
     upload = await _load(db, ctx, asset_id)
@@ -428,6 +459,10 @@ async def complete_upload(
         values = {"state": UploadState.REJECTED, **reason_columns("CHECKSUM_MISMATCH")}
     else:
         values = {"state": UploadState.QUARANTINED, "available_at": func.now()}
+        if not await _admit(db, ctx.tenant_id, settings, reviving=upload.id):
+            await db.commit()
+            await db.refresh(upload)
+            return _to_read(upload, datetime.now(UTC))
     moved = await db.scalar(
         update(MediaUpload)
         .where(
