@@ -10,6 +10,7 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any
+from unittest.mock import patch
 
 import boto3
 import pytest
@@ -352,16 +353,6 @@ async def test_bedrock_error_codes_map_to_typed_provider_errors(
     assert caught.value.__cause__ is None
 
 
-class _FailingClient:
-    # Stands in for a client whose call raises a botocore error (a Stubber cannot).
-
-    def __init__(self, error: Exception) -> None:
-        self._error = error
-
-    def invoke_model(self, **kwargs: object) -> object:
-        raise self._error
-
-
 @pytest.mark.parametrize(
     "error",
     [
@@ -372,9 +363,14 @@ class _FailingClient:
     ids=["read-timeout", "connect-timeout", "endpoint-connection"],
 )
 async def test_timeouts_and_connection_failures_are_unavailable(error: Exception) -> None:
-    provider = BedrockEmbeddingProvider(model_id=TITAN_V2_MODEL_ID, client=_FailingClient(error))  # type: ignore[arg-type]
+    # A real client whose call raises the botocore error (a Stubber can't raise these).
+    client = boto3.Session().client("bedrock-runtime", region_name="us-east-1")
+    provider = BedrockEmbeddingProvider(model_id=TITAN_V2_MODEL_ID, client=client)
 
-    with pytest.raises(ProviderUnavailableError, match="could not be reached") as caught:
+    with (
+        patch.object(client, "invoke_model", side_effect=error),
+        pytest.raises(ProviderUnavailableError, match="could not be reached") as caught,
+    ):
         await provider.embed(["a"], DOCUMENT)
 
     assert caught.value.retryable
