@@ -42,6 +42,19 @@ def test_operator_limits_have_an_upper_bound(field: str, too_high: object) -> No
         _settings(**{field: too_high})
 
 
+def test_policy_context_timeout_must_be_below_the_db_timeout() -> None:
+    # Otherwise asyncpg's own timeout fires first and fails the request instead of NEEDS_REVIEW.
+    assert _settings(policy_context_timeout_seconds=9, db_timeout_seconds=10)
+    with pytest.raises(ValidationError, match="must be below DB_TIMEOUT_SECONDS"):
+        _settings(policy_context_timeout_seconds=10, db_timeout_seconds=10)
+
+
+def test_policy_context_timeout_is_at_least_a_millisecond() -> None:
+    # statement_timeout is whole milliseconds, and 0 would mean no limit at all.
+    with pytest.raises(ValidationError, match="policy_context_timeout_seconds"):
+        _settings(policy_context_timeout_seconds=0.0004)
+
+
 def test_cancel_lock_timeout_never_rounds_to_postgres_no_timeout() -> None:
     # The value becomes SET LOCAL lock_timeout in whole milliseconds, and 0 ms there means wait
     # forever: anything that rounds to 0 is refused.

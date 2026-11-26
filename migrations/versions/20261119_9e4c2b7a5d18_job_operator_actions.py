@@ -8,7 +8,7 @@ writes these rows, so the API must not be able to forge audit rows (the repo's u
 "SELECT, INSERT for immutable tables" grant would allow it).
 
 Revision ID: 9e4c2b7a5d18
-Revises: deb7a7225553
+Revises: a1a439290791
 Create Date: 2026-11-19 20:00:00.000000
 """
 
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "9e4c2b7a5d18"
-down_revision: str | None = "deb7a7225553"
+down_revision: str | None = "a1a439290791"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

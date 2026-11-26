@@ -13,6 +13,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.models import PolicyBundle
+from app.models.enums import BundleLifecycleState
 from scripts.seed_demo import demo_policy_rules
 from tests.conftest import AuthHeaders, SeededTenant, World
 
@@ -268,6 +269,7 @@ async def test_a_new_policy_version_requires_validating_again(
                 is_synthetic=True,
                 approved_by="synthetic-fixture",
                 approved_at=datetime(2026, 11, 2, tzinfo=UTC),
+                lifecycle_state=BundleLifecycleState.ACTIVE,
             )
         )
 

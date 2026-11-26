@@ -19,6 +19,12 @@ class Language(StrEnum):
     EN = "en"
 
 
+class PolicyLanguage(StrEnum):
+    # Policy text may be Spanish before the public Language enum accepts it (F33).
+    EN = "en"
+    ES = "es"
+
+
 class Channel(StrEnum):
     FACEBOOK = "facebook"
 
@@ -53,6 +59,121 @@ class Outcome(StrEnum):
     PASS = "PASS"  # noqa: S105  validation outcome, not a credential
     FAIL = "FAIL"
     NEEDS_REVIEW = "NEEDS_REVIEW"
+
+
+class Gate(StrEnum):
+    COMPLETENESS = "completeness"
+    STUDY_FACTS = "study_facts"
+    POLICY = "policy"
+    MEDIA = "media"
+
+
+class Severity(StrEnum):
+    CRITICAL = "critical"
+    MAJOR = "major"
+    MINOR = "minor"
+
+
+class BundleLifecycleState(StrEnum):
+    """Where a policy bundle is in its NRC-4 lifecycle. Only ACTIVE bundles validate content."""
+
+    DRAFT = "DRAFT"
+    REVIEW = "REVIEW"
+    APPROVED = "APPROVED"
+    BUILDING = "BUILDING"
+    READY = "READY"
+    ACTIVE = "ACTIVE"
+    REJECTED = "REJECTED"
+    RETIRED = "RETIRED"
+
+
+class PolicyNodeType(StrEnum):
+    RULE = "RULE"
+    CLAUSE = "CLAUSE"
+    DISCLOSURE = "DISCLOSURE"
+    EXCEPTION = "EXCEPTION"
+    INTERPRETATION = "INTERPRETATION"
+    EXAMPLE = "EXAMPLE"
+
+
+class PolicyEdgeType(StrEnum):
+    SUPPORTED_BY = "supported_by"
+    REQUIRES_DISCLOSURE = "requires_disclosure"
+    EXCEPT_WHEN = "except_when"
+    SUPERSEDES = "supersedes"
+    APPLIES_TO = "applies_to"
+
+
+# Policy context retrieval (NRC-5): stored in manifests and shown by the evidence API.
+
+
+class RetrievalMode(StrEnum):
+    # No statements: rule selection and the graph walk only.
+    GRAPH_ONLY = "graph_only"
+    # Statements searched with full-text only: no embedder (e.g. inside an API request, where
+    # provider calls aren't allowed).
+    LEXICAL_ONLY = "lexical_only"
+    # Full-text and vector search, fused.
+    FULL = "full"
+
+
+class Applicability(StrEnum):
+    TRUE = "true"
+    FALSE = "false"
+    # A condition restricts a dimension the request doesn't know (e.g. no audience yet).
+    UNRESOLVED = "unresolved"
+
+
+class MissingContextCode(StrEnum):
+    """Why a manifest is incomplete. A caller must never treat any of these as a PASS."""
+
+    APPLICABILITY_UNRESOLVED = "APPLICABILITY_UNRESOLVED"
+    TRAVERSAL_TRUNCATED = "TRAVERSAL_TRUNCATED"
+    CONFLICT = "CONFLICT"
+    SOURCE_MISSING = "SOURCE_MISSING"
+    # Statements were searched with full-text only (no embedder).
+    SEMANTIC_SEARCH_SKIPPED = "SEMANTIC_SEARCH_SKIPPED"
+    # More statements than POLICY_RETRIEVAL_MAX_STATEMENTS; only the first ones were searched.
+    STATEMENTS_TRUNCATED = "STATEMENTS_TRUNCATED"
+
+
+class PolicyIndexReason(StrEnum):
+    """Why an index build was refused: details.reason of POLICY_INDEX_ERROR (owner-run build)."""
+
+    NO_APPROVED_NODES = "NO_APPROVED_NODES"
+    INDEX_CONTENT_CHANGED = "INDEX_CONTENT_CHANGED"
+
+
+class PolicyContextReason(StrEnum):
+    """Why no policy context was built. Sent as details.reason of POLICY_CONTEXT_UNAVAILABLE (409)
+    and in brackets in a validation run's coverage gap; the frontend branches on these values."""
+
+    # Raised by the context provider and the rules endpoint.
+    BUNDLE_NOT_FOUND = "BUNDLE_NOT_FOUND"
+    BUNDLE_NOT_USABLE = "BUNDLE_NOT_USABLE"
+    SNAPSHOT_NOT_FOUND = "SNAPSHOT_NOT_FOUND"
+    GRAPH_MISSING = "GRAPH_MISSING"
+    INDEX_NOT_READY = "INDEX_NOT_READY"
+    INDEX_STALE = "INDEX_STALE"
+    MANIFEST_STORE_FAILED = "MANIFEST_STORE_FAILED"
+    # Decided by the validation before or around the build.
+    LANGUAGE_NOT_SUPPORTED = "LANGUAGE_NOT_SUPPORTED"
+    STATEMENT_TOO_LONG = "STATEMENT_TOO_LONG"
+    RETRIEVAL_TIMEOUT = "RETRIEVAL_TIMEOUT"
+    RETRIEVAL_ERROR = "RETRIEVAL_ERROR"
+
+
+class CheckType(StrEnum):
+    """What makes the final decision for a rule: code alone, or the model after a phrase check."""
+
+    DETERMINISTIC = "deterministic"
+    SEMANTIC = "semantic"
+
+
+class IndexBuildState(StrEnum):
+    BUILDING = "BUILDING"
+    READY = "READY"
+    FAILED = "FAILED"
 
 
 class JobStage(StrEnum):

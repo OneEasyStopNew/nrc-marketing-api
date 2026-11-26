@@ -19,6 +19,12 @@ class AppError(Exception):
         super().__init__(self.message)
 
 
+class TenantNotBoundError(AppError):
+    # A programming error: tenant-scoped code ran on a session without bind_tenant. A 500 with the
+    # generic message; never served to a client as anything more specific.
+    pass
+
+
 class AuthenticationError(AppError):
     code = "UNAUTHENTICATED"
     default_message = "Authentication is required."
@@ -32,6 +38,13 @@ class PermissionDeniedError(AppError):
 class NotFoundError(AppError):
     code = "NOT_FOUND"
     default_message = "Resource not found."
+
+
+class ContextNotAvailableError(NotFoundError):
+    # The run exists but stored no policy context (older runs, or retrieval was unavailable and
+    # the run recorded a coverage gap). A separate code so the UI can tell it from NOT_FOUND.
+    code = "CONTEXT_NOT_AVAILABLE"
+    default_message = "No policy context was stored for this validation run."
 
 
 class ConflictError(AppError):
@@ -69,6 +82,20 @@ class ValidationNotPassedError(ConflictError):
 class NoActivePolicyError(ConflictError):
     code = "NO_ACTIVE_POLICY"
     default_message = "This tenant has no active policy to validate against."
+
+
+class PolicyContextUnavailableError(ConflictError):
+    # details.reason is a PolicyContextReason (app/models/enums.py). Callers record it as a
+    # coverage gap; it must never turn into a PASS.
+    code = "POLICY_CONTEXT_UNAVAILABLE"
+    default_message = "The policy context for this check could not be built."
+
+
+class PolicyIndexError(ConflictError):
+    # details.reason is a PolicyIndexReason (app/models/enums.py). Raised by the owner-run index
+    # build only; the API never builds an index.
+    code = "POLICY_INDEX_ERROR"
+    default_message = "The policy index could not be built."
 
 
 class ExportNotReadyError(ConflictError):
