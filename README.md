@@ -254,6 +254,71 @@ Send it as `Authorization: Bearer <token>`. `DEMO_STUBS` and `DEV_JWKS_FILE` wor
 `APP_ENV=local` or `demo`; any other value refuses to start. The private key never leaves the
 machine that ran `init`.
 
+### Client uploads and the media worker (NRC-3)
+
+Uploads go straight from the browser to the bucket through a short-lived presigned PUT; the API
+never proxies file bytes. `POST /assets/{id}/complete` puts an upload in quarantine, and the media
+worker inspects it (size and SHA-256, the decoded image type and pixel cap, then a malware scan)
+before it becomes `READY` and an asset. In a third terminal:
+
+```powershell
+uv run python -m app.workers.media
+```
+
+Locally set `MALWARE_SCAN_MODE=simulator` (as in the example environment file): every verdict is
+then labelled SIMULATED, in the API (`scan.simulated: true`) and in the logs. The default, `live`,
+refuses to start because no real scanner is chosen yet, and `simulator` is refused outside local
+and demo. The flow for the frontend and the examples are in `contracts/examples/uploads.md`.
+
+### Policy source extraction (NRC-4)
+
+A policy source is registered from a `READY` policy upload. The policy worker then reads the file
+from `POLICY_SOURCE_BUCKET` (it refuses to start without it, and never reads the media bucket) and
+stores its clauses with page, section and checksum, or marks the source `FAILED` with a code
+(`SOURCE_UNREADABLE`, `SOURCE_EMPTY`, `SOURCE_TOO_MANY_PAGES`, `SOURCE_TOO_MANY_CLAUSES`, ...).
+It connects as `marketing_worker` (`WORKER_DATABASE_URL`) and needs `s3:GetObject` and
+`s3:GetObjectVersion` on the policy bucket:
+
+```powershell
+uv run python -m app.workers.policy
+```
+
+### Policy bundles: review and activation (NRC-4)
+
+A bundle moves `DRAFT` → `REVIEW` → `APPROVED` → `BUILDING` → `READY` → `ACTIVE` → `RETIRED`.
+`policy_admin` edits drafts, reviews items and submits; `policy_approver` approves or rejects,
+builds, activates, retires and rolls back. One person may hold both roles (`grant_access
+--member <sub>=policy_admin --member <sub>=policy_approver`). The same policy worker builds the
+search index after approval; with `EMBEDDING_MODE=off` the bundle is searchable by full text only,
+and the audit trail says so. The API calls, If-Match rules and errors are in
+`contracts/examples/nrc4.md`.
+
+To walk a reviewed sample bundle (synthetic, English only) through to `ACTIVE`:
+
+```powershell
+# 1. As policy_admin: POST /v1/marketing/policy-bundles {"name": "Sample", "source_ref": "synthetic", "is_synthetic": true}
+# 2. Import the sample graph into that DRAFT bundle (runs as the database owner):
+uv run python -m scripts.import_policy_graph --tenant-id <tenant> --bundle-id <bundle> `
+    --file scripts/data/synthetic_sample_bundle.json
+# 3. GET .../policy-bundles/<bundle>/checks must return {"issues": []}
+# 4. POST .../transitions {"command": "submit"}, then as policy_approver {"command": "approve"}
+# 5. Run the policy worker until GET .../policy-bundles/<bundle> shows READY
+# 6. As policy_approver: POST .../transitions {"command": "activate", "reason": "..."}
+```
+
+Sign-off before activating a real (non-synthetic) bundle:
+
+- [ ] `GET .../checks` is empty, and every rule in `GET .../rule-records` cites a clause or an
+      approved interpretation that says what the rule says.
+- [ ] Each exact wording appears word for word in its clause (`GET /policy-sources/<id>/clauses`).
+- [ ] Prohibited phrases and exceptions match the source; nothing is `LLM_SIMULATED`.
+- [ ] `is_synthetic` is `false` on the bundle and its sources.
+- [ ] The approver is not the person who edited the bundle (until the four-eyes rule is decided,
+      check this by hand in `GET .../audit`).
+- [ ] The activation reason names the source document and its version.
+- [ ] After activation, `GET .../audit` shows the actor, reason and time, and the previous bundle
+      is `RETIRED`.
+
 ## Staging prerequisites
 
 - A Postgres login role `marketing_app` that does not own the tables and has no `BYPASSRLS`. The API's
@@ -269,6 +334,13 @@ machine that ran `init`.
 - `APP_ENV=staging` (or `production`), `ENABLE_DOCS=false`, `CORS_ORIGINS` set to the frontend origin, and `FORWARDED_ALLOW_IPS` set to the
   load balancer's subnet range.
 - Image: `docker build -t nrc-marketing .`. Run `alembic upgrade head` as a separate release step.
+- Uploads (NRC-3): bucket CORS allowing `PUT` from the frontend origin with the headers that
+  `POST /assets/uploads` returns; the API's role signs the uploads, so it needs `s3:PutObject`,
+  `s3:PutObjectTagging` and `s3:GetObject` (for the completion check) on `uploads/`, plus
+  `s3:ListBucket` limited to that prefix (without it S3 answers a not-yet-uploaded file with 403,
+  and complete returns 503 instead of the retryable 409); the media
+  worker's role needs `s3:GetObject` and `s3:GetObjectVersion` there; a real malware scanner (until then the media worker refuses
+  to start there, so uploads stay `QUARANTINED`).
 
 ## Not done yet
 

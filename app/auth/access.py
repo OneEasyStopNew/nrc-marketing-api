@@ -17,6 +17,7 @@ class Role(StrEnum):
     CREATOR = "creator"
     REVIEWER = "reviewer"
     POLICY_ADMIN = "policy_admin"
+    POLICY_APPROVER = "policy_approver"
     PUBLISHER = "publisher"
     ADMIN = "admin"
 
@@ -28,6 +29,8 @@ class Capability(StrEnum):
     GENERATION_RUN = "generation:run"
     APPROVAL_DECIDE = "approval:decide"
     POLICY_MANAGE = "policy:manage"
+    POLICY_APPROVE = "policy:approve"
+    POLICY_ACTIVATE = "policy:activate"
     PUBLICATION_MANAGE = "publication:manage"
     MEMBERSHIP_MANAGE = "membership:manage"
 
@@ -46,7 +49,13 @@ ROLE_CAPABILITIES: Final[Mapping[Role, frozenset[Capability]]] = MappingProxyTyp
         Role.REVIEWER: frozenset(
             {Capability.CREATIVE_READ, Capability.VALIDATION_RUN, Capability.APPROVAL_DECIDE}
         ),
-        Role.POLICY_ADMIN: frozenset({Capability.CREATIVE_READ, Capability.POLICY_MANAGE}),
+        # Policy bundle D-16: the policy owner (policy_approver) approves rule meaning and may not
+        # activate; the policy administrator activates, rolls back and retires an approved bundle
+        # and may not approve. Role names and whether one person may hold both are open (D-01).
+        Role.POLICY_ADMIN: frozenset(
+            {Capability.CREATIVE_READ, Capability.POLICY_MANAGE, Capability.POLICY_ACTIVATE}
+        ),
+        Role.POLICY_APPROVER: frozenset({Capability.CREATIVE_READ, Capability.POLICY_APPROVE}),
         Role.PUBLISHER: frozenset({Capability.CREATIVE_READ, Capability.PUBLICATION_MANAGE}),
         Role.ADMIN: frozenset({Capability.CREATIVE_READ, Capability.MEMBERSHIP_MANAGE}),
     }

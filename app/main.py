@@ -11,7 +11,18 @@ from fastapi.routing import APIRoute
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from app.api.errors import COMMON_ERROR_RESPONSES, register_exception_handlers
-from app.api.routes import assets, creatives, demo_files, health, jobs, me, policies, workflows
+from app.api.routes import (
+    assets,
+    creatives,
+    demo_files,
+    health,
+    jobs,
+    me,
+    policies,
+    policy_admin,
+    policy_uploads,
+    workflows,
+)
 from app.auth.tokens import JwksClient, LocalJwks, SigningKeyProvider
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -48,6 +59,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.signing_keys = signing_keys
             # Without a bucket the asset endpoint answers 503; nothing else needs storage.
             app.state.storage = ObjectStorage(settings) if settings.aws_s3_bucket else None
+            app.state.policy_source_storage = (
+                ObjectStorage(settings, bucket=settings.policy_source_bucket)
+                if settings.policy_source_bucket
+                else None
+            )
             yield
     finally:
         await engine.dispose()
@@ -78,6 +94,8 @@ def create_app() -> FastAPI:
         workflows.router,
         jobs.router,
         assets.router,
+        policy_uploads.router,
+        policy_admin.router,
     ):
         app.include_router(router, prefix=API_PREFIX, responses=COMMON_ERROR_RESPONSES)
     app.include_router(health.router)

@@ -1,6 +1,5 @@
 # Creative drafts.
 
-import re
 from typing import Annotated
 from uuid import UUID
 
@@ -14,7 +13,8 @@ from app.api.deps import (
     IdempotencyKey,
     IfMatch,
 )
-from app.core.errors import FeatureNotAvailableError, VersionRequiredError
+from app.api.etags import etag, expected_version
+from app.core.errors import FeatureNotAvailableError
 from app.schemas.assets import ExportManifest
 from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeCreate, CreativeRead, CreativeUpdate, CreativeVersionPage
@@ -22,21 +22,6 @@ from app.schemas.policies import GenerationEligibility
 from app.services import creatives, eligibility
 
 router = APIRouter(prefix="/creatives", tags=["creatives"])
-
-_IF_MATCH = re.compile(r'"([1-9][0-9]{0,8})"')
-
-
-def _etag(version: int) -> str:
-    return f'"{version}"'
-
-
-def _expected_version(if_match: str | None) -> int:
-    if if_match is None:
-        raise VersionRequiredError()
-    match = _IF_MATCH.fullmatch(if_match.strip())
-    if match is None:
-        raise VersionRequiredError('If-Match must be one quoted version number, e.g. "3".')
-    return int(match.group(1))
 
 
 @router.post(
@@ -58,7 +43,7 @@ async def create_creative(
     response: Response,
 ) -> CreativeRead:
     creative, replayed = await creatives.create_creative(db, ctx, body, idempotency_key)
-    response.headers["ETag"] = _etag(creative.version)
+    response.headers["ETag"] = etag(creative.version)
     response.headers["Location"] = f"/v1/marketing/creatives/{creative.id}"
     if replayed:
         response.headers["Idempotent-Replayed"] = "true"
@@ -74,7 +59,7 @@ async def get_creative(
     creative_id: UUID, ctx: CreativeReader, db: DbSession, response: Response
 ) -> CreativeRead:
     creative = await creatives.get_creative(db, ctx, creative_id)
-    response.headers["ETag"] = _etag(creative.version)
+    response.headers["ETag"] = etag(creative.version)
     return creative
 
 
@@ -97,9 +82,9 @@ async def update_creative(
     response: Response,
     if_match: IfMatch = None,
 ) -> CreativeRead:
-    expected = _expected_version(if_match)
+    expected = expected_version(if_match)
     creative = await creatives.update_creative(db, ctx, creative_id, expected, body)
-    response.headers["ETag"] = _etag(creative.version)
+    response.headers["ETag"] = etag(creative.version)
     return creative
 
 

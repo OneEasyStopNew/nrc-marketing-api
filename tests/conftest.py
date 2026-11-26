@@ -19,19 +19,22 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+import boto3
 import httpx
 import jwt
 import pytest
 from alembic import command
 from alembic.config import Config
 from asgi_lifespan import LifespanManager
+from botocore.config import Config as BotoConfig
+from botocore.exceptions import ClientError
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from jwt.algorithms import RSAAlgorithm
 from PIL import Image
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import Connection, Row, event, func, insert, select, text
+from sqlalchemy import Connection, Row, event, func, insert, select, text, update
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncSession,
@@ -51,6 +54,7 @@ from app.models import (
     Asset,
     CreditReservation,
     Job,
+    MediaUpload,
     Membership,
     MembershipStudy,
     PolicyBundle,
@@ -58,7 +62,15 @@ from app.models import (
     StudySnapshot,
     Tenant,
 )
-from app.models.enums import BundleLifecycleState, CheckType, Language, RecruitmentStatus
+from app.models.enums import (
+    BundleLifecycleState,
+    CheckType,
+    IdentifiablePerson,
+    Language,
+    RecruitmentStatus,
+    UploadPurpose,
+    UploadState,
+)
 from app.models.jobs import ReservationState
 from app.services.providers.base import (
     FetchedImage,
@@ -84,6 +96,8 @@ KID = "test-key"
 # Local SeaweedFS from docker compose, and the versioned test bucket in it.
 ENDPOINT = "http://127.0.0.1:8333"
 BUCKET = "nrc-test-media"
+# Policy source files (NRC-4) live in their own bucket, never the media one.
+POLICY_BUCKET = "nrc-test-policy"
 APP_ROLE = "marketing_app"
 WORKER_ROLE = "marketing_worker"
 
@@ -350,6 +364,19 @@ async def as_tenant_owner(conn: AsyncConnection, tenant_id: UUID) -> AsyncIterat
         await conn.execute(text(f"SET LOCAL ROLE {APP_ROLE}"))
 
 
+async def owner_sql(
+    conn: AsyncConnection,
+    tenant_id: UUID,
+    statement: str,
+    params: dict[str, Any] | None = None,
+) -> list[Row[Any]]:
+    # One raw statement as the owner with the tenant bound (reads that RLS or grants would hide
+    # from the role under test, and setup or time-travel UPDATEs).
+    async with as_tenant_owner(conn, tenant_id):
+        result = await conn.execute(text(statement), params or {})
+        return list(result.all()) if result.returns_rows else []
+
+
 @asynccontextmanager
 async def owner_session(conn: AsyncConnection, tenant_id: UUID) -> AsyncIterator[AsyncSession]:
     # What owner scripts (seed, policy graph import) do: the owner role, the tenant bound, one
@@ -372,7 +399,17 @@ async def add_policy_bundle(
     rules: list[dict[str, object]] | None = None,
 ) -> UUID:
     # A synthetic bundle without a graph (no JSONB rules unless given), written as the owner by
-    # the caller.
+    # the caller. A tenant has at most one ACTIVE bundle, so a new ACTIVE one retires the
+    # current one first (as activation does).
+    if state is BundleLifecycleState.ACTIVE:
+        await conn.execute(
+            update(PolicyBundle)
+            .where(
+                PolicyBundle.tenant_id == tenant_id,
+                PolicyBundle.lifecycle_state == BundleLifecycleState.ACTIVE,
+            )
+            .values(lifecycle_state=BundleLifecycleState.RETIRED)
+        )
     bundle_id = uuid4()
     await conn.execute(
         insert(PolicyBundle).values(
@@ -389,6 +426,83 @@ async def add_policy_bundle(
         )
     )
     return bundle_id
+
+
+def make_pdf(pages: list[list[str | None]]) -> bytes:
+    """A small PDF whose pages hold the given lines; None is an empty line (a paragraph gap)."""
+    page_ids = [4 + 2 * index for index in range(len(pages))]
+    objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [{}] /Count {} >>".format(
+            " ".join(f"{page_id} 0 R" for page_id in page_ids), len(pages)
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    for page_id, lines in zip(page_ids, pages, strict=True):
+        operators = ["BT", "/F1 12 Tf", "72 720 Td", "14 TL"]
+        for line in lines:
+            if line is None:
+                operators.append("T*")
+            else:
+                escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+                operators.append(f"({escaped}) '")
+        operators.append("ET")
+        stream = "\n".join(operators)
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {page_id + 1} 0 R"
+            " /Resources << /Font << /F1 3 0 R >> >> >>"
+        )
+        objects.append(f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream")
+    out = b"%PDF-1.4\n"
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n".encode("latin-1")
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += "".join(f"{offset:010d} 00000 n \n" for offset in offsets).encode()
+    out += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return out
+
+
+async def add_policy_upload(
+    conn: AsyncConnection,
+    tenant_id: UUID,
+    *,
+    state: UploadState = UploadState.READY,
+    purpose: UploadPurpose = UploadPurpose.POLICY_SOURCE,
+    mime_type: str = "text/markdown",
+    checksum: str | None = None,
+    bucket: str = "nrc-test-policy",
+    study_id: UUID | None = None,
+) -> UUID:
+    # A synthetic policy-source upload row as the media worker leaves it, written as the owner.
+    # The caller switches the connection back to a login role afterwards.
+    upload_id = uuid4()
+    async with as_tenant_owner(conn, tenant_id):
+        await conn.execute(
+            insert(MediaUpload).values(
+                id=upload_id,
+                tenant_id=tenant_id,
+                purpose=purpose,
+                state=state,
+                name="[SYNTHETIC] policy source",
+                declared_mime_type=mime_type,
+                declared_size_bytes=100,
+                declared_checksum_sha256=checksum or upload_id.hex * 2,
+                mime_type=mime_type if state is UploadState.READY else None,
+                bucket=bucket,
+                s3_key=f"policy/{upload_id}",
+                s3_version_id="v1",
+                upload_url_expires_at=datetime(2026, 11, 20, tzinfo=UTC),
+                identifiable_person=IdentifiablePerson.UNKNOWN,
+                study_id=study_id,
+                created_by="policy-admin-a",
+            )
+        )
+    return upload_id
 
 
 @pytest.fixture
@@ -767,3 +881,31 @@ needs_seaweedfs = pytest.mark.skipif(
     "CI" not in os.environ and not _seaweedfs_reachable(),
     reason=f"SeaweedFS is not reachable at {ENDPOINT}",
 )
+
+
+@pytest.fixture(scope="session")
+def policy_bucket() -> str:
+    # The versioned policy-source test bucket, created on first use. Tests that store objects
+    # in it are skipped (needs_seaweedfs) when SeaweedFS is down, so then nothing is created.
+    if _seaweedfs_reachable():
+        client = boto3.client(
+            "s3",
+            endpoint_url=ENDPOINT,
+            region_name="us-east-1",
+            # Local-only dummy values that open the SeaweedFS container (docker/seaweedfs-s3.json).
+            aws_access_key_id="localdev",
+            aws_secret_access_key="localdev-password",  # noqa: S106
+            config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
+        )
+        try:
+            client.create_bucket(Bucket=POLICY_BUCKET)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") not in {
+                "BucketAlreadyOwnedByYou",
+                "BucketAlreadyExists",
+            }:
+                raise
+        client.put_bucket_versioning(
+            Bucket=POLICY_BUCKET, VersioningConfiguration={"Status": "Enabled"}
+        )
+    return POLICY_BUCKET

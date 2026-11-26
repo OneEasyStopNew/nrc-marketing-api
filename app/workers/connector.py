@@ -15,10 +15,6 @@ repeated step is harmless (guarded transitions, the stored provider idempotency 
 
 import asyncio
 import logging
-import os
-import secrets
-import signal
-import socket
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -28,18 +24,12 @@ from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 from uuid import UUID
 
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 from sqlalchemy import ARRAY, Row, Text, Update, bindparam, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
 
-from app.core.config import (
-    LEASE_MAX_SECONDS,
-    LEASE_MIN_SECONDS,
-    Settings,
-    WorkerDatabaseSettings,
-    get_settings,
-)
+from app.core.config import Settings, get_settings
 from app.core.errors import ValidationJobError
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
@@ -90,6 +80,14 @@ from app.services.providers.text_judge import (
 )
 from app.services.storage import ObjectStorage
 from app.services.validations import INPUT_BY_JOB_KIND, VALIDATION_RUN_EVENT
+from app.workers.common import (
+    DEFAULT_OWNER,
+    WorkerConfigError,
+    backoff_seconds,
+    lease_seconds,
+    stop_on_signals,
+    worker_database_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,21 +121,6 @@ _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type"
     " FROM lease_outbox_events(:owner, 1, :lease, :event_types)"
 ).bindparams(bindparam("event_types", type_=ARRAY(Text)))
-_jitter = secrets.SystemRandom()
-
-
-def process_owner() -> str:
-    # Hostname and PID can repeat across containers (both PID 1), so add a random suffix.
-    return f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
-
-
-# Computed once, so every lease this process takes carries the same owner.
-DEFAULT_OWNER: Final = process_owner()
-
-
-class WorkerConfigError(Exception):
-    # The worker cannot start with this configuration. Messages name settings, never values.
-    pass
 
 
 @runtime_checkable
@@ -248,13 +231,6 @@ class JobHandler(Protocol):
     """
 
     async def handle(self, db: AsyncSession, job: Job, step: Step) -> float | None: ...
-
-
-def backoff_seconds(attempt: int, settings: Settings) -> float:
-    # Exponential from WORKER_BACKOFF_BASE_SECONDS up to WORKER_BACKOFF_MAX_SECONDS, with jitter
-    # between 50% and 100% so many jobs don't retry in lockstep.
-    delay = settings.worker_backoff_base_seconds * 2.0 ** max(attempt - 1, 0)
-    return min(settings.worker_backoff_max_seconds, delay) * _jitter.uniform(0.5, 1.0)
 
 
 class ImageGenerationHandler:
@@ -728,11 +704,6 @@ async def run_once(
     return leased
 
 
-def lease_seconds(settings: Settings) -> int:
-    # Settings validate this range; the clamp also covers copies made without validation.
-    return min(max(settings.worker_lease_seconds, LEASE_MIN_SECONDS), LEASE_MAX_SECONDS)
-
-
 async def _process(run: _Run, event: Row[tuple[UUID, UUID, UUID, str]]) -> None:
     lock_key = func.hashtextextended(f"job:{event.job_id}", 0)
     # Session-level lock on its own connection, so it spans the handler's mid-step commits.
@@ -1133,14 +1104,6 @@ def load_provider_secrets(settings: Settings) -> Settings:
         raise WorkerConfigError(str(error)) from None
 
 
-def worker_database_url() -> SecretStr:
-    # The worker connects as marketing_worker, never as the API's role.
-    try:
-        return WorkerDatabaseSettings().worker_database_url
-    except ValidationError:
-        raise WorkerConfigError("WORKER_DATABASE_URL is missing or invalid.") from None
-
-
 async def run_forever(settings: Settings) -> None:
     database_url = worker_database_url()
     settings = await asyncio.to_thread(load_provider_secrets, settings)
@@ -1158,7 +1121,7 @@ async def _serve(
     engine = create_engine(settings, database_url)
     sessions = create_sessionmaker(engine)
     stop = asyncio.Event()
-    _stop_on_signals(stop)
+    stop_on_signals(stop)
     # Simulator mode may run without storage: completed jobs then park at the provider result.
     sink = StoredImageSink(ObjectStorage(settings), settings) if settings.aws_s3_bucket else None
     logger.info("connector worker started mode=%s", settings.generation_mode)
@@ -1180,17 +1143,6 @@ async def close_providers(providers: Mapping[str, ImageProvider]) -> None:
     for provider in providers.values():
         if isinstance(provider, _Closable):
             await provider.aclose()
-
-
-def _stop_on_signals(stop: asyncio.Event) -> None:
-    # Finish the current event, then exit.
-    loop = asyncio.get_running_loop()
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(signum, stop.set)
-        except NotImplementedError:
-            # Windows event loops have no add_signal_handler.
-            signal.signal(signum, lambda *_: loop.call_soon_threadsafe(stop.set))
 
 
 def main() -> None:

@@ -288,6 +288,11 @@ async def test_a_new_policy_version_requires_validating_again(
         "validation_run_id"
     ]
     async with as_owner(connection):
+        # One ACTIVE bundle per tenant: the new version replaces v1, as activation does.
+        await connection.execute(
+            text("UPDATE policy_bundles SET lifecycle_state = 'RETIRED' WHERE tenant_id = :t"),
+            {"t": world.a.tenant_id},
+        )
         await connection.execute(
             insert(PolicyBundle).values(
                 id=uuid4(),

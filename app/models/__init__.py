@@ -6,17 +6,20 @@ from app.models.creatives import Creative, CreativeVersion
 from app.models.idempotency import IdempotencyRecord
 from app.models.jobs import CreditReservation, Job, OutboxEvent, ProviderSpend
 from app.models.policies import PolicyBundle
+from app.models.policy_audit import PolicyAuditEvent
 from app.models.policy_graph import (
     PolicyEdge,
     PolicyIndexBuild,
     PolicyNode,
     PolicyNodeEmbedding,
     PolicyRuleRecord,
+    PolicyRuleWording,
     PolicySource,
     PolicySourceClause,
 )
 from app.models.studies import Study, StudySnapshot
 from app.models.tenancy import Membership, MembershipStudy, Tenant
+from app.models.uploads import MediaUpload
 from app.models.validations import ValidationRun
 
 __all__ = [
@@ -27,15 +30,18 @@ __all__ = [
     "CreditReservation",
     "IdempotencyRecord",
     "Job",
+    "MediaUpload",
     "Membership",
     "MembershipStudy",
     "OutboxEvent",
+    "PolicyAuditEvent",
     "PolicyBundle",
     "PolicyEdge",
     "PolicyIndexBuild",
     "PolicyNode",
     "PolicyNodeEmbedding",
     "PolicyRuleRecord",
+    "PolicyRuleWording",
     "PolicySource",
     "PolicySourceClause",
     "ProviderSpend",

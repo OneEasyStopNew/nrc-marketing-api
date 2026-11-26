@@ -96,6 +96,66 @@ class PolicyNodeType(StrEnum):
     EXAMPLE = "EXAMPLE"
 
 
+class ReviewState(StrEnum):
+    """Review decision on one node, edge or wording. APPROVED rows are the ones retrieval reads."""
+
+    PROPOSED = "PROPOSED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class ProposalOrigin(StrEnum):
+    """Who produced a graph row. LLM_SIMULATED is a labelled stand-in, never a real model."""
+
+    HUMAN = "HUMAN"
+    IMPORT = "IMPORT"
+    LLM_SIMULATED = "LLM_SIMULATED"
+    LLM = "LLM"
+
+
+class PolicyAuditAction(StrEnum):
+    CREATE = "CREATE"
+    EDIT = "EDIT"
+    SUBMIT = "SUBMIT"
+    REVIEW = "REVIEW"
+    APPROVE = "APPROVE"
+    REJECT = "REJECT"
+    RETURN_TO_DRAFT = "RETURN_TO_DRAFT"
+    BUILD_STARTED = "BUILD_STARTED"
+    BUILD_READY = "BUILD_READY"
+    BUILD_FAILED = "BUILD_FAILED"
+    ACTIVATE = "ACTIVATE"
+    ROLLBACK = "ROLLBACK"
+    RETIRE = "RETIRE"
+
+
+class SourceExtractionState(StrEnum):
+    """Where a policy source is in text extraction; one that arrives with clauses is EXTRACTED."""
+
+    PENDING = "PENDING"
+    EXTRACTING = "EXTRACTING"
+    EXTRACTED = "EXTRACTED"
+    FAILED = "FAILED"
+
+
+class WordingKind(StrEnum):
+    # Required wording quoted from a source: a regulatory or platform quotation, or wording that
+    # is the same for every study. Checked word for word against its source clause.
+    EXACT_WORDING = "EXACT_WORDING"
+    PROHIBITED_PHRASE = "PROHIBITED_PHRASE"
+    # Policy bundle v0.3 (decided 26 Nov, option A): the rule needs the study's own approved
+    # wording. The bundle holds only a pointer (StudyWordingSource), never the text or its
+    # approval; the study snapshot (NRC-2) supplies both and validation (NRC-7) checks them.
+    STUDY_APPROVED_WORDING = "STUDY_APPROVED_WORDING"
+
+
+class StudyWordingSource(StrEnum):
+    """Where a STUDY_APPROVED_WORDING points: the text of such a wording (v0.3 `source`)."""
+
+    REQUIRED_DISCLOSURES = "study_snapshot.required_disclosures"
+    APPROVED_PHRASES = "study_snapshot.approved_phrases"
+
+
 class PolicyEdgeType(StrEnum):
     SUPPORTED_BY = "supported_by"
     REQUIRES_DISCLOSURE = "requires_disclosure"
@@ -142,6 +202,30 @@ class PolicyIndexReason(StrEnum):
 
     NO_APPROVED_NODES = "NO_APPROVED_NODES"
     INDEX_CONTENT_CHANGED = "INDEX_CONTENT_CHANGED"
+
+
+class PolicyBuildFailure(StrEnum):
+    # Why the policy worker's last index build of a bundle failed (policy_bundles.last_error_code).
+    # The two index reasons keep PolicyIndexReason's values. Provider errors are grouped into
+    # unavailable (retried until the attempt cap) and failed; the worker logs the exact code.
+    BUILD_ABANDONED = "POLICY_BUILD_ABANDONED"
+    NO_APPROVED_NODES = PolicyIndexReason.NO_APPROVED_NODES.value
+    INDEX_CONTENT_CHANGED = PolicyIndexReason.INDEX_CONTENT_CHANGED.value
+    INDEX_REFUSED = "POLICY_INDEX_REFUSED"
+    EMBEDDING_UNAVAILABLE = "EMBEDDING_UNAVAILABLE"
+    EMBEDDING_FAILED = "EMBEDDING_FAILED"
+
+
+class ExtractionCode(StrEnum):
+    # policy_sources.extraction_error_code. The first four are permanent failures of the file
+    # itself, the rest are the worker's.
+    UNREADABLE = "SOURCE_UNREADABLE"
+    EMPTY = "SOURCE_EMPTY"
+    TOO_MANY_PAGES = "SOURCE_TOO_MANY_PAGES"
+    TOO_MANY_CLAUSES = "SOURCE_TOO_MANY_CLAUSES"
+    STORAGE_UNAVAILABLE = "SOURCE_STORAGE_UNAVAILABLE"
+    TIMEOUT = "SOURCE_EXTRACTION_TIMEOUT"
+    FAILED = "SOURCE_EXTRACTION_FAILED"
 
 
 class PolicyContextReason(StrEnum):
@@ -217,6 +301,33 @@ class JobStage(StrEnum):
     STORED = "stored"
 
 
+class UploadState(StrEnum):
+    """Where a client upload is. Only READY uploads become assets that later steps may use."""
+
+    # Upload URL issued; the client has not completed the upload yet.
+    PENDING_UPLOAD = "PENDING_UPLOAD"
+    # Upload completed and checked against what was declared; waiting for inspection.
+    QUARANTINED = "QUARANTINED"
+    SCANNING = "SCANNING"
+    READY = "READY"
+    REJECTED = "REJECTED"
+    # The URL was never used; set by the cleanup job.
+    EXPIRED = "EXPIRED"
+
+
+class UploadPurpose(StrEnum):
+    CREATIVE_MEDIA = "creative_media"
+    # A policy-source document (PDF or text) uploaded for NRC-4 ingestion; it has no study.
+    POLICY_SOURCE = "policy_source"
+
+
+class IdentifiablePerson(StrEnum):
+    # The uploader's declaration. It is not proof of consent; the authorization reference is.
+    YES = "yes"
+    NO = "no"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class FormatSpec:
     channel: Channel
@@ -239,3 +350,36 @@ def enum_column[E: StrEnum](enum_cls: type[E]) -> Enum:
         values_callable=lambda members: [member.value for member in members],
         validate_strings=True,
     )
+
+
+class CheckCode(StrEnum):
+    EMPTY_BUNDLE = "EMPTY_BUNDLE"
+    UNREVIEWED_ITEM = "UNREVIEWED_ITEM"
+    MISSING_PROVENANCE = "MISSING_PROVENANCE"
+    EDGE_TO_UNAPPROVED_NODE = "EDGE_TO_UNAPPROVED_NODE"
+    SUPERSEDES_CYCLE = "SUPERSEDES_CYCLE"
+    SUPERSEDES_CONFLICT = "SUPERSEDES_CONFLICT"
+    CONTRADICTORY_WORDING = "CONTRADICTORY_WORDING"
+    UNRESOLVED_EXCEPTION = "UNRESOLVED_EXCEPTION"
+    UNSUPPORTED_LANGUAGE = "UNSUPPORTED_LANGUAGE"
+    DUPLICATE_OBLIGATION = "DUPLICATE_OBLIGATION"
+    EXACT_WORDING_NOT_IN_SOURCE = "EXACT_WORDING_NOT_IN_SOURCE"
+    # Activation only: a READY index build no longer matches the approved nodes.
+    INDEX_STALE = "INDEX_STALE"
+
+
+class Command(StrEnum):
+    SUBMIT = "submit"
+    RETURN_TO_DRAFT = "return_to_draft"
+    APPROVE = "approve"
+    REJECT = "reject"
+    BUILD = "build"
+    ACTIVATE = "activate"
+    ROLLBACK = "rollback"
+    RETIRE = "retire"
+
+
+class ReviewItemKind(StrEnum):
+    NODE = "node"
+    EDGE = "edge"
+    WORDING = "wording"

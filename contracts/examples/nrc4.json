@@ -1,0 +1,223 @@
+{
+  "_note": "Synthetic examples for NRC-4 policy sources and bundles. All data is labelled synthetic until the IPB corpus exists. See nrc4.md.",
+  "policy_source": {
+    "request": "POST /v1/marketing/policy-sources",
+    "status": 201,
+    "schema": "PolicySourceRead",
+    "body": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "title": "[SYNTHETIC] IPB policy sample",
+      "source_ref": "synthetic:ipb-sample-1",
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "language": "en",
+      "is_synthetic": true,
+      "upload_id": "00000000-0000-4000-8000-000000000008",
+      "extraction_state": "EXTRACTED",
+      "extraction_error_code": null,
+      "page_count": 3,
+      "extracted_at": "2026-11-23T10:02:00Z",
+      "created_by": "policy.admin.demo",
+      "created_at": "2026-11-23T10:00:00Z"
+    }
+  },
+  "policy_clauses": {
+    "request": "GET /v1/marketing/policy-sources/00000000-0000-4000-8000-000000000001/clauses",
+    "status": 200,
+    "schema": "PolicyClauseList",
+    "body": {
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "clause_ref": "p1-c1",
+          "section": "Disclosures",
+          "page": 1,
+          "text": "[SYNTHETIC] Every post must say: This is a research study. Taking part is voluntary.",
+          "checksum_sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+          "language": "en"
+        }
+      ]
+    }
+  },
+  "policy_bundle_detail": {
+    "request": "GET /v1/marketing/policy-bundles/00000000-0000-4000-8000-000000000003",
+    "status": 200,
+    "schema": "PolicyBundleDetail",
+    "body": {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "version": 2,
+      "name": "[SYNTHETIC] IPB policy sample",
+      "source_ref": "synthetic:ipb-sample-1",
+      "is_synthetic": true,
+      "lifecycle_state": "REVIEW",
+      "revision": 10,
+      "based_on_bundle_id": null,
+      "approved_by": null,
+      "approved_at": null,
+      "activated_by": null,
+      "activated_at": null,
+      "last_error_code": null,
+      "created_at": "2026-11-23T10:05:00Z",
+      "updated_at": "2026-11-23T10:30:00Z",
+      "rule_count": 1
+    }
+  },
+  "policy_bundle_active": {
+    "request": "POST /v1/marketing/policy-bundles/00000000-0000-4000-8000-000000000003/transitions",
+    "status": 200,
+    "schema": "PolicyBundleDetail",
+    "body": {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "version": 2,
+      "name": "[SYNTHETIC] IPB policy sample",
+      "source_ref": "synthetic:ipb-sample-1",
+      "is_synthetic": true,
+      "lifecycle_state": "ACTIVE",
+      "revision": 12,
+      "based_on_bundle_id": null,
+      "approved_by": "policy.approver.demo",
+      "approved_at": "2026-11-23T10:50:00Z",
+      "activated_by": "policy.approver.demo",
+      "activated_at": "2026-11-23T11:00:00Z",
+      "last_error_code": null,
+      "created_at": "2026-11-23T10:05:00Z",
+      "updated_at": "2026-11-23T11:00:00Z",
+      "rule_count": 1
+    }
+  },
+  "policy_rules": {
+    "request": "GET /v1/marketing/policy-bundles/00000000-0000-4000-8000-000000000003/rule-records",
+    "status": 200,
+    "schema": "PolicyRuleList",
+    "body": {
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "rule_id": "REC-07",
+          "rule_version": 1,
+          "title": "Research and voluntary disclosure",
+          "requirement": "Say that this is a research study and that taking part is voluntary.",
+          "gate": "completeness",
+          "severity": "critical",
+          "mandatory": true,
+          "check_type": "deterministic",
+          "node": {
+            "review_state": "APPROVED",
+            "origin": "HUMAN",
+            "reviewed_by": "policy.admin.demo",
+            "reviewed_at": "2026-11-23T10:20:00Z",
+            "review_note": null,
+            "id": "00000000-0000-4000-8000-000000000005",
+            "node_key": "REC-07",
+            "node_type": "RULE",
+            "text": "[SYNTHETIC] Say that this is a research study.",
+            "language": "en",
+            "source_clause_id": null,
+            "input_kinds": [],
+            "channels": [
+              "facebook"
+            ],
+            "post_formats": [],
+            "languages": [],
+            "audiences": [],
+            "jurisdictions": [],
+            "study_ids": [],
+            "effective_from": null,
+            "effective_to": null,
+            "required_study_fact": null
+          },
+          "wordings": [
+            {
+              "review_state": "APPROVED",
+              "origin": "HUMAN",
+              "reviewed_by": "policy.admin.demo",
+              "reviewed_at": "2026-11-23T10:20:00Z",
+              "review_note": null,
+              "id": "00000000-0000-4000-8000-000000000007",
+              "policy_rule_id": "00000000-0000-4000-8000-000000000004",
+              "language": "en",
+              "kind": "EXACT_WORDING",
+              "text": "This is a research study. Taking part is voluntary.",
+              "source_clause_id": null,
+              "translation_of_id": null,
+              "created_at": "2026-11-23T10:15:00Z"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "policy_checks_with_issue": {
+    "request": "GET /v1/marketing/policy-bundles/00000000-0000-4000-8000-000000000003/checks",
+    "status": 200,
+    "schema": "PolicyBundleChecks",
+    "body": {
+      "issues": [
+        {
+          "code": "EXACT_WORDING_NOT_IN_SOURCE",
+          "subject": "rule:REC-07",
+          "message": "The required wording of REC-07 does not appear in any approved source clause."
+        }
+      ]
+    }
+  },
+  "policy_audit_page": {
+    "request": "GET /v1/marketing/policy-bundles/00000000-0000-4000-8000-000000000003/audit?limit=2",
+    "status": 200,
+    "schema": "PolicyAuditPage",
+    "body": {
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000021",
+          "action": "ACTIVATE",
+          "from_state": "READY",
+          "to_state": "ACTIVE",
+          "actor": "policy.admin.demo",
+          "reason": "[SYNTHETIC] Reviewed sample.",
+          "details": {
+            "revision": 12,
+            "actor_roles": ["policy_admin"],
+            "previous_bundle_id": null
+          },
+          "request_id": "req-3f9a1c",
+          "created_at": "2026-11-23T11:00:00Z"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000022",
+          "action": "APPROVE",
+          "from_state": "REVIEW",
+          "to_state": "APPROVED",
+          "actor": "policy.approver.demo",
+          "reason": null,
+          "details": {
+            "revision": 11,
+            "actor_roles": ["policy_approver"],
+            "rules": 1
+          },
+          "request_id": "req-3f9a1b",
+          "created_at": "2026-11-23T10:50:00Z"
+        }
+      ],
+      "next_cursor": "2026-11-23T10:50:00Z"
+    }
+  },
+  "error_policy_bundle_has_issues": {
+    "request": "POST /v1/marketing/policy-bundles/00000000-0000-4000-8000-000000000003/transitions",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "POLICY_BUNDLE_HAS_ISSUES",
+      "message": "The policy bundle has open issues.",
+      "request_id": "req-3f9a1d",
+      "details": {
+        "issues": [
+          {
+            "code": "EXACT_WORDING_NOT_IN_SOURCE",
+            "subject": "rule:REC-07",
+            "message": "The required wording of REC-07 does not appear in any approved source clause."
+          }
+        ]
+      },
+      "retryable": false
+    }
+  }
+}

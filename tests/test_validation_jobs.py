@@ -34,12 +34,12 @@ from app.services.providers.text_judge import (
     SimulatedTextJudge,
 )
 from app.services.validations import INPUT_BY_JOB_KIND, JOB_KIND_BY_INPUT, VALIDATION_RUN_EVENT
+from app.workers.common import WorkerConfigError
 from app.workers.connector import (
     EVENT_HANDLERS,
     JOB_HANDLERS,
     JobRunHandler,
     ValidationJobHandler,
-    WorkerConfigError,
     check_worker_settings,
     run_once,
 )

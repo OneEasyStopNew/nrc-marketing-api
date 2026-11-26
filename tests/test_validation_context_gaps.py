@@ -9,12 +9,12 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.core.config import get_settings
 from app.models import PolicyEdge, PolicyNode, PolicyRuleRecord
-from app.models.enums import PolicyEdgeType
+from app.models.enums import PolicyEdgeType, ReviewState
 from app.services.policy_context import AuroraPolicyContextProvider, PolicyContextProvider
 from app.services.validations import INPUT_BY_JOB_KIND, VALIDATION_RUN_EVENT
 from app.workers.connector import JobRunHandler, ValidationJobHandler, run_once
@@ -31,6 +31,13 @@ PASSING_CAPTION = (
     "Adults aged 18 to 75 with high blood pressure may be able to join a research study of an "
     "investigational treatment. Taking part is voluntary, and there is no cost to take part."
 )
+# NRC-4: an approved row records its review (approved matches review_state, reviewer and time).
+APPROVED_REVIEW: dict[str, Any] = {
+    "approved": True,
+    "review_state": ReviewState.APPROVED,
+    "reviewed_by": "synthetic-fixture",
+    "reviewed_at": func.now(),
+}
 # Mandatory rules the synthetic rulebook applies to briefs.
 BRIEF_MANDATORY = ["REC-01", "REC-02", "REC-03", "REC-04", "REC-05", "REC-08"]
 
@@ -60,7 +67,8 @@ async def _remove_source(connection: AsyncConnection, world: World, *node_keys: 
                     PolicyEdge.from_node_id == node_id,
                     PolicyEdge.edge_type == PolicyEdgeType.SUPPORTED_BY,
                 )
-                .values(approved=False)
+                # NRC-4 ties approved to review_state, so both move back to proposed.
+                .values(approved=False, review_state=ReviewState.PROPOSED)
             )
 
 
@@ -216,7 +224,7 @@ async def test_incomplete_walk_leaves_every_mandatory_rule_unassessed(
                 edge_type=PolicyEdgeType.EXCEPT_WHEN,
                 from_node_id=await _node_id(db, world, "REC-01"),
                 to_node_id=await _node_id(db, world, "EXC-01"),
-                approved=True,
+                **APPROVED_REVIEW,
                 provenance_note="[SYNTHETIC] exception chain for a test",
             )
         )
@@ -250,7 +258,7 @@ async def test_conflicting_mandatory_rules_need_review_not_unassessed(
                 edge_type=PolicyEdgeType.SUPERSEDES,
                 from_node_id=newer,
                 to_node_id=older,
-                approved=True,
+                **APPROVED_REVIEW,
                 provenance_note="[SYNTHETIC] conflicting supersedes for a test",
             )
             for newer, older in ((rec_02, rec_03), (rec_03, rec_02))
@@ -351,7 +359,7 @@ async def test_run_without_any_context_marks_every_mandatory_rule(
         await db.execute(
             update(PolicyNode)
             .where(PolicyNode.policy_bundle_id == world.a.policy_bundle_id)
-            .values(approved=False)
+            .values(approved=False, review_state=ReviewState.PROPOSED)
         )
 
     creative_id, run = await _validate(client, auth, world, sessions)

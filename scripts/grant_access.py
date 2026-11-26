@@ -2,7 +2,8 @@
 
 Usage (runs as the database owner, MIGRATION_DATABASE_URL):
     uv run python -m scripts.grant_access --tenant-id <tenant-uuid> \
-        --member <cognito-sub>=creator --member <cognito-sub>=policy_admin
+        --member <cognito-sub>=creator --member <cognito-sub>=policy_admin \
+        --member <cognito-sub>=policy_approver
 
 Safe to re-run: an existing membership gets the given roles (replacing the old ones) and is
 reactivated. Roles live only in the database. The API reads them on every request and never

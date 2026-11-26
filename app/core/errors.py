@@ -109,6 +109,67 @@ class ExportNotReadyError(ConflictError):
     default_message = "Generate an image for the current version before exporting."
 
 
+class UploadNotReceivedError(ConflictError):
+    # Complete was called before the file reached storage; upload it, then complete again.
+    code = "UPLOAD_NOT_RECEIVED"
+    default_message = "The file has not been received yet. Upload it, then complete again."
+    retryable = True
+
+
+class UploadNotPendingError(ConflictError):
+    # details.status: the upload's current state.
+    code = "UPLOAD_NOT_PENDING"
+    default_message = "This upload is no longer waiting for its file."
+
+
+class PolicySourceUploadNotReadyError(ConflictError):
+    # details.status: the upload's current state. Only a READY policy upload can become a source.
+    code = "POLICY_SOURCE_UPLOAD_NOT_READY"
+    default_message = "This upload has not passed its checks yet, so it cannot become a source."
+
+
+class PolicyBundleStateError(ConflictError):
+    # details.state: the bundle's lifecycle state; details.allowed: the states the command needs.
+    code = "POLICY_BUNDLE_STATE"
+    default_message = "The policy bundle is not in a state that allows this."
+
+
+class PolicyBundleHasIssuesError(ConflictError):
+    # details.issues: [{code, subject, message}] from the bundle checks. Fix them, then retry.
+    code = "POLICY_BUNDLE_HAS_ISSUES"
+    default_message = "The policy bundle has open issues and cannot be approved."
+
+
+class PolicyItemInvalidError(ConflictError):
+    # A graph change the bundle cannot take, e.g. approving an edge without provenance.
+    code = "POLICY_ITEM_INVALID"
+    default_message = "This change cannot be applied to the policy bundle."
+
+
+class UploadNotAcceptedError(AppError):
+    # The declared file breaks a configured limit. details.field names the field; the limits
+    # are in GET /assets/upload-limits.
+    code = "UPLOAD_NOT_ACCEPTED"
+    default_message = "This file cannot be uploaded."
+
+
+class PolicyLimitError(ConflictError):
+    # POLICY_MAX_OPEN_BUNDLES_PER_TENANT or POLICY_MAX_ITEMS_PER_BUNDLE reached; details.limit.
+    # Not retryable: a place frees only when a bundle in review is approved or rejected, or an
+    # item is rejected (rejected items don't count).
+    code = "POLICY_LIMIT_REACHED"
+    default_message = "This policy limit has been reached."
+
+
+class UploadLimitError(AppError):
+    # The tenant has UPLOAD_MAX_PENDING_PER_TENANT uploads in progress.
+    code = "UPLOAD_LIMIT_REACHED"
+    default_message = (
+        "Too many uploads are in progress. Try again when one has finished processing."
+    )
+    retryable = True
+
+
 class GenerationLimitError(AppError):
     # details.reason is ACTIVE_JOB_LIMIT or CREDIT_CEILING.
     code = "GENERATION_LIMIT_REACHED"
@@ -137,6 +198,14 @@ class DependencyUnavailableError(AppError):
     code = "DEPENDENCY_UNAVAILABLE"
     default_message = "A required service is temporarily unavailable."
     retryable = True
+
+
+class PolicySourceStorageUnavailableError(DependencyUnavailableError):
+    # POLICY_SOURCE_BUCKET is not set: policy uploads never fall back to the media bucket. An
+    # operator fixes it; waiting does not help.
+    code = "POLICY_STORAGE_UNAVAILABLE"
+    default_message = "Policy file storage is not available."
+    retryable = False
 
 
 class FeatureNotAvailableError(AppError):
