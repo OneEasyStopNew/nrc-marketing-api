@@ -180,7 +180,8 @@ async def test_revoked_study_access_hides_media_before_signing(
     [
         "UPDATE jobs SET state = 'FAILED'",
         "UPDATE jobs SET result_asset_id = NULL",
-        "UPDATE assets SET origin = 'uploaded'",
+        # A generated row can no longer pose as an upload (ck_assets_lineage_matches_origin);
+        # READY uploads are listed since NRC-3 and tested with the upload endpoints.
         "UPDATE assets SET mime_type = 'video/mp4'",
     ],
 )

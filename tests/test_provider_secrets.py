@@ -18,7 +18,8 @@ from app.services.providers.higgsfield import (
     higgsfield_credentials,
     with_higgsfield_key,
 )
-from app.workers.connector import WorkerConfigError, load_provider_secrets
+from app.workers.common import WorkerConfigError
+from app.workers.connector import load_provider_secrets
 
 SECRET_ID = "nrc/stg/higgsfield"  # noqa: S105 (a secret name, not a value)
 KEY = "kid-STUBBED:ksecret-STUBBED-VALUE"

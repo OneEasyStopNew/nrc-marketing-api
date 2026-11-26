@@ -8,12 +8,16 @@ from typing import Annotated, Final, Literal, Self
 from pydantic import Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.core.media_types import IMAGE_EXTENSIONS
+
 AppEnv = Literal["local", "demo", "staging", "production"]
 # Environments where simulated data and locally signed tokens are allowed.
 NON_PRODUCTION_ENVS: Final[frozenset[str]] = frozenset({"local", "demo"})
 # lease_outbox_events() clamps its lease to the same range in SQL; keep the two in sync.
 LEASE_MIN_SECONDS = 5
 LEASE_MAX_SECONDS = 600
+# The types app.services.media can decode (app.core.media_types).
+SUPPORTED_UPLOAD_IMAGE_TYPES: Final[frozenset[str]] = frozenset(IMAGE_EXTENSIONS)
 
 
 class EmbeddingSettings(BaseSettings):
@@ -192,13 +196,60 @@ class Settings(RetrievalSettings):
     validation_job_deadline_seconds: int = Field(default=600, ge=60, le=86_400)
     # Brief and caption validations queued or running at once per tenant; each may call the model.
     validation_max_active_jobs_per_tenant: int = Field(default=20, ge=1, le=200)
+    # Client uploads (NRC-3). Final limits come from the product owner; these are the defaults.
+    # Presigned upload URLs share the 15-minute S3 cap above.
+    upload_url_ttl_seconds: int = Field(default=600, ge=60, le=900)
+    # The worker holds the whole file in memory while inspecting it: 50 MiB at most.
+    upload_image_max_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
+    # Accepted MIME types, comma-separated in the environment.
+    upload_image_types: Annotated[tuple[str, ...], NoDecode] = ("image/png", "image/jpeg")
+    # Uploads one tenant may have in progress: waiting in quarantine or inspection, or awaiting
+    # their file while the upload URL is still valid. Bounds storage growth until the cleanup job
+    # (NRC-3 item 8) exists.
+    upload_max_pending_per_tenant: int = Field(default=20, ge=1, le=1000)
+    # Defaults to the strict value: a deployment that forgets it gets no simulator. The simulator
+    # marks its verdicts as simulated; live needs a real scanner, and the media worker refuses to
+    # start without one.
+    # Temporary (owner Firoz, NRC-3): "simulator" exists only until Prabhu picks the scanner. When
+    # the live scanner lands, keep this setting for local use but add its implementation in
+    # app.services.scanning.build_scanner and remove the live-mode refusal test named there.
+    malware_scan_mode: Literal["simulator", "live"] = "live"
+    # Longest one malware scan may take before the upload waits and is retried
+    # (SCAN_UNAVAILABLE). Bounds a scanner that never answers.
+    malware_scan_timeout_seconds: int = Field(default=300, ge=10, le=3600)
+    # Failed inspection attempts (a crash, an expired lease) before an upload is rejected as
+    # INSPECTION_FAILED. Retryable scanner and storage outages are bounded separately.
+    media_inspection_max_attempts: int = Field(default=3, ge=1, le=10)
+    # How long after completion temporary scanner or storage outages may keep an upload waiting
+    # before it is rejected as INSPECTION_FAILED (the uploader can then upload again).
+    media_inspection_retry_window_seconds: int = Field(default=86_400, ge=600, le=604_800)
 
-    @field_validator("cognito_client_ids", "cors_origins", "higgsfield_output_hosts", mode="before")
+    @field_validator(
+        "cognito_client_ids",
+        "cors_origins",
+        "higgsfield_output_hosts",
+        "upload_image_types",
+        mode="before",
+    )
     @classmethod
     def _split_comma_separated(cls, value: object) -> object:
         if isinstance(value, str):
             return tuple(item.strip() for item in value.split(",") if item.strip())
         return value
+
+    @field_validator("upload_image_types")
+    @classmethod
+    def _upload_types_are_decodable(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        types = tuple(item.strip().lower() for item in value)
+        if not types:
+            raise ValueError("upload_image_types must list at least one MIME type")
+        unsupported = sorted(set(types) - SUPPORTED_UPLOAD_IMAGE_TYPES)
+        if unsupported:
+            raise ValueError(
+                f"upload_image_types has unsupported type(s): {', '.join(unsupported)}; "
+                f"supported: {', '.join(sorted(SUPPORTED_UPLOAD_IMAGE_TYPES))}"
+            )
+        return types
 
     @field_validator("dev_jwks_file", mode="before")
     @classmethod
@@ -226,7 +277,11 @@ class Settings(RetrievalSettings):
         enabled = [
             name
             # EMBEDDING_MODE=simulator is refused by EmbeddingSettings' own validator.
-            for name, on in (("DEMO_STUBS", self.demo_stubs), ("DEV_JWKS_FILE", self.dev_jwks_file))
+            for name, on in (
+                ("DEMO_STUBS", self.demo_stubs),
+                ("DEV_JWKS_FILE", self.dev_jwks_file),
+                ("MALWARE_SCAN_MODE=simulator", self.malware_scan_mode == "simulator"),
+            )
             if on
         ]
         if enabled:

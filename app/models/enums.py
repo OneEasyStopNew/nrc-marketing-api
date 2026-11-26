@@ -217,6 +217,32 @@ class JobStage(StrEnum):
     STORED = "stored"
 
 
+class UploadState(StrEnum):
+    """Where a client upload is. Only READY uploads become assets that later steps may use."""
+
+    # Upload URL issued; the client has not completed the upload yet.
+    PENDING_UPLOAD = "PENDING_UPLOAD"
+    # Upload completed and checked against what was declared; waiting for inspection.
+    QUARANTINED = "QUARANTINED"
+    SCANNING = "SCANNING"
+    READY = "READY"
+    REJECTED = "REJECTED"
+    # The URL was never used; set by the cleanup job.
+    EXPIRED = "EXPIRED"
+
+
+class UploadPurpose(StrEnum):
+    # Policy-source documents (PDF, text) are added by NRC-4.
+    CREATIVE_MEDIA = "creative_media"
+
+
+class IdentifiablePerson(StrEnum):
+    # The uploader's declaration. It is not proof of consent; the authorization reference is.
+    YES = "yes"
+    NO = "no"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class FormatSpec:
     channel: Channel

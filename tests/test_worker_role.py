@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.workers.connector import WorkerConfigError, worker_database_url
+from app.workers.common import WorkerConfigError, worker_database_url
 from tests.conftest import (
     APP_ROLE,
     WORKER_ROLE,
@@ -202,6 +202,8 @@ async def test_worker_role_has_exactly_the_table_privileges_it_uses(
         **{table: {"SELECT"} for table in CHECK_INPUT_TABLES},
         "context_manifests": {"SELECT", "INSERT"},
         "validation_runs": {"SELECT", "INSERT"},
+        # The media worker (NRC-3) moves uploads through inspection; the API creates them.
+        "media_uploads": {"SELECT", "UPDATE"},
     }
     rows = (
         await connection.execute(
