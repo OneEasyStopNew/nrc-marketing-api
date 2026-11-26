@@ -396,3 +396,14 @@ async def test_media_cursor_must_carry_a_time_zone(
     )
 
     assert response.status_code == 422
+
+
+async def test_cancel_is_not_available_for_stub_jobs(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    response = await client.post(
+        f"{API}/jobs/{uuid4()}/cancel", headers=auth("creator-a", world.a.tenant_id)
+    )
+
+    assert response.status_code == 501
+    assert response.json()["code"] == "NOT_IMPLEMENTED"

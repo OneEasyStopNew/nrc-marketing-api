@@ -185,6 +185,9 @@ async def test_worker_role_has_exactly_the_table_privileges_it_uses(
         "policy_node_embeddings": {"SELECT", "INSERT"},
         "policy_index_builds": {"SELECT", "INSERT", "UPDATE"},
         "policy_audit_events": {"INSERT"},
+        # The operator script (NRC-6) appends the audit rows; nothing may change them. The API
+        # role only reads them (tests/test_job_operations.py).
+        "job_operator_actions": {"SELECT", "INSERT"},
     }
     rows = (
         await connection.execute(

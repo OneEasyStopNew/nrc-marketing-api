@@ -46,7 +46,10 @@ async def test_lists_only_unknown_jobs_the_worker_stopped_on(
     engine = create_async_engine(url, poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.execute(
-            text("UPDATE jobs SET state = 'UNKNOWN' WHERE tenant_id = :t"),
+            text(
+                "UPDATE jobs SET state = 'UNKNOWN', failure_code = 'ATTEMPTS_EXHAUSTED'"
+                " WHERE tenant_id = :t"
+            ),
             {"t": committed_tenant.tenant_id},
         )
         await conn.execute(
@@ -58,7 +61,9 @@ async def test_lists_only_unknown_jobs_the_worker_stopped_on(
     lines = await list_unknown_jobs(url)
 
     mine = [line for line in lines if str(committed_tenant.tenant_id) in line]
-    assert mine == [f"tenant={committed_tenant.tenant_id} job={stopped}"]
+    assert mine == [
+        f"tenant={committed_tenant.tenant_id} job={stopped} state=UNKNOWN code=ATTEMPTS_EXHAUSTED"
+    ]
     assert all(reconciling not in line for line in lines)
 
 

@@ -4,7 +4,7 @@ from app.models.assets import Asset
 from app.models.context_manifests import ContextManifestRecord
 from app.models.creatives import Creative, CreativeVersion
 from app.models.idempotency import IdempotencyRecord
-from app.models.jobs import CreditReservation, Job, OutboxEvent, ProviderSpend
+from app.models.jobs import CreditReservation, Job, JobOperatorAction, OutboxEvent, ProviderSpend
 from app.models.policies import PolicyBundle
 from app.models.policy_audit import PolicyAuditEvent
 from app.models.policy_graph import (
@@ -30,6 +30,7 @@ __all__ = [
     "CreditReservation",
     "IdempotencyRecord",
     "Job",
+    "JobOperatorAction",
     "MediaUpload",
     "Membership",
     "MembershipStudy",

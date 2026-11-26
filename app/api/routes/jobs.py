@@ -14,6 +14,7 @@ from app.api.deps import (
     IdempotencyKey,
     SettingsDep,
 )
+from app.core.errors import FeatureNotAvailableError
 from app.schemas.common import ErrorBody
 from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobRead
 from app.services import jobs
@@ -73,3 +74,36 @@ async def get_job(job_id: UUID, ctx: CreativeReader, db: DbSession, stubs: DemoS
     if stubs is not None:
         return await stubs.get_job(db, ctx, job_id)
     return await jobs.get_job(db, ctx, job_id)
+
+
+@router.post(
+    "/jobs/{job_id}/cancel",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Request cancellation of a job (NRC-6)",
+    description="Records a durable cancel request and returns the job; the worker stops it and "
+    "settles credits, so poll the job for CANCELLED. Repeating it is harmless (no "
+    "Idempotency-Key). Not available while DEMO_STUBS=true (501).",
+    responses={
+        404: {"model": ErrorBody, "description": "Job not found or not permitted."},
+        409: {
+            "model": ErrorBody,
+            "description": "JOB_NOT_CANCELLABLE: the job already finished (details.state).",
+        },
+        501: {"model": ErrorBody, "description": "Not available while DEMO_STUBS=true."},
+        503: {
+            "model": ErrorBody,
+            "description": "DEPENDENCY_UNAVAILABLE: the job is busy; retry shortly (retryable).",
+        },
+    },
+)
+async def cancel_job(
+    job_id: UUID,
+    ctx: GenerationRunner,
+    db: DbSession,
+    settings: SettingsDep,
+    stubs: DemoStubsDep,
+) -> JobRead:
+    if stubs is not None:
+        # Stub jobs live in memory; there is nothing durable to cancel.
+        raise FeatureNotAvailableError("Job cancellation is not available in demo stub mode.")
+    return await jobs.request_cancel(db, ctx, job_id, settings)

@@ -132,6 +132,19 @@ class Settings(RetrievalSettings):
     # How long past its deadline an accepted job may stay queued or in progress at the provider
     # before it is parked as UNKNOWN for review. Does not apply once the provider has completed.
     generation_accepted_grace_seconds: int = Field(default=3600, ge=60, le=86_400)
+    # Generations one provider may run at once, across all tenants and workers; a job past the
+    # cap waits in the state it was in (QUEUED, RUNNING in retry_wait, or UNKNOWN for a resend).
+    # Kept low until the provider's concurrency quota is confirmed (NRC-6, follow-ups Q7, owner
+    # Prabhu/Vishnu).
+    generation_max_in_flight_per_provider: int = Field(default=4, ge=1, le=100)
+    # Circuit breaker per provider in each worker: after this many transient estimate or submit
+    # failures in a row, new requests to it pause for the open period.
+    provider_circuit_failure_threshold: int = Field(default=5, ge=1, le=100)
+    provider_circuit_open_seconds: float = Field(default=60, gt=0, le=3600)
+    # How long a cancel request waits for the job's row (another transaction holds it) before it
+    # answers a retryable 503 instead of hanging the request. It becomes lock_timeout in whole
+    # milliseconds, where 0 means no timeout at all, so the floor is 1 ms.
+    job_cancel_lock_timeout_seconds: float = Field(default=2.0, ge=0.001, le=30)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
     # Retry and poll backoff per event: doubles from the base up to the max, with jitter.
     worker_backoff_base_seconds: float = Field(default=2.0, gt=0, le=60)
