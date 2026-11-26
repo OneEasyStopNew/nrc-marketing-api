@@ -29,6 +29,26 @@ async def get_active_policy(db: AsyncSession, ctx: TenantContext) -> PolicyBundl
     )
     if bundle is None:
         raise NotFoundError("This tenant has no active policy yet.")
+    return _read(bundle)
+
+
+async def get_policy_version(db: AsyncSession, tenant_id: UUID, version: int) -> PolicyBundleRead:
+    """Return one version of the tenant's policy, whatever its state now (a run pins it).
+
+    Raises:
+        NotFoundError: no such version.
+    """
+    bundle = await db.scalar(
+        select(PolicyBundle).where(
+            PolicyBundle.tenant_id == tenant_id, PolicyBundle.version == version
+        )
+    )
+    if bundle is None:
+        raise NotFoundError("Policy version not found.")
+    return _read(bundle)
+
+
+def _read(bundle: PolicyBundle) -> PolicyBundleRead:
     return PolicyBundleRead(
         policy_bundle_id=bundle.id,
         version=bundle.version,

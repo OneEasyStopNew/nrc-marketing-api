@@ -46,8 +46,10 @@ ACTUAL_MICROS = 81_000
 
 
 @pytest.fixture
-async def job_id(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> UUID:
-    creative_id = await _creative(client, auth, world.a)
+async def job_id(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> UUID:
+    creative_id = await _creative(client, auth, world.a, sessions)
     response = await _post_job(client, auth, world, creative_id)
     assert response.status_code == 202
     return UUID(response.json()["job_id"])

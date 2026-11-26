@@ -29,13 +29,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.config import Settings, get_settings
+from app.core.errors import ValidationJobError
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.models import Job, OutboxEvent
 from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import FAILURE_MESSAGE_MAX_CHARS, ReservationState
 from app.schemas.jobs import JobKind
-from app.services import generation_checks, spend
+from app.services import generation_checks, spend, validation_jobs
 from app.services.assets import StoredImageSink, emit_asset_generated
 from app.services.jobs import (
     NON_TERMINAL_STATES,
@@ -48,12 +49,14 @@ from app.services.jobs import (
     transition,
 )
 from app.services.media import configure_pillow
+from app.services.policy_context import AuroraPolicyContextProvider, PolicyContextProvider
 from app.services.providers.base import (
     HIGGSFIELD_NAME,
     TERMINAL_PROVIDER_STATUSES,
     FetchedImage,
     ImageProvider,
     ImageRequest,
+    ProviderConfigError,
     ProviderError,
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
@@ -62,6 +65,7 @@ from app.services.providers.base import (
     StatusResult,
     SubmitResult,
 )
+from app.services.providers.embeddings import embedding_provider_from_settings
 from app.services.providers.higgsfield import (
     ProviderSecretError,
     create_provider,
@@ -69,8 +73,15 @@ from app.services.providers.higgsfield import (
     with_higgsfield_key,
 )
 from app.services.providers.simulator import SIMULATOR_NAME, SimulatedImageProvider
+from app.services.providers.text_judge import (
+    TextJudge,
+    judge_call_budget_seconds,
+    missing_live_judge_settings,
+    text_judge_from_settings,
+)
 from app.services.spend import usd_micros as _usd_micros
 from app.services.storage import ObjectStorage
+from app.services.validations import INPUT_BY_JOB_KIND, VALIDATION_RUN_EVENT
 from app.workers.cancellation import finish_cancel, give_up_cancel
 from app.workers.common import (
     DEFAULT_OWNER,
@@ -582,20 +593,77 @@ class ImageGenerationHandler:
         return None
 
 
-JOB_HANDLERS: Final[Mapping[JobKind, JobHandler]] = MappingProxyType(
+class ValidationJobHandler:
+    """Runs a brief or caption validation job (app.services.validation_jobs).
+
+    The judge and the context provider come from the settings unless a test passes its own. The
+    worker builds them at start (prepare, in a thread: creating a boto3 client blocks), so a
+    config error stops start-up instead of the first job.
+    """
+
+    def __init__(
+        self,
+        judge: TextJudge | None = None,
+        context_provider: PolicyContextProvider | None = None,
+    ) -> None:
+        self._judge = judge
+        self._context_provider = context_provider
+        self._built: tuple[Settings, TextJudge | None, PolicyContextProvider] | None = None
+
+    async def handle(self, db: AsyncSession, job: Job, step: Step) -> float | None:
+        judge, provider = self._dependencies(step.settings)
+        try:
+            return await validation_jobs.run(
+                db,
+                job,
+                judge=judge,
+                context_provider=provider,
+                settings=step.settings,
+                now=step.now,
+                heartbeat=step.heartbeat,
+                retry_delay=lambda attempt: backoff_seconds(attempt, step.settings),
+            )
+        except ValidationJobError as error:
+            await _fail_with(db, job.id, error.code, error.message, billed=False)
+            return None
+
+    def prepare(self, settings: Settings) -> None:
+        self._dependencies(settings)
+
+    def _dependencies(self, settings: Settings) -> tuple[TextJudge | None, PolicyContextProvider]:
+        # Built here only when prepare wasn't called with these settings (tests calling run_once).
+        if self._built is None or self._built[0] is not settings:
+            judge = self._judge if self._judge is not None else text_judge_from_settings(settings)
+            # With an embedder (EMBEDDING_MODE simulator or live) statements are also searched by
+            # vector; the API never has one.
+            provider = self._context_provider or AuroraPolicyContextProvider(
+                settings, embedding_provider_from_settings(settings)
+            )
+            self._built = (settings, judge, provider)
+        return self._built[1], self._built[2]
+
+
+# Keyed by jobs.kind. Each event type has its own map, so a "job.run" event can't run a
+# validation and a "validation.run" event can't run (or pay for) a generation.
+JOB_HANDLERS: Final[Mapping[str, JobHandler]] = MappingProxyType(
     {JobKind.IMAGE_GENERATION: ImageGenerationHandler()}
+)
+VALIDATION_JOB_HANDLER: Final = ValidationJobHandler()
+VALIDATION_JOB_HANDLERS: Final[Mapping[str, JobHandler]] = MappingProxyType(
+    dict.fromkeys(INPUT_BY_JOB_KIND, VALIDATION_JOB_HANDLER)
 )
 
 
 class JobRunHandler:
-    # "job.run": runs the next step of the event's job with the handler for its kind.
+    # "job.run" or "validation.run": runs the next step of the event's job with the handler for
+    # its kind.
 
-    def __init__(self, job_handlers: Mapping[JobKind, JobHandler]) -> None:
+    def __init__(self, job_handlers: Mapping[str, JobHandler]) -> None:
         self._job_handlers = job_handlers
 
     async def handle(self, db: AsyncSession, event: LeasedEvent, step: Step) -> float | None:
         job = await db.get(Job, event.job_id)
-        handler = self._job_handlers.get(JobKind(job.kind)) if job and job.kind in JobKind else None
+        handler = None if job is None else self._job_handlers.get(job.kind)
         if job is None or handler is None:
             raise NoHandlerError
         if job.state is ExecutionState.CANCEL_REQUESTED:
@@ -637,7 +705,10 @@ _GIVE_UP_MESSAGES: Final = MappingProxyType(
 # The one subscription registry, keyed by outbox event type. The worker leases exactly these
 # types; others (asset.generated until NRC-7 registers its handler) wait untouched.
 EVENT_HANDLERS: Final[Mapping[str, EventHandler]] = MappingProxyType(
-    {RUN_EVENT: JobRunHandler(JOB_HANDLERS)}
+    {
+        RUN_EVENT: JobRunHandler(JOB_HANDLERS),
+        VALIDATION_RUN_EVENT: JobRunHandler(VALIDATION_JOB_HANDLERS),
+    }
 )
 
 
@@ -1057,6 +1128,17 @@ def check_worker_settings(settings: Settings) -> None:
     # A provider call must end before the lease that covers it expires.
     if settings.http_timeout_seconds >= lease_seconds(settings):
         raise WorkerConfigError("HTTP_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS.")
+    # The handler renews the lease before each judge call, and the adapter stops waiting after
+    # the call budget (one attempt; the job owns retries), so a call ends inside its lease.
+    live_judge = settings.validation_model_mode == "live"
+    if live_judge and judge_call_budget_seconds(settings) >= lease_seconds(settings):
+        raise WorkerConfigError(
+            "VALIDATION_MODEL_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS."
+        )
+    problems = missing_live_judge_settings(settings)
+    if problems:
+        # Refused at start, never per job; live never falls back to the simulator.
+        raise WorkerConfigError(f"VALIDATION_MODEL_MODE=live refused: {'; '.join(problems)}")
 
 
 def check_live_mode(settings: Settings) -> None:
@@ -1067,6 +1149,10 @@ def check_live_mode(settings: Settings) -> None:
         problems.append("missing AWS_S3_BUCKET (generated images need storage)")
     if generation_checks.VALIDATION_GATE_IS_STUB:
         problems.append("the validation-PASS gate is still the stub (NRC-7)")
+    if settings.validation_model_mode == "simulator":
+        # A simulated judge can PASS a brief, and the gate opens on any stored PASS. shortcut: a
+        # PASS stored before switching to live still counts; fine while the simulator is local-only.
+        problems.append("VALIDATION_MODEL_MODE=simulator (a simulated PASS is not evidence)")
     if problems:
         raise WorkerConfigError(f"GENERATION_MODE=live refused: {'; '.join(problems)}")
 
@@ -1077,6 +1163,14 @@ def build_providers(settings: Settings) -> dict[str, ImageProvider]:
         return {SIMULATOR_NAME: SimulatedImageProvider()}
     check_live_mode(settings)
     return {HIGGSFIELD_NAME: create_provider(settings)}
+
+
+def prepare_validation(settings: Settings) -> None:
+    # The judge client and context provider, built once at start with the settings _serve uses.
+    try:
+        VALIDATION_JOB_HANDLER.prepare(settings)
+    except ProviderConfigError as error:
+        raise WorkerConfigError(str(error)) from None
 
 
 def load_provider_secrets(settings: Settings) -> Settings:
@@ -1091,6 +1185,7 @@ async def run_forever(settings: Settings) -> None:
     database_url = worker_database_url()
     settings = await asyncio.to_thread(load_provider_secrets, settings)
     providers = build_providers(settings)
+    await asyncio.to_thread(prepare_validation, settings)
     try:
         # The originals are closed below; the guarded ones only add the circuit breaker.
         await _serve(settings, guard_providers(providers, settings), database_url)

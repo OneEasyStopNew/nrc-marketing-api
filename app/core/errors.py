@@ -25,6 +25,12 @@ class TenantNotBoundError(AppError):
     pass
 
 
+class ValidationJobError(AppError):
+    # Worker-only: a validation job can't be checked at all (its creative version or policy
+    # version is unreadable or gone). Fails the job with this code; never served by the API.
+    code = "VALIDATION_JOB_INVALID"
+
+
 class AuthenticationError(AppError):
     code = "UNAUTHENTICATED"
     default_message = "Authentication is required."
@@ -149,6 +155,13 @@ class GenerationLimitError(AppError):
     # details.reason is ACTIVE_JOB_LIMIT or CREDIT_CEILING.
     code = "GENERATION_LIMIT_REACHED"
     default_message = "The tenant's generation limit is reached. Try again later."
+    retryable = True
+
+
+class ValidationLimitError(AppError):
+    # Too many validations queued or running for the tenant (VALIDATION_MAX_ACTIVE_JOBS_PER_TENANT).
+    code = "VALIDATION_LIMIT_REACHED"
+    default_message = "Too many validations are running. Try again when one finishes."
     retryable = True
 
 

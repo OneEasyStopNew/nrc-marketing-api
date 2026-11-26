@@ -355,9 +355,9 @@ async def test_upload_flow_create_put_complete(
 
 @needs_seaweedfs
 async def test_upload_for_a_creative_in_the_same_study(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
 ) -> None:
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
 
     upload = await _created(client, auth, world, creative_id=creative_id)
 
@@ -966,10 +966,10 @@ async def test_a_study_the_caller_lost_access_to_is_404(
 
 
 async def test_a_creative_from_another_study_is_404(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
 ) -> None:
     # The creative belongs to the open study; the upload names the closed one.
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
 
     response = await _create(
         client, auth, world, study_id=str(world.a.closed_study_id), creative_id=creative_id
@@ -1574,7 +1574,7 @@ async def test_only_a_ready_upload_is_an_asset_and_appears_in_the_media_library(
 async def test_generated_assets_have_no_upload_fields(
     client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
 ) -> None:
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     queued = await _post_job(client, auth, world, creative_id)
     assert queued.status_code == 202
     sink = FakeSink()

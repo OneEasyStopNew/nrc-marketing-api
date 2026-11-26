@@ -74,8 +74,10 @@ from tests.conftest import (
 
 
 @pytest.fixture
-async def job_id(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> UUID:
-    creative_id = await _creative(client, auth, world.a)
+async def job_id(
+    sessions: Sessions, client: httpx.AsyncClient, auth: AuthHeaders, world: World
+) -> UUID:
+    creative_id = await _creative(client, auth, world.a, sessions)
     response = await _post_job(client, auth, world, creative_id)
     assert response.status_code == 202
     return UUID(response.json()["job_id"])
@@ -374,7 +376,7 @@ async def test_accepted_job_still_running_past_grace_is_parked_and_frees_its_slo
     assert str(job_id) in errors[0]
     assert str(job.provider_request_id) in errors[0]
     # UNKNOWN takes no active slot: the tenant can still start its full allowance of jobs.
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     for _ in range(get_settings().generation_max_active_jobs_per_tenant):
         assert (await _post_job(client, auth, world, creative_id)).status_code == 202
 
@@ -1001,7 +1003,7 @@ async def test_registering_a_handler_is_all_it_takes_to_receive_an_event_type(
 async def test_jobs_parked_without_storage_do_not_block_new_jobs(
     sessions: Sessions, client: httpx.AsyncClient, auth: AuthHeaders, world: World
 ) -> None:
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     for _ in range(get_settings().generation_max_active_jobs_per_tenant):
         assert (await _post_job(client, auth, world, creative_id)).status_code == 202
         # No sink until NRC-3: completed jobs park at the provider result.
@@ -1071,6 +1073,20 @@ async def test_live_mode_with_complete_settings_starts_now_the_gate_is_real() ->
     finally:
         if isinstance(provider, HiggsfieldProvider):
             await provider.aclose()
+
+
+def test_live_mode_with_a_simulated_judge_refuses_to_start() -> None:
+    # Paid generation must never open on a PASS the simulated judge gave.
+    settings = _live(
+        app_env="local",
+        validation_model_mode="simulator",
+        higgsfield_api_key=SecretStr("test-id:test-secret"),
+        higgsfield_model=PROBED_MODEL,
+        higgsfield_output_hosts=("images.example.test",),
+    )
+
+    with pytest.raises(WorkerConfigError, match=r"refused: VALIDATION_MODEL_MODE=simulator"):
+        build_providers(settings)
 
 
 def test_live_mode_with_an_unprobed_model_refuses_to_start() -> None:

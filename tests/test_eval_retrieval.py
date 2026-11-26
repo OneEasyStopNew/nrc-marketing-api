@@ -40,8 +40,15 @@ from scripts.eval_retrieval import (
     percentile,
     summarize,
 )
-from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
+from scripts.import_policy_graph import PolicyGraphImport, import_policy_graph, load_synthetic_graph
 from tests.conftest import World, add_policy_bundle, as_tenant_owner, owner_session
+
+
+@pytest.fixture
+def graph() -> PolicyGraphImport:
+    # These tests re-import and index the real synthetic graph into tenant A's bundle, so the
+    # bundle must hold that graph, not conftest's code-checked default.
+    return load_synthetic_graph()
 
 
 def _case(**overrides: object) -> EvalCase:

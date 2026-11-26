@@ -185,7 +185,7 @@ async def test_in_flight_count_spans_tenants_and_returns_only_a_number(
 ) -> None:
     provider, sink = ScriptedProvider(), FakeSink()
     provider.pending_polls = 1
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     assert (await _post_job(client, auth, world, creative_id)).status_code == 202
     await run_once(sessions, {"simulator": provider}, sink, get_settings())
 
@@ -221,7 +221,7 @@ async def test_job_past_the_cap_waits_queued_without_a_provider_call_then_runs(
     settings = _settings(generation_max_in_flight_per_provider=1)
     provider, sink = ScriptedProvider(), FakeSink()
     provider.pending_polls = 1
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     first = UUID((await _post_job(client, auth, world, creative_id)).json()["job_id"])
     await run_once(sessions, {"simulator": provider}, sink, settings)
     second = UUID((await _post_job(client, auth, world, creative_id)).json()["job_id"])
@@ -295,9 +295,10 @@ async def test_two_workers_cannot_both_take_the_last_provider_slot(
     committed_tenant: SeededTenant,
     signing_key: RSAPrivateKey,
     test_env: IntegrationEnv,
+    committed_worker_sessions: Sessions,
 ) -> None:
     auth = AuthHeaders(signing_key)
-    creative_id = await _creative(http, auth, committed_tenant)
+    creative_id = await _creative(http, auth, committed_tenant, committed_worker_sessions)
     for key in ("provider-slot-1", "provider-slot-2"):
         response = await http.post(
             JOBS,
@@ -333,7 +334,10 @@ async def test_two_workers_cannot_both_take_the_last_provider_slot(
     async with engine.connect() as conn:
         states = (
             await conn.execute(
-                text("SELECT state, stage FROM jobs WHERE tenant_id = :t ORDER BY state"),
+                text(
+                    "SELECT state, stage FROM jobs"
+                    " WHERE tenant_id = :t AND kind = 'image_generation' ORDER BY state"
+                ),
                 {"t": committed_tenant.tenant_id},
             )
         ).all()
@@ -399,7 +403,7 @@ async def _unknown_and_in_flight(
 ) -> tuple[UUID, UUID]:
     # One job whose submit outcome is unknown (UNKNOWN, a reconcile is due later), then one
     # accepted job still in progress at the provider.
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     unknown = UUID((await _post_job(client, auth, world, creative_id)).json()["job_id"])
     provider.submit_errors = [ProviderOutcomeUnknownError("Simulated lost response.")]
     await run_once(sessions, {"simulator": provider}, FakeSink(), get_settings())

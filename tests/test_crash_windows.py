@@ -64,8 +64,10 @@ IDEMPOTENCY_KEY = "crash-window-accept-0001"
 
 
 @pytest.fixture
-async def creative_id(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> str:
-    return await _creative(client, auth, world.a)
+async def creative_id(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> str:
+    return await _creative(client, auth, world.a, sessions)
 
 
 @pytest.fixture
@@ -150,7 +152,7 @@ async def test_accept_failing_before_commit_leaves_nothing_and_the_retry_creates
         counts = (
             await connection.execute(
                 text(
-                    "SELECT (SELECT count(*) FROM jobs),"
+                    "SELECT (SELECT count(*) FROM jobs WHERE kind = 'image_generation'),"
                     " (SELECT count(*) FROM credit_reservations),"
                     " (SELECT count(*) FROM outbox_events WHERE event_type = 'job.run')"
                 )

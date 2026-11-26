@@ -13,7 +13,7 @@ import pytest
 
 from app.api.deps import get_demo_stubs
 from app.services.demo_stubs import DemoStubs, StubTimings
-from tests.conftest import CREATOR_A_NAME, AuthHeaders, World
+from tests.conftest import CREATOR_A_NAME, AuthHeaders, Sessions, World, store_validations
 
 API = "/v1/marketing"
 CLEAN_PROMPT = "Invite adults with high blood pressure to learn about our research study."
@@ -79,9 +79,12 @@ async def _validate(
     world: World,
     creative: dict[str, Any],
     kind: str = "brief",
+    worker: Sessions | None = None,
     **extra: str,
 ) -> httpx.Response:
-    return await client.post(
+    # With worker, one worker pass then stores a queued brief or caption run (a job); image runs
+    # come from the demo stubs.
+    response = await client.post(
         f"{API}/validations",
         headers=auth("creator-a", world.a.tenant_id, **_key()),
         json={
@@ -91,6 +94,9 @@ async def _validate(
             **extra,
         },
     )
+    if worker is not None and response.status_code == 202:
+        await store_validations(worker)
+    return response
 
 
 async def _finished_run(
@@ -100,9 +106,10 @@ async def _finished_run(
     clock: FakeClock,
     creative: dict[str, Any],
     kind: str = "brief",
+    worker: Sessions | None = None,
     **extra: str,
 ) -> dict[str, Any]:
-    started = await _validate(client, auth, world, creative, kind, **extra)
+    started = await _validate(client, auth, world, creative, kind, worker, **extra)
     assert started.status_code == 202, started.text
     clock.now += 2
     run = await client.get(
@@ -129,16 +136,18 @@ async def _generate(
 
 
 async def test_image_validation_runs_then_finishes(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
     creative = await _creative(client, auth, world)
-    await _finished_run(client, auth, world, clock, creative)
+    await _finished_run(client, auth, world, clock, creative, worker=sessions)
     job_id = (await _generate(client, auth, world, creative)).json()["job_id"]
     clock.now += 6
     headers = auth("creator-a", world.a.tenant_id)
     asset_id = (await client.get(f"{API}/jobs/{job_id}", headers=headers)).json()["result_asset_id"]
 
-    started = await _validate(client, auth, world, creative, "image", asset_id=asset_id)
+    started = await _validate(
+        client, auth, world, creative, "image", asset_id=asset_id, worker=sessions
+    )
     run_url = f"{API}/validations/{started.json()['validation_run_id']}"
     running = await client.get(run_url, headers=headers)
     clock.now += 2
@@ -153,11 +162,11 @@ async def test_image_validation_runs_then_finishes(
 
 
 async def test_clean_brief_passes_and_makes_the_version_eligible(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
     creative = await _creative(client, auth, world)
 
-    run = await _finished_run(client, auth, world, clock, creative)
+    run = await _finished_run(client, auth, world, clock, creative, worker=sessions)
     eligibility = await client.get(
         f"{API}/creatives/{creative['id']}/generation-eligibility",
         headers=auth("creator-a", world.a.tenant_id),
@@ -171,10 +180,10 @@ async def test_clean_brief_passes_and_makes_the_version_eligible(
 
 
 async def test_failed_brief_blocks_generation(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
     creative = await _creative(client, auth, world, RISKY_PROMPT)
-    run = await _finished_run(client, auth, world, clock, creative)
+    run = await _finished_run(client, auth, world, clock, creative, worker=sessions)
 
     response = await _generate(client, auth, world, creative)
 
@@ -187,10 +196,10 @@ async def test_failed_brief_blocks_generation(
 
 
 async def test_generation_progresses_to_a_downloadable_image_and_export(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
     creative = await _creative(client, auth, world)
-    await _finished_run(client, auth, world, clock, creative)
+    await _finished_run(client, auth, world, clock, creative, worker=sessions)
     headers = auth("creator-a", world.a.tenant_id)
 
     accepted = await _generate(client, auth, world, creative)
@@ -220,12 +229,12 @@ async def test_generation_progresses_to_a_downloadable_image_and_export(
 
 
 async def test_image_validation_flags_payment_in_a_region(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
     # "Get paid" without an amount: REC-06 (payment emphasis) checks images, not briefs, and with
     # no amount REC-08 (approved compensation) has nothing to flag, so the brief still passes.
     creative = await _creative(client, auth, world, f"{CLEAN_PROMPT} Get paid for your time.")
-    brief = await _finished_run(client, auth, world, clock, creative)
+    brief = await _finished_run(client, auth, world, clock, creative, worker=sessions)
     job_id = (await _generate(client, auth, world, creative)).json()["job_id"]
     clock.now += 6
     job = (
@@ -233,7 +242,14 @@ async def test_image_validation_flags_payment_in_a_region(
     ).json()
 
     image = await _finished_run(
-        client, auth, world, clock, creative, "image", asset_id=job["result_asset_id"]
+        client,
+        auth,
+        world,
+        clock,
+        creative,
+        "image",
+        asset_id=job["result_asset_id"],
+        worker=sessions,
     )
 
     # REC-06 (payment emphasis) applies to text and images, not briefs. It is optional, so the
@@ -266,10 +282,10 @@ async def test_same_key_replays_and_different_body_is_rejected(
 
 
 async def test_other_tenant_cannot_see_runs_jobs_or_assets(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
     creative = await _creative(client, auth, world)
-    run = await _finished_run(client, auth, world, clock, creative)
+    run = await _finished_run(client, auth, world, clock, creative, worker=sessions)
     job_id = (await _generate(client, auth, world, creative)).json()["job_id"]
     clock.now += 6
     other = auth("creator-b", world.b.tenant_id)
@@ -296,10 +312,10 @@ async def test_export_needs_an_image_for_the_current_version(
 
 
 async def test_image_of_another_version_is_not_found(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
     creative = await _creative(client, auth, world)
-    await _finished_run(client, auth, world, clock, creative)
+    await _finished_run(client, auth, world, clock, creative, worker=sessions)
     job_id = (await _generate(client, auth, world, creative)).json()["job_id"]
     clock.now += 6
     headers = auth("creator-a", world.a.tenant_id)
@@ -310,17 +326,21 @@ async def test_image_of_another_version_is_not_found(
         json={"caption": "Learn about a research study near you. Taking part is voluntary."},
     )
 
-    response = await _validate(client, auth, world, edited.json(), "image", asset_id=asset_id)
+    response = await _validate(
+        client, auth, world, edited.json(), "image", asset_id=asset_id, worker=sessions
+    )
 
     assert response.status_code == 404
 
 
 async def test_image_validation_needs_a_generated_asset(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     creative = await _creative(client, auth, world)
 
-    response = await _validate(client, auth, world, creative, "image", asset_id=str(uuid4()))
+    response = await _validate(
+        client, auth, world, creative, "image", asset_id=str(uuid4()), worker=sessions
+    )
 
     assert response.status_code == 404
 
@@ -332,6 +352,7 @@ async def test_unknown_or_unfinished_file_is_not_found(client: httpx.AsyncClient
 
 
 async def _generated_image(
+    sessions: Sessions,
     client: httpx.AsyncClient,
     auth: AuthHeaders,
     world: World,
@@ -339,7 +360,7 @@ async def _generated_image(
     prompt: str = CLEAN_PROMPT,
 ) -> str:
     creative = await _creative(client, auth, world, prompt)
-    await _finished_run(client, auth, world, clock, creative)
+    await _finished_run(client, auth, world, clock, creative, worker=sessions)
     job_id = (await _generate(client, auth, world, creative)).json()["job_id"]
     clock.now += 6
     job = await client.get(f"{API}/jobs/{job_id}", headers=auth("creator-a", world.a.tenant_id))
@@ -348,12 +369,14 @@ async def _generated_image(
 
 
 async def test_media_lists_finished_images_newest_first_in_pages(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
 ) -> None:
-    older = await _generated_image(client, auth, world, clock)
-    newer = await _generated_image(client, auth, world, clock, f"{CLEAN_PROMPT} Ask your doctor.")
+    older = await _generated_image(sessions, client, auth, world, clock)
+    newer = await _generated_image(
+        sessions, client, auth, world, clock, f"{CLEAN_PROMPT} Ask your doctor."
+    )
     unfinished = await _creative(client, auth, world, f"{CLEAN_PROMPT} Find out more.")
-    await _finished_run(client, auth, world, clock, unfinished)
+    await _finished_run(client, auth, world, clock, unfinished, worker=sessions)
     await _generate(client, auth, world, unfinished)
     headers = auth("creator-a", world.a.tenant_id)
 
@@ -376,9 +399,13 @@ async def test_media_lists_finished_images_newest_first_in_pages(
 
 
 async def test_media_of_another_tenant_is_not_listed(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, clock: FakeClock
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    world: World,
+    auth: AuthHeaders,
+    clock: FakeClock,
 ) -> None:
-    await _generated_image(client, auth, world, clock)
+    await _generated_image(sessions, client, auth, world, clock)
 
     response = await client.get(f"{API}/media", headers=auth("creator-b", world.b.tenant_id))
 

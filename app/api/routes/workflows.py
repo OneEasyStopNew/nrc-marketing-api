@@ -8,12 +8,11 @@ from uuid import UUID
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
-    ContextProviderDep,
-    ContextTimeoutDep,
     CreativeReader,
     DbSession,
     DemoStubsDep,
     IdempotencyKey,
+    SettingsDep,
     ValidationRunner,
     require_stubs,
 )
@@ -40,6 +39,11 @@ _VALIDATIONS: dict[int | str, dict[str, Any]] = {
         "model": ErrorBody,
         "description": "NO_ACTIVE_POLICY, or Idempotency-Key reused with a different body.",
     },
+    429: {
+        "model": ErrorBody,
+        "description": "VALIDATION_LIMIT_REACHED: too many validations queued or running for the "
+        "tenant; retry later.",
+    },
 }
 
 
@@ -48,17 +52,19 @@ _VALIDATIONS: dict[int | str, dict[str, Any]] = {
     tags=["validations"],
     status_code=status.HTTP_202_ACCEPTED,
     summary="Validate a brief, caption or image",
-    description="Briefs and captions are checked against the active policy and the study facts "
-    "before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until "
-    "validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until "
-    "SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run. Each "
-    "brief or caption run also stores the policy context it was checked against (see "
-    "GET /validations/{validation_run_id}/context). What that context can't settle is part of "
-    "the stored run: a mandatory rule with a missing source, unresolved applicability or an "
-    "incomplete walk is UNABLE_TO_ASSESS, one in a conflict NEEDS_REVIEW, and a FAIL stays "
-    "FAIL; the run is then never PASS. If the context can't be gathered at all (each of its "
-    "database queries has a time limit), every mandatory rule is UNABLE_TO_ASSESS. Gaps on "
-    "optional rules are coverage gaps only.",
+    description="Briefs and captions are queued as a job (state QUEUED) and checked against the "
+    "active policy and the study facts by the worker: poll GET /validations/{validation_run_id} "
+    "until SUCCEEDED (or FAILED). Semantic rules need the model check (VALIDATION_MODEL_MODE); "
+    "without it they stay UNABLE_TO_ASSESS. A finished PASS or FAIL with identical content, "
+    "configuration and versions is reused (state SUCCEEDED). job_id equals validation_run_id. "
+    "Images need DEMO_STUBS (501 otherwise); poll those until SUCCEEDED. A retry with the same "
+    "Idempotency-Key and body returns the original run. Each brief or caption run also stores "
+    "the policy context it was checked against (see GET /validations/{validation_run_id}/context). "
+    "What that context can't settle is part of the stored run: a mandatory rule with a missing "
+    "source, unresolved applicability or an incomplete walk is UNABLE_TO_ASSESS, one in a "
+    "conflict NEEDS_REVIEW, and a FAIL stays FAIL; the run is then never PASS. If the context "
+    "can't be gathered at all (each of its database queries has a time limit), every mandatory "
+    "rule is UNABLE_TO_ASSESS. Gaps on optional rules are coverage gaps only.",
     responses=_VALIDATIONS,
 )
 async def create_validation(
@@ -67,8 +73,7 @@ async def create_validation(
     db: DbSession,
     idempotency_key: IdempotencyKey,
     stubs: DemoStubsDep,
-    context_provider: ContextProviderDep,
-    context_timeout: ContextTimeoutDep,
+    settings: SettingsDep,
     response: Response,
 ) -> ValidationAccepted:
     if body.input_kind is ValidationInputKind.IMAGE:
@@ -76,7 +81,7 @@ async def create_validation(
         accepted, replayed = await service.start_validation(db, ctx, body, idempotency_key)
     else:
         accepted, replayed = await validations.create_validation(
-            db, ctx, body, idempotency_key, context_provider, context_timeout
+            db, ctx, body, idempotency_key, settings
         )
     if replayed:
         response.headers["Idempotent-Replayed"] = "true"

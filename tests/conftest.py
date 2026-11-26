@@ -45,7 +45,7 @@ from app.api.deps import get_db, get_signing_keys
 from app.core.config import get_settings
 from app.core.errors import AuthenticationError
 from app.db.base import Base
-from app.db.session import TenantSession, bind_tenant
+from app.db.session import TenantSession, bind_tenant, create_engine, create_sessionmaker
 from app.main import create_app
 from app.models import (
     Asset,
@@ -58,7 +58,7 @@ from app.models import (
     StudySnapshot,
     Tenant,
 )
-from app.models.enums import BundleLifecycleState, Language, RecruitmentStatus
+from app.models.enums import BundleLifecycleState, CheckType, Language, RecruitmentStatus
 from app.models.jobs import ReservationState
 from app.services.providers.base import (
     FetchedImage,
@@ -69,7 +69,9 @@ from app.services.providers.base import (
     SubmitResult,
 )
 from app.services.providers.simulator import SimulatedImageProvider
-from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
+from app.services.validations import VALIDATION_RUN_EVENT
+from app.workers.connector import EVENT_HANDLERS, run_once
+from scripts.import_policy_graph import PolicyGraphImport, import_policy_graph, load_synthetic_graph
 from scripts.seed_demo import DEMO_POLICY_NAME, SYNTHETIC_FACTS, demo_policy_rules
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,6 +118,7 @@ def app_environment(test_env: IntegrationEnv) -> Iterator[None]:
         patch.setenv("DEMO_STUBS", "false")
         patch.setenv("DEV_JWKS_FILE", "")
         patch.setenv("EMBEDDING_MODE", "off")
+        patch.setenv("VALIDATION_MODEL_MODE", "off")
         # Local SeaweedFS; these credentials only open that container, not AWS.
         patch.setenv("AWS_S3_BUCKET", BUCKET)
         patch.setenv("AWS_ENDPOINT_URL_S3", ENDPOINT)
@@ -202,6 +205,7 @@ async def seed_tenant(
     with_policy: bool,
     display_names: Mapping[str, str] | None = None,
     with_graph: bool = True,
+    graph: PolicyGraphImport | None = None,
 ) -> SeededTenant:
     # Tenant with one recruiting and one closed synthetic study; every member gets both.
     tenant_id, study_id, closed_study_id, snapshot_id = uuid4(), uuid4(), uuid4(), uuid4()
@@ -262,7 +266,9 @@ async def seed_tenant(
         # With its rulebook graph, like seed_demo and the staging deploy step: without one every
         # validation needs review (no policy context), so a clean brief could never pass.
         if with_graph:
-            await import_policy_graph(db, tenant_id, policy_bundle_id, load_synthetic_graph())
+            await import_policy_graph(
+                db, tenant_id, policy_bundle_id, graph or load_synthetic_graph()
+            )
     await db.flush()
     return SeededTenant(tenant_id, study_id, closed_study_id, snapshot_id, policy_bundle_id)
 
@@ -398,6 +404,28 @@ def sessions(connection: AsyncConnection) -> Sessions:
 
 
 @pytest.fixture
+async def committed_worker_sessions(test_env: IntegrationEnv) -> AsyncIterator[Sessions]:
+    # The worker's sessions on committed data (for tests that use committed_tenant).
+    engine = create_engine(get_settings(), test_env.test_worker_database_url)
+    try:
+        yield create_sessionmaker(engine)
+    finally:
+        await engine.dispose()
+
+
+async def store_validations(sessions: Sessions) -> int:
+    # Validation is a worker job: one worker pass over the validation events stores the queued
+    # runs. Generation events are left alone. Returns how many events ran.
+    return await run_once(
+        sessions,
+        {},
+        None,
+        get_settings(),
+        event_handlers={VALIDATION_RUN_EVENT: EVENT_HANDLERS[VALIDATION_RUN_EVENT]},
+    )
+
+
+@pytest.fixture
 def seed_graph() -> bool:
     # Whether tenant A's bundle gets the synthetic graph. Modules that write their own graph rows
     # into that bundle override this with False.
@@ -405,7 +433,29 @@ def seed_graph() -> bool:
 
 
 @pytest.fixture
-async def world(connection: AsyncConnection, seed_graph: bool) -> World:
+def graph() -> PolicyGraphImport:
+    # The graph tenant A's bundle gets. By default every rule is checked by code, so a clean
+    # brief passes and the generation gate opens (job, worker and media tests need that). Tests
+    # of semantic rules, which can't pass until the model check exists, parametrize "graph" with
+    # load_synthetic_graph().
+    return deterministic_synthetic_graph()
+
+
+def deterministic_synthetic_graph() -> PolicyGraphImport:
+    # Every rule checked by code alone, so a clean brief can pass (the generation gate needs one).
+    base = load_synthetic_graph()
+    return base.model_copy(
+        update={
+            "rules": [
+                rule.model_copy(update={"check_type": CheckType.DETERMINISTIC})
+                for rule in base.rules
+            ]
+        }
+    )
+
+
+@pytest.fixture
+async def world(connection: AsyncConnection, seed_graph: bool, graph: PolicyGraphImport) -> World:
     async with _session(connection) as seed:
         a = await seed_tenant(
             seed,
@@ -414,6 +464,7 @@ async def world(connection: AsyncConnection, seed_graph: bool) -> World:
             with_policy=True,
             display_names={"creator-a": CREATOR_A_NAME},
             with_graph=seed_graph,
+            graph=graph,
         )
         b = await seed_tenant(
             seed, name="Tenant B", members={"creator-b": ["creator"]}, with_policy=False
@@ -475,14 +526,21 @@ def auth(signing_key: RSAPrivateKey) -> AuthHeaders:
 
 
 @pytest.fixture
-async def committed_tenant(test_env: IntegrationEnv) -> AsyncIterator[SeededTenant]:
+async def committed_tenant(
+    test_env: IntegrationEnv, graph: PolicyGraphImport
+) -> AsyncIterator[SeededTenant]:
     # Committed data (no shared test transaction), so parallel requests really race.
     engine = create_async_engine(
         test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
     )
     async with AsyncSession(engine, expire_on_commit=False) as db:
         seeded = await seed_tenant(
-            db, name="Job race tenant", members={"creator-a": ["creator"]}, with_policy=True
+            db,
+            name="Job race tenant",
+            members={"creator-a": ["creator"]},
+            with_policy=True,
+            # The same graph fixture as world (by default every rule is checked by code).
+            graph=graph,
         )
         await db.commit()
     try:
@@ -514,10 +572,12 @@ async def _creative(
     client: httpx.AsyncClient,
     auth: AuthHeaders,
     tenant: SeededTenant,
+    worker: Sessions,
     *,
     prompt: str = "Invite adults with high blood pressure to learn about the study.",
 ) -> str:
-    # Creates a draft and validates its brief: generation needs a stored run (NRC-7 gate).
+    # Creates a draft and validates its brief, running the validation job on the worker's
+    # sessions: generation needs a stored run (NRC-7 gate).
     response = await client.post(
         "/v1/marketing/creatives",
         headers=auth("creator-a", tenant.tenant_id, **{"Idempotency-Key": uuid4().hex}),
@@ -537,6 +597,7 @@ async def _creative(
         json={"creative_id": creative_id, "creative_version": 1, "input_kind": "brief"},
     )
     assert validation.status_code == 202, validation.text
+    await store_validations(worker)
     return creative_id
 
 

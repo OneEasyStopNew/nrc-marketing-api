@@ -407,6 +407,24 @@ async def test_expired_or_unloadable_credentials_are_a_config_error(error: Excep
     assert not caught.value.retryable
 
 
+async def test_a_container_credential_blip_is_retried_not_a_config_error() -> None:
+    # EKS Pod Identity serves credentials from a local agent ("container-role"); a short outage
+    # there is temporary, so it is the retryable "unavailable" error.
+    client = boto3.Session().client("bedrock-runtime", region_name="us-east-1")
+    provider = BedrockEmbeddingProvider(model_id=TITAN_V2_MODEL_ID, client=client)
+    error = CredentialRetrievalError(provider="container-role", error_msg="connection refused")
+
+    with (
+        patch.object(client, "invoke_model", side_effect=error),
+        pytest.raises(
+            ProviderUnavailableError, match="credentials temporarily unavailable"
+        ) as caught,
+    ):
+        await provider.embed(["a"], DOCUMENT)
+
+    assert caught.value.retryable
+
+
 def test_unsupported_model_id_is_a_config_error() -> None:
     client = boto3.Session().client("bedrock-runtime", region_name="us-east-1")
 

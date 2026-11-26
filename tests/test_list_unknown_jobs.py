@@ -16,6 +16,7 @@ from tests.conftest import (
     AuthHeaders,
     IntegrationEnv,
     SeededTenant,
+    Sessions,
     StaticKeys,
     World,
     _creative,
@@ -23,7 +24,9 @@ from tests.conftest import (
 )
 
 
-async def _accept_jobs(tenant: SeededTenant, signing_key: RSAPrivateKey, count: int) -> list[str]:
+async def _accept_jobs(
+    worker: Sessions, tenant: SeededTenant, signing_key: RSAPrivateKey, count: int
+) -> list[str]:
     app = create_app()
     app.dependency_overrides[get_signing_keys] = lambda: StaticKeys(signing_key)
     auth = AuthHeaders(signing_key)
@@ -31,7 +34,7 @@ async def _accept_jobs(tenant: SeededTenant, signing_key: RSAPrivateKey, count: 
         LifespanManager(app),
         httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http,
     ):
-        creative_id = await _creative(http, auth, tenant)
+        creative_id = await _creative(http, auth, tenant, worker)
         responses = [
             await _post_job(http, auth, World(tenant, tenant), creative_id) for _ in range(count)
         ]
@@ -39,16 +42,21 @@ async def _accept_jobs(tenant: SeededTenant, signing_key: RSAPrivateKey, count: 
 
 
 async def test_lists_only_unknown_jobs_the_worker_stopped_on(
-    committed_tenant: SeededTenant, signing_key: RSAPrivateKey, test_env: IntegrationEnv
+    committed_tenant: SeededTenant,
+    signing_key: RSAPrivateKey,
+    test_env: IntegrationEnv,
+    committed_worker_sessions: Sessions,
 ) -> None:
-    stopped, reconciling = await _accept_jobs(committed_tenant, signing_key, 2)
+    stopped, reconciling = await _accept_jobs(
+        committed_worker_sessions, committed_tenant, signing_key, 2
+    )
     url = test_env.test_migration_database_url.get_secret_value()
     engine = create_async_engine(url, poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.execute(
             text(
                 "UPDATE jobs SET state = 'UNKNOWN', failure_code = 'ATTEMPTS_EXHAUSTED'"
-                " WHERE tenant_id = :t"
+                " WHERE tenant_id = :t AND kind = 'image_generation'"
             ),
             {"t": committed_tenant.tenant_id},
         )

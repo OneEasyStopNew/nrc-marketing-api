@@ -15,6 +15,7 @@ from app.schemas.policies import GenerationEligibility, PolicyBundleRead
 from app.schemas.policy_evidence import PolicyBundleRulesRead, ValidationContextRead
 from app.schemas.tenancy import ContextRead, MeRead
 from app.schemas.uploads import UploadLimits, UploadPage, UploadRead
+from app.schemas.validations import ValidationAccepted, ValidationRunRead
 from scripts.export_openapi import CONTRACT_PATH, render
 
 EXAMPLE_FILES = sorted(
@@ -35,10 +36,12 @@ SCHEMAS: dict[str, type[BaseModel]] = {
         MeRead,
         PolicyBundleRead,
         PolicyBundleRulesRead,
+        ValidationAccepted,
         UploadLimits,
         UploadPage,
         UploadRead,
         ValidationContextRead,
+        ValidationRunRead,
     )
 }
 
@@ -86,3 +89,6 @@ def test_example_matches_schema(file: str, name: str) -> None:
     model = SCHEMAS[example["schema"]].model_validate(example["body"])
 
     assert model.model_dump(mode="json") == example["body"]
+    if isinstance(model, ValidationAccepted | ValidationRunRead):
+        # The API uses the job's id as the run's id (test_validation_jobs._queued checks it).
+        assert model.job_id == model.validation_run_id

@@ -31,6 +31,7 @@ from tests.conftest import (
     FakeSink,
     IntegrationEnv,
     SeededTenant,
+    Sessions,
     StaticKeys,
     _creative,
 )
@@ -113,9 +114,10 @@ async def _until_a_session_waits_on_a_lock(test_env: IntegrationEnv) -> None:
 
 
 async def _queued_job(
-    http: httpx.AsyncClient, auth: AuthHeaders, tenant: SeededTenant, key: str
+    http: httpx.AsyncClient, auth: AuthHeaders, tenant: SeededTenant, worker: Sessions, key: str
 ) -> str:
-    creative_id = await _creative(http, auth, tenant)
+    # worker: the worker's sessions on committed data, which store the brief's validation run.
+    creative_id = await _creative(http, auth, tenant, worker)
     response = await http.post(
         JOBS,
         headers=auth("creator-a", tenant.tenant_id, **{"Idempotency-Key": key}),
@@ -188,9 +190,12 @@ async def test_cancel_during_the_provider_submit_answers_at_once_and_keeps_the_r
     committed_tenant: SeededTenant,
     signing_key: RSAPrivateKey,
     test_env: IntegrationEnv,
+    committed_worker_sessions: Sessions,
 ) -> None:
     auth = AuthHeaders(signing_key)
-    job_id = await _queued_job(http, auth, committed_tenant, "cancel-race-submit")
+    job_id = await _queued_job(
+        http, auth, committed_tenant, committed_worker_sessions, "cancel-race-submit"
+    )
     provider, responses = HookProvider(), list[httpx.Response]()
     provider.before_submit = _cancel_from_inside(http, auth, committed_tenant, job_id, responses)
 
@@ -204,7 +209,7 @@ async def test_cancel_during_the_provider_submit_answers_at_once_and_keeps_the_r
         "SELECT j.state, j.provider_request_id,"
         " (SELECT count(*) FROM outbox_events o WHERE o.job_id = j.id"
         "  AND o.processed_at IS NULL) AS pending"
-        " FROM jobs j WHERE j.tenant_id = :t",
+        " FROM jobs j WHERE j.tenant_id = :t AND j.kind = 'image_generation'",
         committed_tenant,
     )
     # The worker didn't lose the provider's answer to the cancel, and kept the event.
@@ -222,9 +227,12 @@ async def test_cancel_during_the_output_fetch_answers_at_once_and_keeps_no_asset
     committed_tenant: SeededTenant,
     signing_key: RSAPrivateKey,
     test_env: IntegrationEnv,
+    committed_worker_sessions: Sessions,
 ) -> None:
     auth = AuthHeaders(signing_key)
-    job_id = await _queued_job(http, auth, committed_tenant, "cancel-race-fetch")
+    job_id = await _queued_job(
+        http, auth, committed_tenant, committed_worker_sessions, "cancel-race-fetch"
+    )
     provider, responses = HookProvider(), list[httpx.Response]()
     provider.before_fetch = _cancel_from_inside(http, auth, committed_tenant, job_id, responses)
 
@@ -247,13 +255,16 @@ async def test_cancel_while_the_worker_closes_its_event_still_leaves_one_to_fini
     signing_key: RSAPrivateKey,
     test_env: IntegrationEnv,
     monkeypatch: pytest.MonkeyPatch,
+    committed_worker_sessions: Sessions,
 ) -> None:
     # The worker's step has nothing more to do (no image storage, so the job parks at
     # output_ready) and it closes its event; the cancel lands between the worker's last job
     # update and its commit. Either the worker keeps its event or the cancel adds one, never
     # neither (or the job sits in CANCEL_REQUESTED with nothing to finish it).
     auth = AuthHeaders(signing_key)
-    job_id = await _queued_job(http, auth, committed_tenant, "cancel-race-close")
+    job_id = await _queued_job(
+        http, auth, committed_tenant, committed_worker_sessions, "cancel-race-close"
+    )
     real_finish = connector._finish_event
     cancels: list[asyncio.Task[httpx.Response]] = []
 
@@ -283,7 +294,7 @@ async def test_cancel_while_the_worker_closes_its_event_still_leaves_one_to_fini
         test_env,
         "SELECT j.state, j.stage, (SELECT count(*) FROM outbox_events o WHERE o.job_id = j.id"
         "  AND o.event_type = 'job.run' AND o.processed_at IS NULL) AS pending"
-        " FROM jobs j WHERE j.tenant_id = :t",
+        " FROM jobs j WHERE j.tenant_id = :t AND j.kind = 'image_generation'",
         committed_tenant,
     )
     assert (row.state, row.stage, row.pending) == ("CANCEL_REQUESTED", "output_ready", 1)
@@ -304,9 +315,12 @@ async def test_cancel_of_a_job_row_held_by_another_transaction_is_a_retryable_50
     committed_tenant: SeededTenant,
     signing_key: RSAPrivateKey,
     test_env: IntegrationEnv,
+    committed_worker_sessions: Sessions,
 ) -> None:
     auth = AuthHeaders(signing_key)
-    job_id = await _queued_job(http, auth, committed_tenant, "cancel-race-locked")
+    job_id = await _queued_job(
+        http, auth, committed_tenant, committed_worker_sessions, "cancel-race-locked"
+    )
     engine = create_async_engine(
         test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
     )
@@ -328,6 +342,8 @@ async def test_cancel_of_a_job_row_held_by_another_transaction_is_a_retryable_50
     body = response.json()
     assert (body["code"], body["retryable"]) == ("DEPENDENCY_UNAVAILABLE", True)
     [state] = await _owner(
-        test_env, "SELECT state FROM jobs WHERE tenant_id = :t", committed_tenant
+        test_env,
+        "SELECT state FROM jobs WHERE tenant_id = :t AND kind = 'image_generation'",
+        committed_tenant,
     )
     assert state.state == "QUEUED"

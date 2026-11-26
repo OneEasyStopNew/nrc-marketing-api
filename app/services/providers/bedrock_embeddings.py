@@ -22,19 +22,15 @@ from typing import TYPE_CHECKING, Final
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import (
-    BotoCoreError,
-    ClientError,
-    CredentialRetrievalError,
-    NoCredentialsError,
-    NoRegionError,
-    PartialCredentialsError,
-    SSOError,
-    TokenRetrievalError,
-)
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import EmbeddingSettings
 from app.models.policy_graph import EMBEDDING_DIMENSIONS
+from app.services.providers.aws_errors import (
+    EXPIRED_CREDENTIAL_ERRORS,
+    MISSING_CREDENTIAL_ERRORS,
+    is_transient_credential_error,
+)
 from app.services.providers.base import (
     ProviderConfigError,
     ProviderError,
@@ -206,12 +202,16 @@ class BedrockEmbeddingProvider:
             payload = response["body"].read()
         except ClientError as error:
             raise self._classify(error) from None
-        except NoCredentialsError, PartialCredentialsError, NoRegionError:
+        except MISSING_CREDENTIAL_ERRORS:
             raise ProviderConfigError(
                 f"Bedrock embedding model {self.model_id}: AWS credentials or region missing"
             ) from None
-        except SSOError, TokenRetrievalError, CredentialRetrievalError:
-            # An expired sign-in or a role that can't be assumed: retrying won't renew it.
+        except EXPIRED_CREDENTIAL_ERRORS as error:
+            if is_transient_credential_error(error):
+                raise ProviderUnavailableError(
+                    f"Bedrock embedding model {self.model_id}: AWS credentials temporarily "
+                    "unavailable"
+                ) from None
             raise ProviderConfigError(
                 f"Bedrock embedding model {self.model_id}: AWS credentials missing or expired"
             ) from None

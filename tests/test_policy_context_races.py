@@ -3,6 +3,7 @@
 import asyncio
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -17,8 +18,15 @@ from app.services.policy_context import (
     ContextScope,
     StoredManifest,
 )
-from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
+from scripts.import_policy_graph import PolicyGraphImport, import_policy_graph, load_synthetic_graph
 from tests.conftest import IntegrationEnv, SeededTenant
+
+
+@pytest.fixture
+def graph() -> PolicyGraphImport:
+    # These races re-import the real synthetic graph into the committed bundle, so it must hold
+    # that graph, not conftest's code-checked default.
+    return load_synthetic_graph()
 
 
 async def test_parallel_identical_builds_store_one_manifest(

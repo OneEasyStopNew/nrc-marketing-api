@@ -2,28 +2,30 @@
 # contract, "Retrieval gaps"): a mandatory rule with a missing source, unresolved applicability
 # or an incomplete graph walk is saved UNABLE_TO_ASSESS, one in a conflict NEEDS_REVIEW, FAIL
 # stays FAIL, and a gap on an optional rule is only a warning. The generation gate reads the
-# saved run, so each case also checks admission.
+# saved run, so each case also checks admission. Validation is a worker job (NRC-7): each case
+# queues the run and lets one worker pass store it, as production does.
 
-from collections.abc import Callable
 from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
-import pytest
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
-from app.api.deps import get_context_provider
 from app.core.config import get_settings
 from app.models import PolicyEdge, PolicyNode, PolicyRuleRecord
 from app.models.enums import PolicyEdgeType
-from app.services.policy_context import AuroraPolicyContextProvider
-from tests.conftest import JOBS, AuthHeaders, World, owner_session
+from app.services.policy_context import AuroraPolicyContextProvider, PolicyContextProvider
+from app.services.validations import INPUT_BY_JOB_KIND, VALIDATION_RUN_EVENT
+from app.workers.connector import JobRunHandler, ValidationJobHandler, run_once
+from tests.conftest import JOBS, AuthHeaders, Sessions, World, owner_session
 
 API = "/v1/marketing"
 CLEAN_PROMPT = "Invite adults with high blood pressure to learn about our research study."
 RISKY_PROMPT = "Guaranteed results! Try this new drug for free treatment."
 CAPTION = "Learn about a research study near you. Taking part is voluntary."
+# Gets the same rule results as CAPTION, but isn't equal text (no reuse of CAPTION's result).
+OTHER_CAPTION = "Learn about a research study in your area. Taking part is voluntary."
 # A caption every seeded caption rule passes (the demo's passing caption).
 PASSING_CAPTION = (
     "Adults aged 18 to 75 with high blood pressure may be able to join a research study of an "
@@ -66,10 +68,12 @@ async def _validate(
     client: httpx.AsyncClient,
     auth: AuthHeaders,
     world: World,
+    sessions: Sessions,
     *,
     prompt: str = CLEAN_PROMPT,
     caption: str = CAPTION,
     kind: str = "brief",
+    provider: PolicyContextProvider | None = None,
 ) -> tuple[str, dict[str, Any]]:
     headers = auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": uuid4().hex})
     creative = await client.post(
@@ -92,6 +96,18 @@ async def _validate(
         json={"creative_id": creative_id, "creative_version": 1, "input_kind": kind},
     )
     assert accepted.status_code == 202, accepted.text
+    # The worker's own handler (from settings), or one with this context provider.
+    handler = ValidationJobHandler(context_provider=provider)
+    ran = await run_once(
+        sessions,
+        {},
+        None,
+        get_settings(),
+        event_handlers={
+            VALIDATION_RUN_EVENT: JobRunHandler(dict.fromkeys(INPUT_BY_JOB_KIND, handler))
+        },
+    )
+    assert ran == 1
     run = await client.get(
         f"{API}/validations/{accepted.json()['validation_run_id']}",
         headers=auth("creator-a", world.a.tenant_id),
@@ -120,22 +136,26 @@ def _gap_rules(run: dict[str, Any], code: str) -> set[str]:
 
 
 async def test_clean_brief_with_a_complete_context_still_passes(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
 ) -> None:
     # The baseline the cases below change: the seeded rulebook settles every mandatory rule.
-    creative_id, run = await _validate(client, auth, world)
+    creative_id, run = await _validate(client, auth, world, sessions)
 
     assert run["outcome"] == "PASS"
     assert (await _eligibility(client, auth, world, creative_id))["eligible"] is True
 
 
 async def test_missing_source_on_a_passing_mandatory_rule_is_saved_and_blocks_generation(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
 ) -> None:
     # REC-02's phrase check passes on this brief, but its evidence was never retrieved.
     await _remove_source(connection, world, "REC-02")
 
-    creative_id, run = await _validate(client, auth, world)
+    creative_id, run = await _validate(client, auth, world, sessions)
 
     assert _results(run)["REC-02"] == "UNABLE_TO_ASSESS"
     assert run["outcome"] == "NEEDS_REVIEW"
@@ -151,7 +171,11 @@ async def test_missing_source_on_a_passing_mandatory_rule_is_saved_and_blocks_ge
 
 
 async def test_unresolved_applicability_on_a_mandatory_rule_needs_review(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
 ) -> None:
     # A validation never knows the audience, so an audience-restricted rule stays unresolved.
     async with owner_session(connection, world.a.tenant_id) as db:
@@ -160,7 +184,7 @@ async def test_unresolved_applicability_on_a_mandatory_rule_needs_review(
             update(PolicyNode).where(PolicyNode.id == node_id).values(audiences=["adults"])
         )
 
-    creative_id, run = await _validate(client, auth, world)
+    creative_id, run = await _validate(client, auth, world, sessions)
 
     assert _results(run)["REC-03"] == "UNABLE_TO_ASSESS"
     assert run["outcome"] == "NEEDS_REVIEW"
@@ -169,23 +193,17 @@ async def test_unresolved_applicability_on_a_mandatory_rule_needs_review(
 
 
 def _one_hop() -> AuroraPolicyContextProvider:
-    # Read at request time, never while pytest collects (CI has no env file then).
+    # Read when the test runs, never while pytest collects (CI has no env file then).
     settings = get_settings().model_copy(update={"policy_retrieval_max_hops": 1})
     return AuroraPolicyContextProvider(settings)
 
 
-Overrides = dict[Callable[..., object], Callable[..., object]]
-
-
-@pytest.fixture
-def app_overrides(request: pytest.FixtureRequest) -> Overrides:
-    overrides: Overrides = getattr(request, "param", {})
-    return overrides
-
-
-@pytest.mark.parametrize("app_overrides", [{get_context_provider: _one_hop}], indirect=True)
 async def test_incomplete_walk_leaves_every_mandatory_rule_unassessed(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
 ) -> None:
     # REC-01 -> EXC-01 -> EXC-02 needs two hops; with one, the walk is cut short. The cut names no
     # rule, so no mandatory rule can be trusted.
@@ -203,7 +221,7 @@ async def test_incomplete_walk_leaves_every_mandatory_rule_unassessed(
             )
         )
 
-    creative_id, run = await _validate(client, auth, world)
+    creative_id, run = await _validate(client, auth, world, sessions, provider=_one_hop())
 
     results = _results(run)
     assert {rule_id: results[rule_id] for rule_id in BRIEF_MANDATORY} == dict.fromkeys(
@@ -215,7 +233,11 @@ async def test_incomplete_walk_leaves_every_mandatory_rule_unassessed(
 
 
 async def test_conflicting_mandatory_rules_need_review_not_unassessed(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
 ) -> None:
     # REC-02 and REC-03 supersede each other: a person must decide, and may (NRC-12).
     async with owner_session(connection, world.a.tenant_id) as db:
@@ -234,7 +256,7 @@ async def test_conflicting_mandatory_rules_need_review_not_unassessed(
             for newer, older in ((rec_02, rec_03), (rec_03, rec_02))
         )
 
-    creative_id, run = await _validate(client, auth, world)
+    creative_id, run = await _validate(client, auth, world, sessions)
 
     conflicted = _gap_rules(run, "CONFLICT")
     assert conflicted
@@ -245,11 +267,15 @@ async def test_conflicting_mandatory_rules_need_review_not_unassessed(
 
 
 async def test_failed_rule_stays_failed_when_its_context_is_incomplete(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
 ) -> None:
     await _remove_source(connection, world, *BRIEF_MANDATORY)
 
-    creative_id, run = await _validate(client, auth, world, prompt=RISKY_PROMPT)
+    creative_id, run = await _validate(client, auth, world, sessions, prompt=RISKY_PROMPT)
 
     results = _results(run)
     failed = {rule_id for rule_id, result in results.items() if result == "FAIL"}
@@ -262,13 +288,19 @@ async def test_failed_rule_stays_failed_when_its_context_is_incomplete(
 
 
 async def test_gap_on_an_optional_rule_is_only_a_warning(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
 ) -> None:
     # REC-06 is optional and applies to captions.
-    _, before = await _validate(client, auth, world, kind="text")
+    _, before = await _validate(client, auth, world, sessions, kind="text")
     await _remove_source(connection, world, "REC-06")
 
-    _, after = await _validate(client, auth, world, kind="text")
+    # Other text, so the earlier finished result isn't reused (tests edit the graph in place,
+    # which an imported bundle never allows).
+    _, after = await _validate(client, auth, world, sessions, caption=OTHER_CAPTION, kind="text")
 
     assert (after["outcome"], _results(after)) == (before["outcome"], _results(before))
     [warning] = [gap for gap in after["coverage_gaps"] if "(SOURCE_MISSING" in gap["reason"]]
@@ -276,11 +308,15 @@ async def test_gap_on_an_optional_rule_is_only_a_warning(
 
 
 async def test_rule_mandatory_only_in_the_graph_still_blocks_the_run(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
 ) -> None:
     # The import matches rule ids, not mandatory flags: here the graph makes REC-06 mandatory
     # while the bundle's rules keep it optional, and its source is missing.
-    _, before = await _validate(client, auth, world, caption=PASSING_CAPTION, kind="text")
+    _, before = await _validate(client, auth, world, sessions, caption=PASSING_CAPTION, kind="text")
     assert before["outcome"] == "PASS"
     async with owner_session(connection, world.a.tenant_id) as db:
         await db.execute(
@@ -293,7 +329,10 @@ async def test_rule_mandatory_only_in_the_graph_still_blocks_the_run(
         )
     await _remove_source(connection, world, "REC-06")
 
-    _, run = await _validate(client, auth, world, caption=PASSING_CAPTION, kind="text")
+    # Other passing text, so the earlier PASS isn't reused (see the test above).
+    _, run = await _validate(
+        client, auth, world, sessions, caption=f"{PASSING_CAPTION} Learn more today.", kind="text"
+    )
 
     assert _results(run)["REC-06"] == "UNABLE_TO_ASSESS"
     assert run["outcome"] == "NEEDS_REVIEW"
@@ -301,7 +340,11 @@ async def test_rule_mandatory_only_in_the_graph_still_blocks_the_run(
 
 
 async def test_run_without_any_context_marks_every_mandatory_rule(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
 ) -> None:
     # A bundle without a graph: the whole context is missing, not just part of it.
     async with owner_session(connection, world.a.tenant_id) as db:
@@ -311,7 +354,7 @@ async def test_run_without_any_context_marks_every_mandatory_rule(
             .values(approved=False)
         )
 
-    creative_id, run = await _validate(client, auth, world)
+    creative_id, run = await _validate(client, auth, world, sessions)
 
     results = _results(run)
     assert {results[rule_id] for rule_id in BRIEF_MANDATORY} == {"UNABLE_TO_ASSESS"}

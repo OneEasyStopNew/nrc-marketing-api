@@ -62,8 +62,10 @@ AUDIT_QUERY = (
 
 
 @pytest.fixture
-async def job_id(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> UUID:
-    creative_id = await _creative(client, auth, world.a)
+async def job_id(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> UUID:
+    creative_id = await _creative(client, auth, world.a, sessions)
     response = await _post_job(client, auth, world, creative_id)
     assert response.status_code == 202
     return UUID(response.json()["job_id"])
@@ -641,7 +643,7 @@ def test_script_main_stops_with_exit_code_2_without_the_worker_database_url(
     assert "WORKER_DATABASE_URL" in capsys.readouterr().out
 
 
-async def _accept_job(tenant: SeededTenant, signing_key: RSAPrivateKey) -> UUID:
+async def _accept_job(tenant: SeededTenant, signing_key: RSAPrivateKey, worker: Sessions) -> UUID:
     app = create_app()
     app.dependency_overrides[get_signing_keys] = lambda: StaticKeys(signing_key)
     auth = AuthHeaders(signing_key)
@@ -649,7 +651,7 @@ async def _accept_job(tenant: SeededTenant, signing_key: RSAPrivateKey) -> UUID:
         LifespanManager(app),
         httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http,
     ):
-        creative_id = await _creative(http, auth, tenant)
+        creative_id = await _creative(http, auth, tenant, worker)
         response = await _post_job(http, auth, World(tenant, tenant), creative_id)
     return UUID(response.json()["job_id"])
 
@@ -659,8 +661,9 @@ async def test_script_replays_then_settles_a_stopped_job_as_the_worker_role(
     signing_key: RSAPrivateKey,
     test_env: IntegrationEnv,
     capsys: pytest.CaptureFixture[str],
+    committed_worker_sessions: Sessions,
 ) -> None:
-    job = await _accept_job(committed_tenant, signing_key)
+    job = await _accept_job(committed_tenant, signing_key, committed_worker_sessions)
     owner = create_async_engine(
         test_env.test_migration_database_url.get_secret_value(), poolclass=NullPool
     )

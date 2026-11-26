@@ -1,0 +1,169 @@
+{
+  "_note": "NRC-7 text validation sample responses for frontend mocks. All data is synthetic. Semantic rules are judged by the SIMULATED model check, so any PASS from it is not evidence. Validated against the API schemas by tests/test_contract.py.",
+  "_text": "🙂 Café study: Guaranteed relief for adults.",
+  "_offsets": {
+    "explanation": "Offsets are zero-based Unicode code points; end is exclusive. In JavaScript index the text with Array.from(text) (or for...of), NOT text.slice, because slice uses UTF-16 units and the emoji is two of them.",
+    "code_points": {"start": 14, "end": 24},
+    "utf16": {"start": 15, "end": 25}
+  },
+  "validation_accepted_queued": {
+    "schema": "ValidationAccepted",
+    "body": {
+      "job_id": "9e3a6d24-7c1b-4f0e-8a52-b4d8c1f6e307",
+      "validation_run_id": "9e3a6d24-7c1b-4f0e-8a52-b4d8c1f6e307",
+      "state": "QUEUED"
+    }
+  },
+  "validation_accepted_succeeded": {
+    "schema": "ValidationAccepted",
+    "body": {
+      "job_id": "2a8d5e91-3b6c-4f72-9d04-e1a7c5b8f032",
+      "validation_run_id": "2a8d5e91-3b6c-4f72-9d04-e1a7c5b8f032",
+      "state": "SUCCEEDED"
+    }
+  },
+  "validation_run_queued": {
+    "schema": "ValidationRunRead",
+    "body": {
+      "validation_run_id": "9e3a6d24-7c1b-4f0e-8a52-b4d8c1f6e307",
+      "job_id": "9e3a6d24-7c1b-4f0e-8a52-b4d8c1f6e307",
+      "input_kind": "text",
+      "creative_version": 1,
+      "state": "QUEUED",
+      "outcome": null,
+      "is_current": true,
+      "evaluated_at": null,
+      "input_hash": "3f9c1a7e5b2d8046c9e1f3a7b5d2c8e04f6a1b9d7c3e5f2a8b0d4c6e9f1a3b5c",
+      "asset_id": null,
+      "study_snapshot_version": 1,
+      "policy_bundle_version": 1,
+      "gates": [],
+      "rule_results": [],
+      "findings": [],
+      "coverage_gaps": []
+    }
+  },
+  "validation_run_pass": {
+    "schema": "ValidationRunRead",
+    "body": {
+      "validation_run_id": "2a8d5e91-3b6c-4f72-9d04-e1a7c5b8f032",
+      "job_id": "2a8d5e91-3b6c-4f72-9d04-e1a7c5b8f032",
+      "input_kind": "text",
+      "creative_version": 1,
+      "state": "SUCCEEDED",
+      "outcome": "PASS",
+      "is_current": true,
+      "evaluated_at": "2026-11-20T10:15:30Z",
+      "input_hash": "7d2b9e4a1c6f8035b2d7e9a4c1f6b8d30e5a2c7f9b4d1e6a8c3f0b5d2e7a9c14",
+      "asset_id": null,
+      "study_snapshot_version": 1,
+      "policy_bundle_version": 1,
+      "gates": [
+        {"gate": "completeness", "outcome": "PASS"},
+        {"gate": "study_facts", "outcome": "PASS"},
+        {"gate": "policy", "outcome": "PASS"}
+      ],
+      "rule_results": [
+        {"rule_id": "REC-01", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null},
+        {"rule_id": "REC-02", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null},
+        {"rule_id": "REC-03", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null},
+        {"rule_id": "REC-04", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null},
+        {"rule_id": "REC-05", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null},
+        {"rule_id": "REC-08", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null}
+      ],
+      "findings": [],
+      "coverage_gaps": [
+        {"rule_id": null, "reason": "Semantic rules were judged by the SIMULATED model check; this is not evidence."}
+      ]
+    }
+  },
+  "validation_run_fail_with_offsets": {
+    "schema": "ValidationRunRead",
+    "body": {
+      "validation_run_id": "7c4e1f08-5a9d-4b26-8e13-d6f2a9c0b845",
+      "job_id": "7c4e1f08-5a9d-4b26-8e13-d6f2a9c0b845",
+      "input_kind": "text",
+      "creative_version": 2,
+      "state": "SUCCEEDED",
+      "outcome": "FAIL",
+      "is_current": true,
+      "evaluated_at": "2026-11-20T11:02:44Z",
+      "input_hash": "b5e8a2d7c1f4096e3a8b2d5c7f1e9a4b6d0c3e8f2a7b9d1c5e4f6a0b3d8c2e71",
+      "asset_id": null,
+      "study_snapshot_version": 1,
+      "policy_bundle_version": 1,
+      "gates": [
+        {"gate": "completeness", "outcome": "PASS"},
+        {"gate": "study_facts", "outcome": "PASS"},
+        {"gate": "policy", "outcome": "FAIL"}
+      ],
+      "rule_results": [
+        {"rule_id": "REC-01", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null},
+        {"rule_id": "REC-02", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null},
+        {"rule_id": "REC-03", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null},
+        {"rule_id": "REC-04", "rule_version": 1, "mandatory": true, "result": "FAIL", "reason": null},
+        {"rule_id": "REC-05", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null},
+        {"rule_id": "REC-08", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null}
+      ],
+      "findings": [
+        {
+          "rule_id": "REC-04",
+          "rule_version": 1,
+          "severity": "critical",
+          "explanation": "[SYNTHETIC] The text claims guaranteed relief, which states an effectiveness outcome the study cannot support.",
+          "source": {
+            "source_id": "[SYNTHETIC] FDA guidance",
+            "clause": "FDA-4",
+            "excerpt": null
+          },
+          "text_span": {"start": 14, "end": 24},
+          "image_region": null,
+          "offending_excerpt": "Guaranteed",
+          "suggested_correction": null,
+          "needs_human_decision": false
+        }
+      ],
+      "coverage_gaps": [
+        {"rule_id": null, "reason": "Semantic rules were judged by the SIMULATED model check; this is not evidence."}
+      ]
+    }
+  },
+  "validation_run_needs_review_model_failed": {
+    "schema": "ValidationRunRead",
+    "body": {
+      "validation_run_id": "f3a9c627-1d8e-4b05-9c74-2e6b8d1a5f90",
+      "job_id": "f3a9c627-1d8e-4b05-9c74-2e6b8d1a5f90",
+      "input_kind": "text",
+      "creative_version": 1,
+      "state": "SUCCEEDED",
+      "outcome": "NEEDS_REVIEW",
+      "is_current": true,
+      "evaluated_at": "2026-11-20T12:30:09Z",
+      "input_hash": "1e6c9a3f7b0d2854c8e1a6f9b3d7c0e2a5f8b1d4c7e9a2f6b0d3c5e8a1f4b7d9",
+      "asset_id": null,
+      "study_snapshot_version": 1,
+      "policy_bundle_version": 1,
+      "gates": [
+        {"gate": "completeness", "outcome": "PASS"},
+        {"gate": "study_facts", "outcome": "PASS"},
+        {"gate": "policy", "outcome": "NEEDS_REVIEW"}
+      ],
+      "rule_results": [
+        {"rule_id": "REC-01", "rule_version": 1, "mandatory": true, "result": "UNABLE_TO_ASSESS", "reason": "The model check failed (MALFORMED); a person must review this rule."},
+        {"rule_id": "REC-02", "rule_version": 1, "mandatory": true, "result": "UNABLE_TO_ASSESS", "reason": "The model check failed (MALFORMED); a person must review this rule."},
+        {"rule_id": "REC-03", "rule_version": 1, "mandatory": true, "result": "UNABLE_TO_ASSESS", "reason": "The model check failed (MALFORMED); a person must review this rule."},
+        {"rule_id": "REC-04", "rule_version": 1, "mandatory": true, "result": "UNABLE_TO_ASSESS", "reason": "The model check failed (MALFORMED); a person must review this rule."},
+        {"rule_id": "REC-05", "rule_version": 1, "mandatory": true, "result": "UNABLE_TO_ASSESS", "reason": "The model check failed (MALFORMED); a person must review this rule."},
+        {"rule_id": "REC-08", "rule_version": 1, "mandatory": true, "result": "PASS", "reason": null}
+      ],
+      "findings": [],
+      "coverage_gaps": [
+        {"rule_id": "REC-01", "reason": "The model check failed (MALFORMED); a person must review this rule."},
+        {"rule_id": "REC-02", "reason": "The model check failed (MALFORMED); a person must review this rule."},
+        {"rule_id": "REC-03", "reason": "The model check failed (MALFORMED); a person must review this rule."},
+        {"rule_id": "REC-04", "reason": "The model check failed (MALFORMED); a person must review this rule."},
+        {"rule_id": "REC-05", "reason": "The model check failed (MALFORMED); a person must review this rule."}
+      ]
+    }
+  }
+}

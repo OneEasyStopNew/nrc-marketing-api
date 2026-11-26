@@ -14,8 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.models import PolicyBundle
 from app.models.enums import BundleLifecycleState
+from scripts.import_policy_graph import load_synthetic_graph
 from scripts.seed_demo import demo_policy_rules
-from tests.conftest import AuthHeaders, SeededTenant, World
+from tests.conftest import AuthHeaders, SeededTenant, Sessions, World, store_validations
 
 API = "/v1/marketing"
 RISKY_PROMPT = "Guaranteed results! Try this new drug for free treatment."
@@ -67,8 +68,10 @@ async def _validate(
     *,
     sub: str = "creator-a",
     key: str | None = None,
+    worker: Sessions | None = None,
 ) -> httpx.Response:
-    return await client.post(
+    # With worker, one worker pass then stores the queued run (validation is a job).
+    response = await client.post(
         f"{API}/validations",
         headers=auth(sub, tenant_id, **{"Idempotency-Key": key or uuid4().hex}),
         json={
@@ -77,6 +80,9 @@ async def _validate(
             "input_kind": kind,
         },
     )
+    if worker is not None and response.status_code == 202:
+        await store_validations(worker)
+    return response
 
 
 async def _run(
@@ -97,18 +103,24 @@ async def _eligibility(
     return body
 
 
-async def test_brief_is_checked_and_stored_before_the_response(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+async def test_brief_is_queued_then_checked_and_stored_by_the_worker(
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
+    # The model check is off (the test default): validation is still a job.
     creative = await _creative(client, auth, world.a, prompt=RISKY_PROMPT)
 
     accepted = await _validate(client, auth, world.a.tenant_id, creative)
-    run = await _run(client, auth, world.a.tenant_id, accepted.json()["validation_run_id"])
+    run_id = accepted.json()["validation_run_id"]
+    queued = (await _run(client, auth, world.a.tenant_id, run_id)).json()
+    ran = await store_validations(sessions)
+    run = await _run(client, auth, world.a.tenant_id, run_id)
 
     assert accepted.status_code == 202
-    assert accepted.json()["state"] == "SUCCEEDED"
-    assert accepted.json()["job_id"] == accepted.json()["validation_run_id"]
+    assert accepted.json()["state"] == "QUEUED"
+    assert accepted.json()["job_id"] == run_id
+    assert (queued["state"], queued["outcome"], ran) == ("QUEUED", None, 1)
     body = run.json()
+    assert body["state"] == "SUCCEEDED"
     assert body["outcome"] == "FAIL"
     assert body["is_current"] is True
     assert (body["policy_bundle_version"], body["study_snapshot_version"]) == (1, 1)
@@ -119,11 +131,11 @@ async def test_brief_is_checked_and_stored_before_the_response(
 
 
 async def test_caption_is_checked_as_text(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     creative = await _creative(client, auth, world.a, caption="Learn about a study near you.")
 
-    accepted = await _validate(client, auth, world.a.tenant_id, creative, "text")
+    accepted = await _validate(client, auth, world.a.tenant_id, creative, "text", worker=sessions)
     body = (
         await _run(client, auth, world.a.tenant_id, accepted.json()["validation_run_id"])
     ).json()
@@ -134,23 +146,31 @@ async def test_caption_is_checked_as_text(
 
 
 async def test_reviewer_can_validate(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     creative = await _creative(client, auth, world.a)
 
-    response = await _validate(client, auth, world.a.tenant_id, creative, sub="reviewer-a")
+    response = await _validate(
+        client, auth, world.a.tenant_id, creative, sub="reviewer-a", worker=sessions
+    )
 
     assert response.status_code == 202
 
 
 async def test_same_key_replays_and_a_different_body_is_rejected(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     creative = await _creative(client, auth, world.a)
 
-    first = await _validate(client, auth, world.a.tenant_id, creative, key="validate-key-1")
-    again = await _validate(client, auth, world.a.tenant_id, creative, key="validate-key-1")
-    other = await _validate(client, auth, world.a.tenant_id, creative, "text", key="validate-key-1")
+    first = await _validate(
+        client, auth, world.a.tenant_id, creative, key="validate-key-1", worker=sessions
+    )
+    again = await _validate(
+        client, auth, world.a.tenant_id, creative, key="validate-key-1", worker=sessions
+    )
+    other = await _validate(
+        client, auth, world.a.tenant_id, creative, "text", key="validate-key-1", worker=sessions
+    )
 
     assert again.status_code == 202
     assert again.json()["validation_run_id"] == first.json()["validation_run_id"]
@@ -160,37 +180,43 @@ async def test_same_key_replays_and_a_different_body_is_rejected(
 
 
 async def test_other_tenant_cannot_see_or_validate(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     creative = await _creative(client, auth, world.a)
-    run_id = (await _validate(client, auth, world.a.tenant_id, creative)).json()[
+    run_id = (await _validate(client, auth, world.a.tenant_id, creative, worker=sessions)).json()[
         "validation_run_id"
     ]
     other = auth("creator-b", world.b.tenant_id)
 
     read = await client.get(f"{API}/validations/{run_id}", headers=other)
-    write = await _validate(client, auth, world.b.tenant_id, creative, sub="creator-b")
+    write = await _validate(
+        client, auth, world.b.tenant_id, creative, sub="creator-b", worker=sessions
+    )
 
     assert read.status_code == 404
     assert write.status_code == 404
 
 
 async def test_unknown_version_is_not_found(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     creative = await _creative(client, auth, world.a)
 
-    response = await _validate(client, auth, world.a.tenant_id, {**creative, "version": 2})
+    response = await _validate(
+        client, auth, world.a.tenant_id, {**creative, "version": 2}, worker=sessions
+    )
 
     assert response.status_code == 404
 
 
 async def test_tenant_without_policy_gets_409(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     creative = await _creative(client, auth, world.b, sub="creator-b")
 
-    response = await _validate(client, auth, world.b.tenant_id, creative, sub="creator-b")
+    response = await _validate(
+        client, auth, world.b.tenant_id, creative, sub="creator-b", worker=sessions
+    )
 
     assert response.status_code == 409
     assert response.json()["code"] == "NO_ACTIVE_POLICY"
@@ -216,10 +242,10 @@ async def test_image_input_is_not_implemented_without_demo_stubs(
 
 
 async def test_passing_brief_opens_the_gate_and_an_edit_closes_it(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     creative = await _creative(client, auth, world.a)
-    run_id = (await _validate(client, auth, world.a.tenant_id, creative)).json()[
+    run_id = (await _validate(client, auth, world.a.tenant_id, creative, worker=sessions)).json()[
         "validation_run_id"
     ]
 
@@ -240,10 +266,10 @@ async def test_passing_brief_opens_the_gate_and_an_edit_closes_it(
 
 
 async def test_failing_brief_keeps_the_gate_closed(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
 ) -> None:
     creative = await _creative(client, auth, world.a, prompt=RISKY_PROMPT)
-    await _validate(client, auth, world.a.tenant_id, creative)
+    await _validate(client, auth, world.a.tenant_id, creative, worker=sessions)
 
     result = await _eligibility(client, auth, world.a.tenant_id, creative["id"])
 
@@ -251,10 +277,14 @@ async def test_failing_brief_keeps_the_gate_closed(
 
 
 async def test_a_new_policy_version_requires_validating_again(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    world: World,
+    auth: AuthHeaders,
+    connection: AsyncConnection,
 ) -> None:
     creative = await _creative(client, auth, world.a)
-    run_id = (await _validate(client, auth, world.a.tenant_id, creative)).json()[
+    run_id = (await _validate(client, auth, world.a.tenant_id, creative, worker=sessions)).json()[
         "validation_run_id"
     ]
     async with as_owner(connection):
@@ -281,11 +311,93 @@ async def test_a_new_policy_version_requires_validating_again(
 
 
 async def test_the_api_role_cannot_change_a_stored_run(
-    client: httpx.AsyncClient, world: World, auth: AuthHeaders, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    world: World,
+    auth: AuthHeaders,
+    connection: AsyncConnection,
 ) -> None:
     creative = await _creative(client, auth, world.a, prompt=RISKY_PROMPT)
-    await _validate(client, auth, world.a.tenant_id, creative)
+    await _validate(client, auth, world.a.tenant_id, creative, worker=sessions)
 
     with pytest.raises(DBAPIError, match="permission denied"):
         async with connection.begin_nested():
             await connection.execute(text("UPDATE validation_runs SET outcome = 'PASS'"))
+
+
+async def _run_of(
+    sessions: Sessions, client: httpx.AsyncClient, auth: AuthHeaders, world: World, prompt: str
+) -> dict[str, Any]:
+    creative = await _creative(client, auth, world.a, prompt=prompt)
+    accepted = await _validate(client, auth, world.a.tenant_id, creative, worker=sessions)
+    run: dict[str, Any] = (
+        await _run(client, auth, world.a.tenant_id, accepted.json()["validation_run_id"])
+    ).json()
+    return run
+
+
+# The real synthetic graph: REC-01 to REC-06 are semantic rules, UNABLE_TO_ASSESS until the model
+# check exists.
+@pytest.mark.parametrize("graph", [load_synthetic_graph()])
+async def test_clean_brief_needs_review_while_semantic_rules_are_unassessed(
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    run = await _run_of(sessions, client, auth, world, CLEAN_PROMPT)
+    context = (
+        await client.get(
+            f"{API}/validations/{run['validation_run_id']}/context",
+            headers=auth("creator-a", world.a.tenant_id),
+        )
+    ).json()
+
+    # Not PASS: REC-01 to REC-05 are semantic rules, and the model check has not run.
+    assert run["outcome"] == "NEEDS_REVIEW"
+    assert run["findings"] == []
+    results = {r["rule_id"]: r["result"] for r in run["rule_results"]}
+    # The run lists exactly the rules the stored manifest selected (all mandatory for a brief).
+    assert set(results) == {r["rule_id"] for r in context["required_rules"]}
+    assert context["optional_rules"] == []
+    assert results == {
+        **dict.fromkeys(["REC-01", "REC-02", "REC-03", "REC-04", "REC-05"], "UNABLE_TO_ASSESS"),
+        "REC-08": "PASS",
+    }
+    gap_rules = {g["rule_id"] for g in run["coverage_gaps"] if g["rule_id"]}
+    assert gap_rules == {"REC-01", "REC-02", "REC-03", "REC-04", "REC-05"}
+    reasons = {r["reason"] for r in run["rule_results"] if r["result"] == "UNABLE_TO_ASSESS"}
+    assert reasons == {"Needs a review of meaning; the model check has not run."}
+
+
+# The real synthetic graph: REC-01 to REC-06 are semantic rules, UNABLE_TO_ASSESS until the model
+# check exists.
+@pytest.mark.parametrize("graph", [load_synthetic_graph()])
+async def test_guaranteed_fails_the_graph_rule_with_its_span_and_source(
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    prompt = f"🙂 Guaranteed relief for adults. {CLEAN_PROMPT}"
+
+    run = await _run_of(sessions, client, auth, world, prompt)
+
+    assert run["outcome"] == "FAIL"
+    (finding,) = run["findings"]
+    assert finding["rule_id"] == "REC-04"
+    assert prompt[finding["text_span"]["start"] : finding["text_span"]["end"]] == "Guaranteed"
+    assert finding["text_span"]["start"] == 2
+    # The source is the clause the rule quotes in the policy graph.
+    assert finding["source"]["clause"] == "FDA-4"
+    assert finding["source"]["source_id"].startswith("[SYNTHETIC]")
+
+
+# The real synthetic graph: REC-01 to REC-06 are semantic rules, UNABLE_TO_ASSESS until the model
+# check exists.
+@pytest.mark.parametrize("graph", [load_synthetic_graph()])
+async def test_wrong_age_fails_the_study_facts_rule(
+    sessions: Sessions, client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    run = await _run_of(
+        sessions, client, auth, world, f"Adults aged 30 to 40 can join. {CLEAN_PROMPT}"
+    )
+
+    assert run["outcome"] == "FAIL"
+    assert [f["rule_id"] for f in run["findings"]] == ["REC-08"]
+    gates = {g["gate"]: g["outcome"] for g in run["gates"]}
+    assert gates["study_facts"] == "FAIL"

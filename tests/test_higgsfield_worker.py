@@ -143,10 +143,14 @@ def higgsfield(
 
 @pytest.fixture
 async def job_id(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    sessions: Sessions,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
 ) -> UUID:
     # Accepted in simulator mode, then pointed at Higgsfield as a live-mode job would be.
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     response = await _post_job(client, auth, world, creative_id)
     assert response.status_code == 202
     await connection.execute(

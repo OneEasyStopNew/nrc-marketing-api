@@ -190,6 +190,26 @@ class Settings(RetrievalSettings):
     # The S3 standard caps presigned links at 15 minutes.
     asset_url_ttl_seconds: int = Field(default=900, ge=60, le=900)
 
+    # Text judge for policy validation (NRC-7). "off" uses no model judge, "simulator" returns
+    # labelled SIMULATED answers (local and demo only), "live" calls Amazon Bedrock and never
+    # falls back to the simulator. The Bedrock region is AWS_REGION and the client retries are
+    # BEDROCK_MAX_RETRIES.
+    validation_model_mode: Literal["off", "simulator", "live"] = "off"
+    # One of app.services.providers.text_judge.SUPPORTED_BEDROCK_JUDGE_MODEL_IDS.
+    bedrock_validation_model_id: str | None = None
+    # Connect and read timeout per judge call (one attempt: BEDROCK_MAX_RETRIES doesn't apply,
+    # the job retries), and the cap on the answer's tokens.
+    validation_model_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    validation_model_max_output_tokens: int = Field(default=2000, ge=256, le=8000)
+    # Judge calls per validation when the answer fails verification (provider errors are retried
+    # by the job, not here).
+    validation_model_max_attempts: int = Field(default=2, ge=1, le=3)
+    # A validation job's tries after throttling or timeouts, and how long it may take in all;
+    # after either, the run is stored as needing review (never PASS).
+    validation_job_max_attempts: int = Field(default=5, ge=1, le=20)
+    validation_job_deadline_seconds: int = Field(default=600, ge=60, le=86_400)
+    # Brief and caption validations queued or running at once per tenant; each may call the model.
+    validation_max_active_jobs_per_tenant: int = Field(default=20, ge=1, le=200)
     # Client uploads (NRC-3). Final limits come from the product owner; these are the defaults.
     # Presigned upload URLs share the 15-minute S3 cap above.
     upload_url_ttl_seconds: int = Field(default=600, ge=60, le=900)
@@ -281,6 +301,15 @@ class Settings(RetrievalSettings):
         if enabled:
             raise ValueError(
                 f"{', '.join(enabled)} cannot be used when APP_ENV={self.app_env!r}; "
+                "set APP_ENV=local (or demo) for development"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _simulated_judge_only_outside_production(self) -> Self:
+        if self.validation_model_mode == "simulator" and self.app_env not in NON_PRODUCTION_ENVS:
+            raise ValueError(
+                f"VALIDATION_MODEL_MODE=simulator cannot be used when APP_ENV={self.app_env!r}; "
                 "set APP_ENV=local (or demo) for development"
             )
         return self

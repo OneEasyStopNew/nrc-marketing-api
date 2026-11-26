@@ -64,8 +64,10 @@ async def _drain_events(connection: AsyncConnection, world: World) -> None:
 
 
 @pytest.fixture
-async def job_id(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> UUID:
-    creative_id = await _creative(client, auth, world.a)
+async def job_id(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> UUID:
+    creative_id = await _creative(client, auth, world.a, sessions)
     response = await _post_job(client, auth, world, creative_id)
     assert response.status_code == 202
     return UUID(response.json()["job_id"])
@@ -273,9 +275,9 @@ def one_active_job_allowed() -> Iterator[None]:
 
 @pytest.mark.usefixtures("one_active_job_allowed")
 async def test_cancel_requested_job_still_takes_its_active_slot(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
 ) -> None:
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     first = await _post_job(client, auth, world, creative_id)
     assert first.status_code == 202
     cancel = await _cancel(client, auth, world.a.tenant_id, first.json()["job_id"])
@@ -290,9 +292,13 @@ async def test_cancel_requested_job_still_takes_its_active_slot(
 
 @pytest.mark.usefixtures("one_active_job_allowed")
 async def test_cancelling_an_unknown_job_takes_no_slot_it_did_not_hold(
-    client: httpx.AsyncClient, auth: AuthHeaders, world: World, connection: AsyncConnection
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    sessions: Sessions,
 ) -> None:
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     first = await _post_job(client, auth, world, creative_id)
     first_id = UUID(first.json()["job_id"])
     # As the worker's _park_unknown leaves it: UNKNOWN in the reconcile stage, no slot taken.
