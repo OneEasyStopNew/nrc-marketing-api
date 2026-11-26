@@ -1,0 +1,361 @@
+{
+  "_note": "[SYNTHETIC] Labelled retrieval cases for scripts/eval_retrieval.py, written against scripts/data/synthetic_policy_graph.json. Labelled by the developer, not expert-reviewed: release numbers need the expert set (F32). required_rules: mandatory rules the scope must select. relevant_evidence: nodes a reviewer needs, by any route. search_targets: nodes the text itself should surface through search.",
+  "labelled_by": "synthetic (developer), not expert-reviewed",
+  "cases": [
+    {
+      "case_id": "en-brief-safe",
+      "language": "en",
+      "input_kind": "brief",
+      "channel": "facebook",
+      "text": "This proven treatment is safe and effective for high blood pressure.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "CL-FDA-1",
+        "CL-FDA-3"
+      ],
+      "search_targets": [
+        "CL-FDA-1"
+      ],
+      "note": "Safety and effectiveness claim in the clause's own words."
+    },
+    {
+      "case_id": "en-brief-superior",
+      "language": "en",
+      "input_kind": "brief",
+      "channel": "facebook",
+      "text": "Our drug works better than other medicines and is superior to current care.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "CL-FDA-2"
+      ],
+      "search_targets": [
+        "CL-FDA-2"
+      ],
+      "note": "Superiority claim."
+    },
+    {
+      "case_id": "en-brief-new",
+      "language": "en",
+      "input_kind": "brief",
+      "channel": "facebook",
+      "text": "Try a new medication for blood pressure.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "CL-FDA-3"
+      ],
+      "search_targets": [
+        "CL-FDA-3"
+      ],
+      "note": "Calls the investigational product new."
+    },
+    {
+      "case_id": "en-brief-guarantee",
+      "language": "en",
+      "input_kind": "brief",
+      "channel": "facebook",
+      "text": "Join today and you are certain to get a favourable outcome.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "CL-FDA-4"
+      ],
+      "search_targets": [
+        "CL-FDA-4"
+      ],
+      "note": "Promise of a certain outcome."
+    },
+    {
+      "case_id": "en-brief-free",
+      "language": "en",
+      "input_kind": "brief",
+      "channel": "facebook",
+      "text": "Get free treatment and free medicine when you join.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "CL-FDA-5"
+      ],
+      "search_targets": [
+        "CL-FDA-5"
+      ],
+      "note": "Free treatment promise."
+    },
+    {
+      "case_id": "en-brief-paraphrase",
+      "language": "en",
+      "input_kind": "brief",
+      "channel": "facebook",
+      "text": "You'll finally feel normal again after taking it.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "CL-FDA-1",
+        "CL-FDA-4"
+      ],
+      "search_targets": [
+        "CL-FDA-4"
+      ],
+      "note": "Paraphrased benefit promise with no shared words: only a meaningful vector search can find it."
+    },
+    {
+      "case_id": "en-brief-ages",
+      "language": "en",
+      "input_kind": "brief",
+      "channel": "facebook",
+      "text": "Adults aged 18 to 75 can take part.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "INT-01"
+      ],
+      "search_targets": [
+        "INT-01"
+      ],
+      "note": "Ages must match the study snapshot."
+    },
+    {
+      "case_id": "en-brief-clean",
+      "language": "en",
+      "input_kind": "brief",
+      "channel": "facebook",
+      "text": "Invite adults with high blood pressure to learn about our research study.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-08"
+      ],
+      "relevant_evidence": [],
+      "search_targets": [],
+      "note": "Nothing to flag; mandatory rules are still selected."
+    },
+    {
+      "case_id": "en-caption-no-disclosure",
+      "language": "en",
+      "input_kind": "text",
+      "channel": "facebook",
+      "text": "Learn about a study near you.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-07",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "DISC-01"
+      ],
+      "search_targets": [],
+      "note": "Disclosure missing: the rule and its disclosure come from the graph, not the text."
+    },
+    {
+      "case_id": "en-caption-disclosure",
+      "language": "en",
+      "input_kind": "text",
+      "channel": "facebook",
+      "text": "Learn about a study near you. This is a research study. Taking part is voluntary.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-07",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "DISC-01"
+      ],
+      "search_targets": [
+        "DISC-01"
+      ],
+      "note": "Disclosure present in the caption."
+    },
+    {
+      "case_id": "en-caption-payment",
+      "language": "en",
+      "input_kind": "text",
+      "channel": "facebook",
+      "text": "Earn a large payment! Paid study for adults with high blood pressure.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-07",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "CL-FDA-6",
+        "EXC-01"
+      ],
+      "search_targets": [
+        "CL-FDA-6"
+      ],
+      "note": "Payment emphasised; the compensation exception is listed, never applied by search."
+    },
+    {
+      "case_id": "en-caption-free",
+      "language": "en",
+      "input_kind": "text",
+      "channel": "facebook",
+      "text": "Free care for everyone who joins. This is a research study. Taking part is voluntary.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-07",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "CL-FDA-5",
+        "DISC-01"
+      ],
+      "search_targets": [
+        "CL-FDA-5",
+        "DISC-01"
+      ],
+      "note": "Free care promise with the disclosure."
+    },
+    {
+      "case_id": "es-brief-safe",
+      "language": "es",
+      "input_kind": "brief",
+      "channel": "facebook",
+      "text": "Este tratamiento es seguro y eficaz y cura la presión arterial alta.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "CL-FDA-1-ES"
+      ],
+      "search_targets": [
+        "CL-FDA-1-ES"
+      ],
+      "note": "Spanish safety claim; the Spanish clause exists."
+    },
+    {
+      "case_id": "es-brief-free",
+      "language": "es",
+      "input_kind": "brief",
+      "channel": "facebook",
+      "text": "Tratamiento gratis para todos los participantes.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "CL-FDA-5"
+      ],
+      "search_targets": [
+        "CL-FDA-5"
+      ],
+      "note": "Spanish free-treatment promise; the rulebook has no Spanish text for this clause, so only a multilingual vector search can find the English one."
+    },
+    {
+      "case_id": "es-caption-disclosure",
+      "language": "es",
+      "input_kind": "text",
+      "channel": "facebook",
+      "text": "Este es un estudio de investigación. La participación es voluntaria.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-07",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "DISC-01-ES"
+      ],
+      "search_targets": [
+        "DISC-01-ES"
+      ],
+      "note": "Spanish disclosure present."
+    },
+    {
+      "case_id": "es-caption-no-disclosure",
+      "language": "es",
+      "input_kind": "text",
+      "channel": "facebook",
+      "text": "Conozca un estudio cerca de usted.",
+      "required_rules": [
+        "REC-01",
+        "REC-02",
+        "REC-03",
+        "REC-04",
+        "REC-05",
+        "REC-07",
+        "REC-08"
+      ],
+      "relevant_evidence": [
+        "DISC-01-ES"
+      ],
+      "search_targets": [],
+      "note": "Spanish caption without the disclosure: it still comes from the graph."
+    }
+  ]
+}

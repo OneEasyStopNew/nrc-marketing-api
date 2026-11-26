@@ -22,7 +22,14 @@ _SITE_LOCAL_V6 = ipaddress.IPv6Network("fec0::/10")
 
 def build_fetch_client() -> httpx.AsyncClient:
     # trust_env=False so proxy environment variables cannot route around the address checks.
-    return httpx.AsyncClient(trust_env=False, follow_redirects=False)
+    # No keep-alive: connections are pooled by origin, which is now the pinned IP, so two hosts
+    # behind one CDN address could share a TLS session whose certificate was checked for the
+    # other. A fresh connection per fetch verifies each host's own certificate.
+    return httpx.AsyncClient(
+        trust_env=False,
+        follow_redirects=False,
+        limits=httpx.Limits(max_keepalive_connections=0),
+    )
 
 
 async def _default_resolver(host: str) -> list[str]:
@@ -53,9 +60,9 @@ def _is_public(address: str) -> bool:
 
 
 class SafeFetcher:
-    # Residual risk: the host is resolved and vetted here, then httpx resolves it again when it
-    # connects, so a DNS-rebinding attacker could swap the answer in between. Pinning the
-    # connection to the vetted IP (custom transport, Host/SNI kept) is a production follow-up.
+    # The connection is pinned to the address that was vetted: letting httpx resolve the host
+    # again would let a DNS-rebinding answer swap in a private address after the check. The
+    # Host header and TLS SNI/certificate check keep using the real hostname.
 
     def __init__(
         self,
@@ -107,10 +114,10 @@ class SafeFetcher:
         return host
 
     async def _run(self, url: str, host: str, max_bytes: int) -> FetchedImage:
-        await self._check_addresses(host)
-        return await self._download(url, host, max_bytes)
+        address = await self._resolve_public_address(host)
+        return await self._download(url, host, address, max_bytes)
 
-    async def _check_addresses(self, host: str) -> None:
+    async def _resolve_public_address(self, host: str) -> str:
         try:
             addresses = await self._resolver(host)
         except OSError as exc:
@@ -119,9 +126,22 @@ class SafeFetcher:
             ) from exc
         if not addresses or not all(_is_public(address) for address in addresses):
             raise ProviderOutputError("The provider output host resolves to a blocked address")
+        # Prefer IPv4: servers may lack IPv6 routes. Zone ids (%eth0) are invalid in URLs.
+        bare = [address.split("%", 1)[0] for address in addresses]
+        return next((a for a in bare if ipaddress.ip_address(a).version == 4), bare[0])
 
-    async def _download(self, url: str, host: str, max_bytes: int) -> FetchedImage:
-        async with self._client.stream("GET", url, follow_redirects=False) as response:
+    async def _download(self, url: str, host: str, address: str, max_bytes: int) -> FetchedImage:
+        target = httpx.URL(url)
+        host_header = f"[{host}]" if ":" in host else host
+        if target.port is not None:  # httpx drops the default port, so this is explicit non-443
+            host_header = f"{host_header}:{target.port}"
+        async with self._client.stream(
+            "GET",
+            target.copy_with(host=address),
+            headers={"Host": host_header},
+            extensions={"sni_hostname": host},
+            follow_redirects=False,
+        ) as response:
             status = response.status_code
             if 300 <= status < 400:
                 raise ProviderOutputError("The provider output redirected, which is not allowed")

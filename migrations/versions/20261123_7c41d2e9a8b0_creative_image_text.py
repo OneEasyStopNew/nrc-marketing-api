@@ -5,7 +5,7 @@ INSERT grants on creative_versions cover the new column; it still cannot UPDATE 
 Downgrade drops the column and every version's image text (see docs/migrations.md).
 
 Revision ID: 7c41d2e9a8b0
-Revises: b3e6bfed9303
+Revises: 4b7d2e9f1a63
 Create Date: 2026-11-23 12:00:00.000000
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "7c41d2e9a8b0"
-down_revision: str | None = "b3e6bfed9303"
+down_revision: str | None = "4b7d2e9f1a63"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

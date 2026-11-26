@@ -1278,13 +1278,114 @@
         }
       }
     },
+    "/v1/marketing/policy-bundles/{policy_bundle_id}/rules": {
+      "get": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "A policy bundle's rules with their sources, disclosures and exceptions",
+        "description": "Approved rules of an active or retired bundle (the ones validation runs pin), for rule detail and evidence views. Shows rule ids, node keys and clause references.",
+        "operationId": "get_policy_bundle_rules",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "policy_bundle_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Policy Bundle Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyBundleRulesRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such bundle for the tenant, or it is not active or retired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "POLICY_CONTEXT_UNAVAILABLE: the bundle has no rule graph (details.reason GRAPH_MISSING).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/marketing/validations": {
       "post": {
         "tags": [
           "validations"
         ],
         "summary": "Validate a brief, caption or image",
-        "description": "Briefs and captions are checked against the active policy and the study facts before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run.",
+        "description": "Briefs and captions are checked against the active policy and the study facts before this returns, so state is already SUCCEEDED; job_id equals validation_run_id until validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run. Each brief or caption run also stores the policy context it was checked against (see GET /validations/{validation_run_id}/context). What that context can't settle is part of the stored run: a mandatory rule with a missing source, unresolved applicability or an incomplete walk is UNABLE_TO_ASSESS, one in a conflict NEEDS_REVIEW, and a FAIL stays FAIL; the run is then never PASS. If the context can't be gathered at all (each of its database queries has a time limit), every mandatory rule is UNABLE_TO_ASSESS. Gaps on optional rules are coverage gaps only.",
         "operationId": "create_validation",
         "security": [
           {
@@ -1492,6 +1593,97 @@
           },
           "501": {
             "description": "Not implemented yet (DEMO_STUBS is off).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/validations/{validation_run_id}/context": {
+      "get": {
+        "tags": [
+          "validations"
+        ],
+        "summary": "Policy rules and evidence the run's text was checked against",
+        "description": "The stored policy context of a brief or caption run: the rules selected by their conditions, their source clauses, disclosures and exceptions, search matches and anything retrieval couldn't settle (missing_context, never a pass). Evidence only: the outcome still comes from the rule checks. A run without stored context (older runs, or context unavailable, recorded as a coverage gap) answers 404 CONTEXT_NOT_AVAILABLE.",
+        "operationId": "get_validation_context",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "validation_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Validation Run Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationContextRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND (no such run for the caller), or CONTEXT_NOT_AVAILABLE (the run stored no policy context).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1728,6 +1920,806 @@
         }
       }
     },
+    "/v1/marketing/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Request cancellation of a job (NRC-6)",
+        "description": "Records a durable cancel request and returns the job; the worker stops it and settles credits, so poll the job for CANCELLED. Repeating it is harmless (no Idempotency-Key). Not available while DEMO_STUBS=true (501).",
+        "operationId": "cancel_job",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "JOB_NOT_CANCELLABLE: the job already finished (details.state).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not available while DEMO_STUBS=true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "DEPENDENCY_UNAVAILABLE: the job is busy; retry shortly (retryable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/assets/upload-limits": {
+      "get": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "What uploads accept in this environment (types, size, URL lifetime)",
+        "description": "Read these instead of hard-coding them: they are configured per environment.",
+        "operationId": "get_upload_limits",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadLimits"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/assets/uploads": {
+      "post": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "Start an upload: get a short-lived URL for one PUT of exactly the declared file",
+        "description": "Declare the type, exact size and SHA-256. PUT the file to upload.url with upload.headers, then call POST /assets/{asset_id}/complete. The URL is secret and short-lived: never store or log it. A retry with the same Idempotency-Key and body returns the same upload (with a fresh URL while it is still pending).",
+        "operationId": "create_upload",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "New value per intended command; resend the same value only when retrying it.",
+              "title": "Idempotency-Key"
+            },
+            "description": "New value per intended command; resend the same value only when retrying it."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Study or creative not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key reused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "UPLOAD_LIMIT_REACHED (retryable): the tenant has the most uploads in progress it may have. Try again when one has finished processing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Object storage is not configured or temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "Uploads in this tenant, newest first, with their status",
+        "description": "Shows every status, so the uploader can follow progress and see rejections. A page includes all uploads tied at its last timestamp, so it may exceed limit.",
+        "operationId": "list_uploads",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UploadState"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only these statuses; repeat to pass several.",
+              "title": "Status"
+            },
+            "description": "Only these statuses; repeat to pass several."
+          },
+          {
+            "name": "study_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this study.",
+              "title": "Study Id"
+            },
+            "description": "Only this study."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the last page.",
+              "title": "Cursor"
+            },
+            "description": "next_cursor from the last page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/assets/uploads/{asset_id}": {
+      "get": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "One upload and its status",
+        "description": "Poll this after completing an upload until status is READY or REJECTED.",
+        "operationId": "get_upload",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Asset Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/assets/{asset_id}/upload-url": {
+      "post": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "A fresh upload URL for a pending upload (same file, same owner)",
+        "description": "Use when the URL expired or was lost before the file was sent. An expired upload is admitted again like a new one, so it can meet the in-progress limit.",
+        "operationId": "reissue_upload_url",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Asset Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or not the person who started this upload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The upload is no longer waiting for its file.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "UPLOAD_LIMIT_REACHED (retryable): the tenant has the most uploads in progress it may have. Try again when one has finished processing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Object storage is not configured or temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/assets/{asset_id}/complete": {
+      "post": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "Tell the API the file was sent; it is checked and queued for inspection",
+        "description": "Safe to repeat: returns the current status and queues inspection once. 409 UPLOAD_NOT_RECEIVED (retryable) means the file has not arrived yet. If the upload URL had expired, the upload is admitted again like a new one, so it can meet the in-progress limit (429).",
+        "operationId": "complete_upload",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Asset Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not allowed, or not the person who started this upload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The file has not been received yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "UPLOAD_LIMIT_REACHED (retryable): the tenant has the most uploads in progress it may have. Try again when one has finished processing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Object storage is not configured or temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/marketing/assets/{asset_id}": {
       "get": {
         "tags": [
@@ -1834,8 +2826,8 @@
         "tags": [
           "assets"
         ],
-        "summary": "Generated images in this tenant, newest first (read-only)",
-        "description": "Only finished images from studies the caller can use. Uploads are not supported yet. download_url is short-lived: list again, or GET /assets/{asset_id}, for a fresh one. A page includes all images tied at its last timestamp, so it may exceed limit.",
+        "summary": "Generated images and checked uploads in this tenant, newest first (read-only)",
+        "description": "Only finished images and READY uploads from studies the caller can use; uploads still in progress are in GET /assets/uploads. download_url is short-lived: list again, or GET /assets/{asset_id}, for a fresh one. A page includes all images tied at its last timestamp, so it may exceed limit.",
         "operationId": "list_media",
         "security": [
           {
@@ -1944,6 +2936,15 @@
   },
   "components": {
     "schemas": {
+      "Applicability": {
+        "type": "string",
+        "enum": [
+          "true",
+          "false",
+          "unresolved"
+        ],
+        "title": "Applicability"
+      },
       "ApprovedWording": {
         "properties": {
           "key": {
@@ -2011,12 +3012,56 @@
             "title": "Asset Id"
           },
           "creative_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Creative Id"
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Id",
+            "description": "Null for an upload not tied to a draft."
           },
           "origin": {
             "$ref": "#/components/schemas/AssetOrigin"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id",
+            "description": "Set for uploads; null for generated images."
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "Set for uploads; null for generated images."
+          },
+          "authorization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MediaAuthorization"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set for uploads; null for generated images."
           },
           "mime_type": {
             "type": "string",
@@ -2107,7 +3152,18 @@
           "download_url_expires_at"
         ],
         "title": "AssetRead",
-        "description": "Immutable stored bytes: any change produces a new asset_id and needs new validation."
+        "description": "Immutable stored bytes: any change produces a new asset_id and needs new validation.\n\nUploads appear here only once they passed inspection (READY)."
+      },
+      "AuthorizationStatus": {
+        "type": "string",
+        "enum": [
+          "NO_PERSON_DECLARED",
+          "MISSING",
+          "RECORDED",
+          "EXPIRED"
+        ],
+        "title": "AuthorizationStatus",
+        "description": "Whether media authorization is on record. None of these means it was verified."
       },
       "BriefField": {
         "type": "string",
@@ -2144,6 +3200,133 @@
         ],
         "title": "BriefIssueCode"
       },
+      "BundleLifecycleState": {
+        "type": "string",
+        "enum": [
+          "DRAFT",
+          "REVIEW",
+          "APPROVED",
+          "BUILDING",
+          "READY",
+          "ACTIVE",
+          "REJECTED",
+          "RETIRED"
+        ],
+        "title": "BundleLifecycleState",
+        "description": "Where a policy bundle is in its NRC-4 lifecycle. Only ACTIVE bundles validate content."
+      },
+      "BundleRuleRead": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "rule_version": {
+            "type": "integer",
+            "title": "Rule Version"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "requirement": {
+            "type": "string",
+            "title": "Requirement"
+          },
+          "gate": {
+            "$ref": "#/components/schemas/Gate"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "mandatory": {
+            "type": "boolean",
+            "title": "Mandatory"
+          },
+          "check_type": {
+            "$ref": "#/components/schemas/CheckType"
+          },
+          "exact_wording": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exact Wording",
+            "description": "Required wording, never paraphrased."
+          },
+          "prohibited_phrases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Prohibited Phrases"
+          },
+          "applicability": {
+            "$ref": "#/components/schemas/RuleApplicabilityRead"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/RuleSourceRead"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "disclosures": {
+            "items": {
+              "$ref": "#/components/schemas/RuleTextRead"
+            },
+            "type": "array",
+            "title": "Disclosures",
+            "description": "Wording the post must carry."
+          },
+          "interpretations": {
+            "items": {
+              "$ref": "#/components/schemas/RuleTextRead"
+            },
+            "type": "array",
+            "title": "Interpretations",
+            "description": "Approved readings of the rule, e.g. which study facts it checks."
+          },
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/RuleTextRead"
+            },
+            "type": "array",
+            "title": "Examples"
+          },
+          "exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/RuleExceptionRead"
+            },
+            "type": "array",
+            "title": "Exceptions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule_id",
+          "rule_version",
+          "title",
+          "requirement",
+          "gate",
+          "severity",
+          "mandatory",
+          "check_type",
+          "exact_wording",
+          "prohibited_phrases",
+          "applicability",
+          "sources",
+          "disclosures",
+          "interpretations",
+          "examples",
+          "exceptions"
+        ],
+        "title": "BundleRuleRead"
+      },
       "CallToAction": {
         "type": "string",
         "enum": [
@@ -2174,6 +3357,148 @@
           "facebook"
         ],
         "title": "Channel"
+      },
+      "CheckType": {
+        "type": "string",
+        "enum": [
+          "deterministic",
+          "semantic"
+        ],
+        "title": "CheckType",
+        "description": "What makes the final decision for a rule: code alone, or the model after a phrase check."
+      },
+      "ContextEvidenceRead": {
+        "properties": {
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "node_type": {
+            "$ref": "#/components/schemas/PolicyNodeType"
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "excerpt": {
+            "type": "string",
+            "title": "Excerpt"
+          },
+          "clause_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clause Ref"
+          },
+          "paths": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Paths",
+            "description": "How each selected rule reaches this node: rule key, then edge and node key."
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/ContextMatchRead"
+            },
+            "type": "array",
+            "title": "Matches",
+            "description": "The statements whose search found it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_key",
+          "node_type",
+          "language",
+          "excerpt",
+          "clause_ref",
+          "paths",
+          "matches"
+        ],
+        "title": "ContextEvidenceRead"
+      },
+      "ContextExceptionRead": {
+        "properties": {
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "for_rule_id": {
+            "type": "string",
+            "title": "For Rule Id"
+          },
+          "applicable": {
+            "$ref": "#/components/schemas/Applicability"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "excerpt": {
+            "type": "string",
+            "title": "Excerpt"
+          },
+          "path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_key",
+          "for_rule_id",
+          "applicable",
+          "reasons",
+          "excerpt",
+          "path"
+        ],
+        "title": "ContextExceptionRead"
+      },
+      "ContextMatchRead": {
+        "properties": {
+          "statement_index": {
+            "type": "integer",
+            "title": "Statement Index"
+          },
+          "found_by": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "lexical",
+                "semantic"
+              ]
+            },
+            "type": "array",
+            "title": "Found By"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank",
+            "description": "1 is the best match for that statement."
+          }
+        },
+        "type": "object",
+        "required": [
+          "statement_index",
+          "found_by",
+          "rank"
+        ],
+        "title": "ContextMatchRead"
       },
       "ContextRead": {
         "properties": {
@@ -2253,6 +3578,74 @@
           "active_policy"
         ],
         "title": "ContextRead"
+      },
+      "ContextRuleRead": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "rule_version": {
+            "type": "integer",
+            "title": "Rule Version"
+          },
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "mandatory": {
+            "type": "boolean",
+            "title": "Mandatory"
+          },
+          "check_type": {
+            "$ref": "#/components/schemas/CheckType"
+          },
+          "gate": {
+            "$ref": "#/components/schemas/Gate"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "unresolved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unresolved",
+            "description": "Dimensions the request didn't know; the rule is kept, never dropped."
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule_id",
+          "rule_version",
+          "node_key",
+          "mandatory",
+          "check_type",
+          "gate",
+          "severity",
+          "unresolved"
+        ],
+        "title": "ContextRuleRead"
+      },
+      "ContextStatementRead": {
+        "properties": {
+          "span": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TextSpan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "span"
+        ],
+        "title": "ContextStatementRead"
       },
       "CoverageGap": {
         "properties": {
@@ -3278,6 +4671,15 @@
         "title": "GenerationEligibility",
         "description": "Whether image generation may start. Only a brief that passed validation is eligible."
       },
+      "IdentifiablePerson": {
+        "type": "string",
+        "enum": [
+          "yes",
+          "no",
+          "unknown"
+        ],
+        "title": "IdentifiablePerson"
+      },
       "ImageRegion": {
         "properties": {
           "x": {
@@ -3505,6 +4907,110 @@
         ],
         "title": "MeRead"
       },
+      "MediaAuthorization": {
+        "properties": {
+          "identifiable_person": {
+            "$ref": "#/components/schemas/IdentifiablePerson"
+          },
+          "usage_authorization_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage Authorization Ref"
+          },
+          "permitted_channels": {
+            "items": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "type": "array",
+            "title": "Permitted Channels"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AuthorizationStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "identifiable_person",
+          "usage_authorization_ref",
+          "permitted_channels",
+          "expires_at",
+          "status"
+        ],
+        "title": "MediaAuthorization",
+        "description": "Read by the approval and publication gates (NRC-12, NRC-14).\n\nMissing or expired authorization for a file with an identifiable person blocks them."
+      },
+      "MediaAuthorizationInput": {
+        "properties": {
+          "identifiable_person": {
+            "$ref": "#/components/schemas/IdentifiablePerson",
+            "description": "Whether a person can be identified in the file. A declaration, not consent."
+          },
+          "usage_authorization_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage Authorization Ref",
+            "description": "Reference to the signed release or licence record (not the document).",
+            "examples": [
+              "RELEASE-2026-0142"
+            ]
+          },
+          "permitted_channels": {
+            "items": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "type": "array",
+            "maxItems": 1,
+            "title": "Permitted Channels",
+            "description": "Channels the authorization covers; empty means none recorded."
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At",
+            "description": "When the authorization ends; null when it does not expire."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "identifiable_person"
+        ],
+        "title": "MediaAuthorizationInput"
+      },
       "MediaItem": {
         "properties": {
           "asset_id": {
@@ -3513,16 +5019,68 @@
             "title": "Asset Id"
           },
           "creative_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Creative Id"
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Id",
+            "description": "Null for an upload not tied to a draft."
           },
           "creative_version": {
-            "type": "integer",
-            "title": "Creative Version"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Version",
+            "description": "Null for uploads."
           },
           "origin": {
             "$ref": "#/components/schemas/AssetOrigin"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id",
+            "description": "Set for uploads; null for generated images."
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "Set for uploads; null for generated images."
+          },
+          "authorization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MediaAuthorization"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set for uploads; null for generated images."
           },
           "mime_type": {
             "type": "string",
@@ -3559,7 +5117,7 @@
               }
             ],
             "title": "Created By Name",
-            "description": "Display name of whoever started the generation; null when none is set."
+            "description": "Display name of whoever generated or uploaded it; null when none is set."
           },
           "download_url": {
             "anyOf": [
@@ -3603,7 +5161,7 @@
           "download_url_expires_at"
         ],
         "title": "MediaItem",
-        "description": "A finished generated image the caller can see. Uploads are not supported yet."
+        "description": "A finished generated image, or an upload that passed inspection, the caller can see."
       },
       "MediaPage": {
         "properties": {
@@ -3634,6 +5192,55 @@
           "next_cursor"
         ],
         "title": "MediaPage"
+      },
+      "MissingContextCode": {
+        "type": "string",
+        "enum": [
+          "APPLICABILITY_UNRESOLVED",
+          "TRAVERSAL_TRUNCATED",
+          "CONFLICT",
+          "SOURCE_MISSING",
+          "SEMANTIC_SEARCH_SKIPPED",
+          "STATEMENTS_TRUNCATED"
+        ],
+        "title": "MissingContextCode",
+        "description": "Why a manifest is incomplete. A caller must never treat any of these as a PASS."
+      },
+      "MissingContextRead": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/MissingContextCode"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Id"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "rule_id",
+          "detail"
+        ],
+        "title": "MissingContextRead"
       },
       "Outcome": {
         "type": "string",
@@ -3735,6 +5342,68 @@
           "rules"
         ],
         "title": "PolicyBundleRead"
+      },
+      "PolicyBundleRulesRead": {
+        "properties": {
+          "policy_bundle_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Policy Bundle Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "lifecycle_state": {
+            "$ref": "#/components/schemas/BundleLifecycleState"
+          },
+          "is_synthetic": {
+            "type": "boolean",
+            "title": "Is Synthetic",
+            "description": "True for demo rules, never an approved client policy."
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/BundleRuleRead"
+            },
+            "type": "array",
+            "title": "Rules"
+          }
+        },
+        "type": "object",
+        "required": [
+          "policy_bundle_id",
+          "version",
+          "name",
+          "lifecycle_state",
+          "is_synthetic",
+          "rules"
+        ],
+        "title": "PolicyBundleRulesRead"
+      },
+      "PolicyLanguage": {
+        "type": "string",
+        "enum": [
+          "en",
+          "es"
+        ],
+        "title": "PolicyLanguage"
+      },
+      "PolicyNodeType": {
+        "type": "string",
+        "enum": [
+          "RULE",
+          "CLAUSE",
+          "DISCLOSURE",
+          "EXCEPTION",
+          "INTERPRETATION",
+          "EXAMPLE"
+        ],
+        "title": "PolicyNodeType"
       },
       "PolicyRule": {
         "properties": {
@@ -3892,6 +5561,15 @@
         ],
         "title": "RecruitmentStatus"
       },
+      "RetrievalMode": {
+        "type": "string",
+        "enum": [
+          "graph_only",
+          "lexical_only",
+          "full"
+        ],
+        "title": "RetrievalMode"
+      },
       "Role": {
         "type": "string",
         "enum": [
@@ -3902,6 +5580,134 @@
           "admin"
         ],
         "title": "Role"
+      },
+      "RuleApplicabilityRead": {
+        "properties": {
+          "input_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Input Kinds"
+          },
+          "channels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Channels"
+          },
+          "post_formats": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Post Formats"
+          },
+          "languages": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Languages"
+          },
+          "audiences": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Audiences"
+          },
+          "jurisdictions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Jurisdictions"
+          },
+          "study_specific": {
+            "type": "boolean",
+            "title": "Study Specific",
+            "description": "True when the rule applies to named studies only."
+          },
+          "effective_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective From"
+          },
+          "effective_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_kinds",
+          "channels",
+          "post_formats",
+          "languages",
+          "audiences",
+          "jurisdictions",
+          "study_specific",
+          "effective_from",
+          "effective_to"
+        ],
+        "title": "RuleApplicabilityRead",
+        "description": "When a rule or exception applies. An empty list means no restriction on that dimension.\n\nThe values are the policy's own tags, so they may name channels or languages the API doesn't\noffer yet; that's why they are strings, not the API's enums."
+      },
+      "RuleExceptionRead": {
+        "properties": {
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "requires_study_fact": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Study Fact",
+            "description": "The study fact that must be present for the exception to apply."
+          },
+          "applicability": {
+            "$ref": "#/components/schemas/RuleApplicabilityRead"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_key",
+          "language",
+          "text",
+          "requires_study_fact",
+          "applicability"
+        ],
+        "title": "RuleExceptionRead"
       },
       "RuleResult": {
         "properties": {
@@ -3947,9 +5753,83 @@
           "PASS",
           "FAIL",
           "NOT_APPLICABLE",
-          "UNABLE_TO_ASSESS"
+          "UNABLE_TO_ASSESS",
+          "NEEDS_REVIEW"
         ],
         "title": "RuleResultValue"
+      },
+      "RuleSourceRead": {
+        "properties": {
+          "source_title": {
+            "type": "string",
+            "title": "Source Title"
+          },
+          "clause_ref": {
+            "type": "string",
+            "title": "Clause Ref"
+          },
+          "section": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "excerpt": {
+            "type": "string",
+            "title": "Excerpt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_title",
+          "clause_ref",
+          "section",
+          "page",
+          "language",
+          "excerpt"
+        ],
+        "title": "RuleSourceRead"
+      },
+      "RuleTextRead": {
+        "properties": {
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_key",
+          "language",
+          "text"
+        ],
+        "title": "RuleTextRead"
       },
       "Severity": {
         "type": "string",
@@ -4288,6 +6168,24 @@
         ],
         "title": "StudySnapshotRead"
       },
+      "SupersededRuleRead": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "superseded_by": {
+            "type": "string",
+            "title": "Superseded By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule_id",
+          "superseded_by"
+        ],
+        "title": "SupersededRuleRead"
+      },
       "TenantMembershipRead": {
         "properties": {
           "tenant_id": {
@@ -4398,6 +6296,398 @@
         "title": "TextSpan",
         "description": "Zero-based Unicode code-point offsets into the validated text; end is exclusive."
       },
+      "UploadCreate": {
+        "properties": {
+          "study_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Study Id",
+            "description": "The study the file is for; it decides who can see it."
+          },
+          "creative_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Id",
+            "description": "Optional draft in the same study the file is meant for."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "description": "File name to show in the library."
+          },
+          "mime_type": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Mime Type",
+            "description": "One of GET /assets/upload-limits image_types."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Size Bytes",
+            "description": "Exact size of the file in bytes."
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Checksum Sha256",
+            "description": "SHA-256 of the file, lower-case hex.",
+            "examples": [
+              "9f86d00000000000000000000000000000000000000000000000000000000000"
+            ]
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/MediaAuthorizationInput"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "study_id",
+          "name",
+          "mime_type",
+          "size_bytes",
+          "checksum_sha256",
+          "authorization"
+        ],
+        "title": "UploadCreate"
+      },
+      "UploadLimits": {
+        "properties": {
+          "image_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Image Types",
+            "examples": [
+              [
+                "image/png",
+                "image/jpeg"
+              ]
+            ]
+          },
+          "image_max_bytes": {
+            "type": "integer",
+            "title": "Image Max Bytes",
+            "examples": [
+              20971520
+            ]
+          },
+          "upload_url_ttl_seconds": {
+            "type": "integer",
+            "title": "Upload Url Ttl Seconds",
+            "examples": [
+              600
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_types",
+          "image_max_bytes",
+          "upload_url_ttl_seconds"
+        ],
+        "title": "UploadLimits",
+        "description": "What POST /assets/uploads accepts. Configured per environment; read it, don't hard-code."
+      },
+      "UploadPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UploadRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor",
+            "description": "Pass as cursor for the next (older) page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "UploadPage"
+      },
+      "UploadPurpose": {
+        "type": "string",
+        "enum": [
+          "creative_media"
+        ],
+        "title": "UploadPurpose"
+      },
+      "UploadRead": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Asset Id"
+          },
+          "study_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Study Id"
+          },
+          "creative_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Id"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/UploadPurpose"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UploadState"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type",
+            "description": "As declared; inspection checks the real type."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "title": "Checksum Sha256"
+          },
+          "width_px": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width Px",
+            "description": "Found by inspection; null until then."
+          },
+          "height_px": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height Px"
+          },
+          "scan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadScan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/MediaAuthorization"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "upload": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadTarget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only in the create and upload-url responses while the file is awaited."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id",
+          "study_id",
+          "creative_id",
+          "purpose",
+          "status",
+          "reason",
+          "name",
+          "mime_type",
+          "size_bytes",
+          "checksum_sha256",
+          "width_px",
+          "height_px",
+          "scan",
+          "authorization",
+          "created_by",
+          "created_at",
+          "completed_at"
+        ],
+        "title": "UploadRead",
+        "description": "A client upload. Once READY, asset_id also works with GET /assets/{asset_id}."
+      },
+      "UploadReason": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "examples": [
+              "MEDIA_UNSUPPORTED_TYPE"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "retryable": {
+            "type": "boolean",
+            "title": "Retryable",
+            "description": "True: the system retries by itself (or upload again). False: final."
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "title": "UploadReason",
+        "description": "Why an upload was rejected, or the last temporary problem while it waits."
+      },
+      "UploadScan": {
+        "properties": {
+          "engine": {
+            "type": "string",
+            "title": "Engine"
+          },
+          "simulated": {
+            "type": "boolean",
+            "title": "Simulated",
+            "description": "True only in local and demo environments: no real malware scan ran."
+          },
+          "scanned_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scanned At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "engine",
+          "simulated",
+          "scanned_at"
+        ],
+        "title": "UploadScan"
+      },
+      "UploadState": {
+        "type": "string",
+        "enum": [
+          "PENDING_UPLOAD",
+          "QUARANTINED",
+          "SCANNING",
+          "READY",
+          "REJECTED",
+          "EXPIRED"
+        ],
+        "title": "UploadState",
+        "description": "Where a client upload is. Only READY uploads become assets that later steps may use."
+      },
+      "UploadTarget": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Short-lived and secret: do not store, log or share it."
+          },
+          "method": {
+            "type": "string",
+            "const": "PUT",
+            "title": "Method"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Headers",
+            "description": "Send exactly these headers with the PUT, or storage refuses it."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "method",
+          "headers",
+          "expires_at"
+        ],
+        "title": "UploadTarget",
+        "description": "Where and how to send the file: one PUT of the exact bytes declared, with these headers."
+      },
       "ValidationAccepted": {
         "properties": {
           "job_id": {
@@ -4421,6 +6711,187 @@
           "state"
         ],
         "title": "ValidationAccepted"
+      },
+      "ValidationContextRead": {
+        "properties": {
+          "validation_run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Validation Run Id"
+          },
+          "manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Sha256",
+            "description": "sha256 of the stored context's canonical JSON (sorted keys, no whitespace) when the run used it. Null for runs stored before it was recorded."
+          },
+          "policy_bundle_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Policy Bundle Id"
+          },
+          "policy_bundle_version": {
+            "type": "integer",
+            "title": "Policy Bundle Version"
+          },
+          "is_synthetic": {
+            "type": "boolean",
+            "title": "Is Synthetic"
+          },
+          "study_snapshot_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Study Snapshot Id"
+          },
+          "study_snapshot_version": {
+            "type": "integer",
+            "title": "Study Snapshot Version"
+          },
+          "input_kind": {
+            "$ref": "#/components/schemas/ValidationInputKind"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "post_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the run's manifest predates recording it."
+          },
+          "language": {
+            "$ref": "#/components/schemas/PolicyLanguage"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "jurisdiction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jurisdiction"
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Evaluated At"
+          },
+          "retrieval_mode": {
+            "$ref": "#/components/schemas/RetrievalMode"
+          },
+          "embedding_model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model Id"
+          },
+          "statements": {
+            "items": {
+              "$ref": "#/components/schemas/ContextStatementRead"
+            },
+            "type": "array",
+            "title": "Statements"
+          },
+          "required_rules": {
+            "items": {
+              "$ref": "#/components/schemas/ContextRuleRead"
+            },
+            "type": "array",
+            "title": "Required Rules"
+          },
+          "optional_rules": {
+            "items": {
+              "$ref": "#/components/schemas/ContextRuleRead"
+            },
+            "type": "array",
+            "title": "Optional Rules"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/ContextEvidenceRead"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/ContextExceptionRead"
+            },
+            "type": "array",
+            "title": "Exceptions"
+          },
+          "superseded": {
+            "items": {
+              "$ref": "#/components/schemas/SupersededRuleRead"
+            },
+            "type": "array",
+            "title": "Superseded"
+          },
+          "missing_context": {
+            "items": {
+              "$ref": "#/components/schemas/MissingContextRead"
+            },
+            "type": "array",
+            "title": "Missing Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "validation_run_id",
+          "manifest_sha256",
+          "policy_bundle_id",
+          "policy_bundle_version",
+          "is_synthetic",
+          "study_snapshot_id",
+          "study_snapshot_version",
+          "input_kind",
+          "channel",
+          "post_format",
+          "language",
+          "audience",
+          "jurisdiction",
+          "evaluated_at",
+          "retrieval_mode",
+          "embedding_model_id",
+          "statements",
+          "required_rules",
+          "optional_rules",
+          "evidence",
+          "exceptions",
+          "superseded",
+          "missing_context"
+        ],
+        "title": "ValidationContextRead",
+        "description": "The policy context stored for one validation run: which rules it had to use and why.\n\nEvidence only for now: the run's outcome comes from the rule checks until NRC-7's judge uses\nthis context. A code in missing_context means the context is incomplete, never a pass."
       },
       "ValidationCreate": {
         "properties": {

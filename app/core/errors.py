@@ -31,6 +31,12 @@ class FieldValidationError(AppError):
         )
 
 
+class TenantNotBoundError(AppError):
+    # A programming error: tenant-scoped code ran on a session without bind_tenant. A 500 with the
+    # generic message; never served to a client as anything more specific.
+    pass
+
+
 class AuthenticationError(AppError):
     code = "UNAUTHENTICATED"
     default_message = "Authentication is required."
@@ -44,6 +50,13 @@ class PermissionDeniedError(AppError):
 class NotFoundError(AppError):
     code = "NOT_FOUND"
     default_message = "Resource not found."
+
+
+class ContextNotAvailableError(NotFoundError):
+    # The run exists but stored no policy context (older runs, or retrieval was unavailable and
+    # the run recorded a coverage gap). A separate code so the UI can tell it from NOT_FOUND.
+    code = "CONTEXT_NOT_AVAILABLE"
+    default_message = "No policy context was stored for this validation run."
 
 
 class ConflictError(AppError):
@@ -83,9 +96,65 @@ class NoActivePolicyError(ConflictError):
     default_message = "This tenant has no active policy to validate against."
 
 
+class PolicyContextUnavailableError(ConflictError):
+    # details.reason is a PolicyContextReason (app/models/enums.py). Callers record it as a
+    # coverage gap; it must never turn into a PASS.
+    code = "POLICY_CONTEXT_UNAVAILABLE"
+    default_message = "The policy context for this check could not be built."
+
+
+class PolicyIndexError(ConflictError):
+    # details.reason is a PolicyIndexReason (app/models/enums.py). Raised by the owner-run index
+    # build only; the API never builds an index.
+    code = "POLICY_INDEX_ERROR"
+    default_message = "The policy index could not be built."
+
+
 class ExportNotReadyError(ConflictError):
     code = "EXPORT_NOT_READY"
     default_message = "Generate an image for the current version before exporting."
+
+
+class JobNotCancellableError(ConflictError):
+    # details.state: the job's final state (SUCCEEDED or FAILED).
+    code = "JOB_NOT_CANCELLABLE"
+    default_message = "This job has already finished."
+
+
+class JobOperationNotAllowedError(ConflictError):
+    # An operator replay or settle the job's state does not allow.
+    # details: state (the job's) and reason (why not).
+    code = "JOB_OPERATION_NOT_ALLOWED"
+    default_message = "This operation is not allowed for the job in its current state."
+
+
+class UploadNotReceivedError(ConflictError):
+    # Complete was called before the file reached storage; upload it, then complete again.
+    code = "UPLOAD_NOT_RECEIVED"
+    default_message = "The file has not been received yet. Upload it, then complete again."
+    retryable = True
+
+
+class UploadNotPendingError(ConflictError):
+    # details.status: the upload's current state.
+    code = "UPLOAD_NOT_PENDING"
+    default_message = "This upload is no longer waiting for its file."
+
+
+class UploadNotAcceptedError(AppError):
+    # The declared file breaks a configured limit. details.field names the field; the limits
+    # are in GET /assets/upload-limits.
+    code = "UPLOAD_NOT_ACCEPTED"
+    default_message = "This file cannot be uploaded."
+
+
+class UploadLimitError(AppError):
+    # The tenant has UPLOAD_MAX_PENDING_PER_TENANT uploads in progress.
+    code = "UPLOAD_LIMIT_REACHED"
+    default_message = (
+        "Too many uploads are in progress. Try again when one has finished processing."
+    )
+    retryable = True
 
 
 class GenerationLimitError(AppError):

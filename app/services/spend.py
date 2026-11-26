@@ -8,6 +8,7 @@ their reservation. jobs.provider_spend_state makes each step happen at most once
 """
 
 import logging
+from decimal import ROUND_CEILING, Decimal
 from uuid import UUID
 
 from sqlalchemy import func, select, update
@@ -17,6 +18,11 @@ from app.models import Job, ProviderSpend
 from app.models.jobs import SpendState
 
 logger = logging.getLogger(__name__)
+
+
+def usd_micros(usd: Decimal) -> int:
+    # Money stays in integer units; round up so the cap is never undercut.
+    return int((usd * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
 
 
 async def reserve(

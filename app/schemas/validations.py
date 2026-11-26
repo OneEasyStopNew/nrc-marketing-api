@@ -7,10 +7,12 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
-# Outcome and ValidationInputKind live with the models because validation runs store them;
-# they are re-exported here for the API schemas.
+# Gate, Outcome, Severity and ValidationInputKind live with the models because validation runs
+# and policy rules store them; they are re-exported here for the API schemas.
 from app.models.enums import ExecutionState
+from app.models.enums import Gate as Gate
 from app.models.enums import Outcome as Outcome
+from app.models.enums import Severity as Severity
 from app.models.enums import ValidationInputKind as ValidationInputKind
 from app.schemas.common import ApiModel, RequestModel
 
@@ -20,19 +22,9 @@ class RuleResultValue(StrEnum):
     FAIL = "FAIL"
     NOT_APPLICABLE = "NOT_APPLICABLE"
     UNABLE_TO_ASSESS = "UNABLE_TO_ASSESS"
-
-
-class Gate(StrEnum):
-    COMPLETENESS = "completeness"
-    STUDY_FACTS = "study_facts"
-    POLICY = "policy"
-    MEDIA = "media"
-
-
-class Severity(StrEnum):
-    CRITICAL = "critical"
-    MAJOR = "major"
-    MINOR = "minor"
+    # A person must decide (e.g. two rule versions conflict). Unlike UNABLE_TO_ASSESS, a reviewer
+    # may resolve it (NRC-12).
+    NEEDS_REVIEW = "NEEDS_REVIEW"
 
 
 class ValidationCreate(RequestModel):

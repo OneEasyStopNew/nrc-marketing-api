@@ -8,10 +8,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.models.enums import BundleLifecycleState, enum_column
 
 
 class PolicyBundle(Base):
-    # One immutable, approved version of a tenant's rules. The highest version is the active one.
+    # One immutable, approved version of a tenant's rules. The active policy is the highest
+    # version whose lifecycle_state is ACTIVE.
 
     __tablename__ = "policy_bundles"
     __table_args__ = (
@@ -30,3 +32,11 @@ class PolicyBundle(Base):
     approved_by: Mapped[str] = mapped_column(String(200))
     approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # New bundles start as DRAFT, so one inserted without a state never becomes the active policy
+    # (the migration set existing rows to ACTIVE). NRC-4 owns the transitions; enforcing a single
+    # ACTIVE bundle per tenant belongs to its activation step.
+    lifecycle_state: Mapped[BundleLifecycleState] = mapped_column(
+        enum_column(BundleLifecycleState), server_default=BundleLifecycleState.DRAFT.value
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_by: Mapped[str | None] = mapped_column(String(200))
