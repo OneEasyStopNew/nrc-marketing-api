@@ -89,3 +89,6 @@ def test_example_matches_schema(file: str, name: str) -> None:
     model = SCHEMAS[example["schema"]].model_validate(example["body"])
 
     assert model.model_dump(mode="json") == example["body"]
+    if isinstance(model, ValidationAccepted | ValidationRunRead):
+        # The API uses the job's id as the run's id (test_validation_jobs._queued checks it).
+        assert model.job_id == model.validation_run_id

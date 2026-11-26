@@ -3,6 +3,7 @@
 
 import json
 from collections.abc import Mapping
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -81,9 +82,9 @@ def _context() -> judging.JudgeContext:
 
 
 async def _run(
-    judge: TableJudge, cases: eval_judge.CaseFile, budget: float = 1.0
+    judge: TableJudge, cases: eval_judge.CaseFile, budget: Decimal = Decimal(1)
 ) -> eval_judge.ModelReport:
-    price = eval_judge.Price(input=1.0, output=1.0)
+    price = eval_judge.Price(input=Decimal(1), output=Decimal(1))
     spend = eval_judge.Spend(budget_usd=budget)
     results = await eval_judge.evaluate_model(judge, cases, _context(), price, 2000, spend)
     mandatory = eval_judge.mandatory_rules(load_synthetic_graph())
@@ -201,10 +202,19 @@ async def test_the_run_stops_once_the_spend_reaches_the_budget() -> None:
         {f"{CLEAN} {n}": _answer({"REC-01": "PASS", "REC-04": "PASS"}) for n in range(5)}
     )
 
-    report = await _run(judge, cases, budget=0.0024)
+    report = await _run(judge, cases, budget=Decimal("0.0036"))
 
-    assert judge.calls == 2
-    assert report.calls == 2
+    assert judge.calls == 3
+    assert report.calls == 3
+    # Exact: three float additions of 0.0012 give 0.0036000000000000003.
+    assert report.cost_usd == Decimal("0.0036")
+
+
+def test_prices_are_read_as_exact_decimals() -> None:
+    prices = eval_judge.load_prices(eval_judge.DEFAULT_PRICES)
+
+    nova = prices.models["amazon.nova-lite-v1:0"]
+    assert (nova.input, nova.output) == (Decimal("0.06"), Decimal("0.24"))
 
 
 def test_the_worst_case_for_the_four_models_fits_a_one_dollar_budget() -> None:
@@ -217,4 +227,4 @@ def test_the_worst_case_for_the_four_models_fits_a_one_dollar_budget() -> None:
         for model in FOUR_MODELS
     )
 
-    assert 0 < total < 1.0
+    assert 0 < total < eval_judge.DEFAULT_BUDGET_USD

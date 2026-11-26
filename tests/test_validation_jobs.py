@@ -12,7 +12,7 @@ import pytest
 from asgi_lifespan import LifespanManager
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.api.deps import get_signing_keys
@@ -21,10 +21,12 @@ from app.core.errors import ValidationJobError
 from app.main import create_app
 from app.models import Job, ValidationRun
 from app.models.enums import ExecutionState, JudgeFailure, ModelCheckFailure, PolicyLanguage
-from app.services import rules, validations
-from app.services.jobs import RUN_EVENT
+from app.services import rules, validation_jobs, validations
+from app.services.jobs import RUN_EVENT, transition
+from app.services.policy_context import AuroraPolicyContextProvider
 from app.services.providers import text_judge
-from app.services.providers.base import ProviderRejectedError
+from app.services.providers.base import ProviderConfigError, ProviderRejectedError
+from app.services.providers.bedrock_judge import BedrockTextJudge
 from app.services.providers.text_judge import (
     NOVA_LITE_MODEL_ID,
     SIMULATED_JUDGE_MODEL_ID,
@@ -34,6 +36,7 @@ from app.services.providers.text_judge import (
     SimulatedTextJudge,
 )
 from app.services.validations import INPUT_BY_JOB_KIND, JOB_KIND_BY_INPUT, VALIDATION_RUN_EVENT
+from app.workers import connector
 from app.workers.common import WorkerConfigError
 from app.workers.connector import (
     EVENT_HANDLERS,
@@ -51,6 +54,8 @@ from tests.conftest import (
     Sessions,
     StaticKeys,
     World,
+    _session,
+    seed_tenant,
 )
 
 API = "/v1/marketing"
@@ -512,6 +517,42 @@ async def test_different_content_is_never_reused(
     await _queued(client, auth, world, prompt=f"{CLEAN_PROMPT} Ask your doctor.")
 
 
+@pytest.fixture
+async def tenant_c(
+    connection: AsyncConnection, seed_graph: bool, graph: PolicyGraphImport
+) -> SeededTenant:
+    # A second tenant with its own policy and creator-a as a member. Requested before client, so
+    # it seeds before world switches the connection to the API's role.
+    async with _session(connection) as seed:
+        tenant = await seed_tenant(
+            seed,
+            name="Tenant C",
+            members={"creator-a": ["creator"]},
+            with_policy=True,
+            with_graph=seed_graph,
+            graph=graph,
+        )
+        await seed.commit()
+    return tenant
+
+
+async def test_the_same_content_in_another_tenant_is_queued_not_reused(
+    tenant_c: SeededTenant,
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+) -> None:
+    await _queued(client, auth, world)
+    await _work(sessions)
+
+    other = await _creative(client, auth, tenant_c, prompt=CLEAN_PROMPT)
+    response = await _validate(client, auth, tenant_c.tenant_id, other)
+
+    assert response.status_code == 202, response.text
+    assert response.json()["state"] == "QUEUED"
+
+
 async def test_a_needs_review_result_is_not_reused(
     client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
 ) -> None:
@@ -598,6 +639,64 @@ async def test_a_validation_job_with_an_unreadable_policy_version_fails_at_once(
     )
 
 
+async def test_a_job_finished_since_it_was_read_is_left_alone(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> None:
+    _, run_id = await _queued(client, auth, world)
+    stale = await _job(sessions, run_id)  # read while QUEUED
+    await _sql(
+        sessions,
+        "UPDATE jobs SET state = 'FAILED', completed_at = now() WHERE id = :id",
+        run_id,
+    )
+    settings = get_settings()
+
+    async def no_heartbeat(db: AsyncSession) -> None:
+        return None
+
+    async with sessions() as db:
+        result = await validation_jobs.run(
+            db,
+            stale,
+            judge=SimulatedTextJudge(),
+            context_provider=AuroraPolicyContextProvider(settings),
+            settings=settings,
+            now=datetime.now(UTC),
+            heartbeat=no_heartbeat,
+            retry_delay=lambda attempt: 1.0,
+        )
+        await db.commit()
+
+    assert result is None
+    done = await _read(client, auth, world, run_id)
+    assert (done["state"], done["outcome"]) == ("FAILED", None)
+
+
+async def test_no_run_is_stored_when_the_job_cannot_move_to_succeeded(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The worker holds the job row from its move to RUNNING, so only a broken invariant gets
+    # here; stand in for one by refusing the final move.
+    real = transition
+
+    async def refuse_success(db: AsyncSession, job_id: UUID, **kwargs: Any) -> bool:
+        if kwargs["to"] is ExecutionState.SUCCEEDED:
+            return False
+        return await real(db, job_id, **kwargs)
+
+    monkeypatch.setattr(validation_jobs, "transition", refuse_success)
+    _, run_id = await _queued(client, auth, world)
+
+    await _work(sessions)
+
+    waiting = await _read(client, auth, world, run_id)
+    assert (waiting["state"], waiting["outcome"]) == ("RUNNING", None)
+
+
 async def _sql(sessions: Sessions, statement: str, job_id: str) -> None:
     # Test set-up on the worker's connection (it may update jobs).
     async with sessions() as db:
@@ -627,35 +726,92 @@ async def _job(sessions: Sessions, job_id: str) -> Job:
 
 def test_the_worker_refuses_a_live_judge_without_a_model() -> None:
     # A call budget inside the lease, so only the missing model is wrong.
-    settings = _live_judge(timeout=10, retries=3).model_copy(
-        update={"bedrock_validation_model_id": None}
-    )
+    settings = _live_judge(timeout=10).model_copy(update={"bedrock_validation_model_id": None})
 
     with pytest.raises(WorkerConfigError, match="missing BEDROCK_VALIDATION_MODEL_ID"):
         check_worker_settings(settings)
 
 
-def _live_judge(timeout: float, retries: int) -> Settings:
+def _live_judge(timeout: float) -> Settings:
     return get_settings().model_copy(
         update={
             "validation_model_mode": "live",
             "bedrock_validation_model_id": NOVA_LITE_MODEL_ID,
             "validation_model_timeout_seconds": timeout,
-            "bedrock_max_retries": retries,
             "worker_lease_seconds": 60,
         }
     )
 
 
 def test_the_worker_refuses_a_live_judge_call_budget_as_long_as_its_lease() -> None:
-    # 15 s per attempt x 4 attempts = 60 s, the lease: a call could outlive it.
-    with pytest.raises(WorkerConfigError, match=r"BEDROCK_MAX_RETRIES \+ 1\) must be below"):
-        check_worker_settings(_live_judge(timeout=15, retries=3))
+    # One attempt of 60 s is the whole lease: a call could outlive it.
+    with pytest.raises(WorkerConfigError, match="VALIDATION_MODEL_TIMEOUT_SECONDS must be below"):
+        check_worker_settings(_live_judge(timeout=60))
 
 
 def test_a_live_judge_call_budget_just_under_the_lease_is_accepted() -> None:
-    # 14.9 s x 4 = 59.6 s < 60 s.
-    check_worker_settings(_live_judge(timeout=14.9, retries=3))
+    check_worker_settings(_live_judge(timeout=59.9))
+
+
+def test_a_live_judge_starts_with_the_default_timeouts_and_retries() -> None:
+    # Only what live mode must be given (the model); every timeout, retry and lease setting is
+    # its declared default, so live mode works out of the box.
+    defaults = Settings.model_fields
+    settings = get_settings().model_copy(
+        update={
+            "validation_model_mode": "live",
+            "bedrock_validation_model_id": NOVA_LITE_MODEL_ID,
+            **{
+                name: defaults[name].default
+                for name in (
+                    "validation_model_timeout_seconds",
+                    "bedrock_max_retries",
+                    "worker_lease_seconds",
+                    "http_timeout_seconds",
+                )
+            },
+        }
+    )
+
+    check_worker_settings(settings)
+
+
+def test_the_live_judge_client_makes_one_attempt_and_leaves_retries_to_the_job() -> None:
+    settings = _live_judge(timeout=10).model_copy(update={"bedrock_max_retries": 5})
+
+    judge = BedrockTextJudge.from_settings(settings)
+
+    retries = judge._client.meta.config.retries  # type: ignore[attr-defined]  # not in the stubs
+    assert retries == {"total_max_attempts": 1, "mode": "standard"}
+
+
+def test_the_worker_builds_the_judge_at_start_not_on_the_first_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[Settings] = []
+
+    def build(settings: Settings) -> None:
+        built.append(settings)
+
+    monkeypatch.setattr(connector, "text_judge_from_settings", build)
+    handler = ValidationJobHandler()
+    settings = get_settings()
+
+    handler.prepare(settings)
+    handler._dependencies(settings)  # what each job's handle() asks for
+
+    assert built == [settings]
+
+
+def test_a_judge_config_error_stops_the_worker_at_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(settings: Settings) -> None:
+        raise ProviderConfigError("The Bedrock judge is not configured; missing model id")
+
+    monkeypatch.setattr(connector, "text_judge_from_settings", refuse)
+    monkeypatch.setattr(connector, "VALIDATION_JOB_HANDLER", ValidationJobHandler())
+
+    with pytest.raises(WorkerConfigError, match="judge is not configured"):
+        connector.prepare_validation(get_settings())
 
 
 @pytest.mark.parametrize("mode", ["off", "simulator"])

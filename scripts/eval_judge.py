@@ -33,6 +33,7 @@ import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Final, Self
 
@@ -52,7 +53,7 @@ from scripts.import_policy_graph import PolicyGraphImport, load_synthetic_graph
 DATA = Path(__file__).parent / "data"
 DEFAULT_CASES: Final = DATA / "judge_eval_synthetic.json"
 DEFAULT_PRICES: Final = DATA / "bedrock_judge_prices.json"
-DEFAULT_BUDGET_USD: Final = 1.0
+DEFAULT_BUDGET_USD: Final = Decimal("1.0")
 # Characters per input token for the pre-run estimate: low, so the estimate is on the high side.
 CHARS_PER_TOKEN: Final = 3
 _TOKENS_PER_PRICE_UNIT: Final = 1_000_000
@@ -92,9 +93,10 @@ class CaseFile(_Model):
 
 
 class Price(_Model):
-    # USD per 1M tokens.
-    input: float = Field(ge=0)
-    output: float = Field(ge=0)
+    # USD per 1M tokens. Decimal, like every amount here: float sums drift and the spend cap
+    # compares them.
+    input: Decimal = Field(ge=0)
+    output: Decimal = Field(ge=0)
 
 
 class PriceFile(_Model):
@@ -106,8 +108,8 @@ class PriceFile(_Model):
 
 @dataclass
 class Spend:
-    budget_usd: float
-    total_usd: float = 0.0
+    budget_usd: Decimal
+    total_usd: Decimal = Decimal(0)
 
     @property
     def exhausted(self) -> bool:
@@ -124,7 +126,7 @@ class CaseResult:
     latency_ms: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
-    cost_usd: float | None = None
+    cost_usd: Decimal | None = None
     evidence_ok: bool | None = None
     spans_total: int = 0
     spans_ok: int = 0
@@ -159,7 +161,7 @@ class ModelReport:
     latency_p95_ms: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
-    cost_usd: float = 0.0
+    cost_usd: Decimal = Decimal(0)
     cases: list[CaseResult] = field(default_factory=list)
 
 
@@ -201,9 +203,9 @@ def mandatory_rules(graph: PolicyGraphImport) -> frozenset[str]:
 
 def worst_case_usd(
     cases: CaseFile, context: judging.JudgeContext, price: Price, max_output_tokens: int
-) -> float:
+) -> Decimal:
     # Every answer at the output cap, and input counted generously from its characters.
-    total = 0.0
+    total = Decimal(0)
     for case in cases.cases:
         request = judging.build_request(case.text, context, max_output_tokens)
         input_tokens = math.ceil(len(request.system + request.user) / CHARS_PER_TOKEN)
@@ -261,7 +263,7 @@ def tally(
             latencies.append(result.latency_ms)
         report.input_tokens += result.input_tokens or 0
         report.output_tokens += result.output_tokens or 0
-        report.cost_usd += result.cost_usd or 0.0
+        report.cost_usd += result.cost_usd or Decimal(0)
         if result.evidence_ok is not None:
             report.parsed += 1
             report.evidence_ok += result.evidence_ok
@@ -351,10 +353,11 @@ async def evaluate_model(
         result.latency_ms = reply.latency_ms or round((time.monotonic() - started) * 1000)
         result.input_tokens = reply.input_tokens
         result.output_tokens = reply.output_tokens
-        result.cost_usd = (
+        cost = (
             (reply.input_tokens or 0) * price.input + (reply.output_tokens or 0) * price.output
         ) / _TOKENS_PER_PRICE_UNIT
-        spend.total_usd += result.cost_usd
+        result.cost_usd = cost
+        spend.total_usd += cost
         score_answer(result, reply, request, context)
         results.append(result)
     return results
@@ -457,7 +460,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--models", required=True, help="comma-separated Bedrock model ids")
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--prices", type=Path, default=DEFAULT_PRICES)
-    parser.add_argument("--budget-usd", type=float, default=DEFAULT_BUDGET_USD)
+    parser.add_argument("--budget-usd", type=Decimal, default=DEFAULT_BUDGET_USD)
     parser.add_argument("--profile", default=None, help="AWS profile (default: the usual chain)")
     parser.add_argument("--region", default=_default("aws_region"))
     parser.add_argument(
@@ -518,7 +521,9 @@ async def _main(args: argparse.Namespace) -> int:
         args.out_md.write_text(markdown, encoding="utf-8")
     if args.out_json is not None:
         args.out_json.write_text(
-            json.dumps([asdict(report) for report in reports], indent=1), encoding="utf-8"
+            # Amounts as exact decimal strings.
+            json.dumps([asdict(report) for report in reports], indent=1, default=str),
+            encoding="utf-8",
         )
     return 0
 

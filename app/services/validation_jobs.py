@@ -56,7 +56,11 @@ async def run(
     version = validations.pinned_policy_version(job)
     if version is None:
         raise ValidationJobError("The job has no readable policy version.")
-    await transition(db, job.id, allowed_from=_ACTIVE, to=ExecutionState.RUNNING, stage=None)
+    if not await transition(
+        db, job.id, allowed_from=_ACTIVE, to=ExecutionState.RUNNING, stage=None
+    ):
+        # Another path finished the job since it was read: nothing left to do.
+        return None
     try:
         target = await validations.load_target(
             db, (Creative.tenant_id == job.tenant_id,), job.creative_id, job.creative_version
@@ -96,7 +100,7 @@ async def run(
             outcome = await _review(
                 db, job, judge, text, open_rules, stored, settings, now, heartbeat, retry_delay
             )
-            if isinstance(outcome, float):
+            if outcome is None or isinstance(outcome, float):
                 return outcome
             review, judged = outcome
         # What the context couldn't settle is part of the saved result: a mandatory rule with a
@@ -107,6 +111,13 @@ async def run(
             {rule.rule_id: rule for rule in selected},
             stored.manifest,
         )
+    # Moved first, in the same transaction as the insert. The row is locked since the move to
+    # RUNNING above, so this fails only if that stops holding; then no run is stored.
+    if not await transition(
+        db, job.id, allowed_from={ExecutionState.RUNNING}, to=ExecutionState.SUCCEEDED
+    ):
+        logger.warning("validation job no longer running, run not stored job=%s", job.id)
+        return None
     db.add(
         validations.new_run(
             run_id=job.id,
@@ -128,7 +139,6 @@ async def run(
             ),
         )
     )
-    await transition(db, job.id, allowed_from={ExecutionState.RUNNING}, to=ExecutionState.SUCCEEDED)
     logger.info(
         "validation stored job=%s tenant=%s outcome=%s",
         job.id,
@@ -149,8 +159,9 @@ async def _review(
     now: datetime,
     heartbeat: Callable[[AsyncSession], Awaitable[None]],
     retry_delay: Callable[[int], float],
-) -> tuple[rules.ModelReview, validations.Judged] | float:
-    # The model's verified answers, a failed review to store, or a delay before trying again.
+) -> tuple[rules.ModelReview, validations.Judged] | float | None:
+    # The model's verified answers, a failed review to store, a delay before trying again, or
+    # None when another path finished the job meanwhile.
     judged = validations.Judged(
         model_id=judge.model_id, prompt_version=judging.PROMPT_TEMPLATE_VERSION
     )
@@ -171,14 +182,15 @@ async def _review(
     except ProviderError as error:
         attempts = job.attempt_count + 1
         if error.retryable and attempts < job.max_attempts:
-            await transition(
+            if not await transition(
                 db,
                 job.id,
                 allowed_from={ExecutionState.RUNNING},
                 to=ExecutionState.RUNNING,
                 stage=JobStage.RETRY_WAIT,
                 attempt_count=attempts,
-            )
+            ):
+                return None
             logger.warning(
                 "judge unavailable, retrying job=%s attempt=%d code=%s",
                 job.id,

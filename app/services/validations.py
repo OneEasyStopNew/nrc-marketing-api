@@ -368,8 +368,10 @@ def reuse_key(
     """sha256 of the content, its scope and every version the result depends on.
 
     The day is included because rules carry effective dates: a result is never reused across
-    one. Two runs with equal keys would be checked against the same rules by the same code,
-    model and prompt.
+    one. Two runs with equal keys would be checked against the same rules, with the same
+    retrieval bounds, by the same code, model and prompt. No embedding settings: the worker
+    builds the context without an embedder (full-text search only); giving it one must add the
+    embedding mode and model here.
     """
     parts = {
         "kind": kind.value,
@@ -382,7 +384,12 @@ def reuse_key(
         "evaluation": rules.EVALUATION_VERSION,
         "judge": judge_model_id(settings),
         "prompt": judging.PROMPT_TEMPLATE_VERSION,
-        "embedding": f"{settings.embedding_mode}:{settings.bedrock_embedding_model_id}",
+        "retrieval": {
+            "max_hops": settings.policy_retrieval_max_hops,
+            "max_nodes": settings.policy_retrieval_max_nodes,
+            "top_k": settings.policy_retrieval_top_k,
+            "max_statements": settings.policy_retrieval_max_statements,
+        },
         "day": day.isoformat(),
     }
     return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()

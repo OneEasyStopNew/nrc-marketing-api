@@ -44,7 +44,7 @@ from app.services.providers.text_judge import (
 if TYPE_CHECKING:
     from mypy_boto3_bedrock_runtime import BedrockRuntimeClient
 
-# Error codes a later attempt can succeed after (the client's own retries are already spent), and
+# Error codes a later attempt (the job's next try) can succeed after, and
 # the ones that mean the deployment is set up wrongly. ThrottlingException is classified first.
 _THROTTLED_CODE: Final = "ThrottlingException"
 _UNAVAILABLE_CODES: Final = frozenset(
@@ -88,8 +88,9 @@ class BedrockTextJudge:
         client_config = Config(
             connect_timeout=settings.validation_model_timeout_seconds,
             read_timeout=settings.validation_model_timeout_seconds,
-            # botocore's max_attempts counts retries after the first attempt here, as for S3.
-            retries={"max_attempts": settings.bedrock_max_retries, "mode": "standard"},
+            # One attempt: the validation job retries throttling and timeouts with its own
+            # backoff, and retrying here as well would multiply the calls under throttling.
+            retries={"total_max_attempts": 1, "mode": "standard"},
         )
         client = boto3.Session().client(
             "bedrock-runtime", region_name=settings.aws_region, config=client_config
@@ -127,8 +128,9 @@ class BedrockTextJudge:
         )
 
     def _converse(self, request: JudgeRequest) -> JudgeReply:
-        # Runs in a worker thread. Errors carry a fixed message with the model id and the error
-        # code only: botocore's own text can echo the request, which holds the text under review.
+        # Runs in a worker thread, one attempt (the job owns retries). Errors carry a fixed
+        # message with the model id and the error code only: botocore's own text can echo the
+        # request, which holds the text under review.
         try:
             # No toolConfig (the answer is plain JSON text) and no temperature: it is unverified
             # whether the thinking-enabled models accept one.
@@ -155,7 +157,7 @@ class BedrockTextJudge:
                 f"Bedrock judge model {self.model_id}: AWS credentials missing or expired"
             ) from None
         except BotoCoreError:
-            # Timeouts and connection failures; the client's retries are already spent.
+            # Timeouts and connection failures; the job retries them.
             raise ProviderUnavailableError(
                 f"Bedrock judge model {self.model_id} could not be reached"
             ) from None

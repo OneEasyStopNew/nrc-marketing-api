@@ -236,9 +236,10 @@ def missing_live_judge_settings(settings: Settings) -> list[str]:
 
 
 def judge_call_budget_seconds(settings: Settings) -> float:
-    # The longest one judge call may take, the client's retries included. botocore's timeouts
-    # are per connection and per socket read, so the adapter enforces this bound itself.
-    return settings.validation_model_timeout_seconds * (settings.bedrock_max_retries + 1)
+    # The longest one judge call may take. The client makes one attempt (the job owns retries),
+    # but botocore's timeouts are per connection and per socket read, so the adapter enforces
+    # this bound on the whole call itself.
+    return settings.validation_model_timeout_seconds
 
 
 def text_judge_from_settings(settings: Settings) -> TextJudge | None:

@@ -56,6 +56,7 @@ from app.services.providers.base import (
     FetchedImage,
     ImageProvider,
     ImageRequest,
+    ProviderConfigError,
     ProviderError,
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
@@ -594,7 +595,9 @@ class ImageGenerationHandler:
 class ValidationJobHandler:
     """Runs a brief or caption validation job (app.services.validation_jobs).
 
-    The judge and the context provider come from the settings unless a test passes its own.
+    The judge and the context provider come from the settings unless a test passes its own. The
+    worker builds them at start (prepare, in a thread: creating a boto3 client blocks), so a
+    config error stops start-up instead of the first job.
     """
 
     def __init__(
@@ -623,7 +626,11 @@ class ValidationJobHandler:
             await _fail_with(db, job.id, error.code, error.message, billed=False)
             return None
 
+    def prepare(self, settings: Settings) -> None:
+        self._dependencies(settings)
+
     def _dependencies(self, settings: Settings) -> tuple[TextJudge | None, PolicyContextProvider]:
+        # Built here only when prepare wasn't called with these settings (tests calling run_once).
         if self._built is None or self._built[0] is not settings:
             judge = self._judge if self._judge is not None else text_judge_from_settings(settings)
             provider = self._context_provider or AuroraPolicyContextProvider(settings)
@@ -636,8 +643,9 @@ class ValidationJobHandler:
 JOB_HANDLERS: Final[Mapping[str, JobHandler]] = MappingProxyType(
     {JobKind.IMAGE_GENERATION: ImageGenerationHandler()}
 )
+VALIDATION_JOB_HANDLER: Final = ValidationJobHandler()
 VALIDATION_JOB_HANDLERS: Final[Mapping[str, JobHandler]] = MappingProxyType(
-    dict.fromkeys(INPUT_BY_JOB_KIND, ValidationJobHandler())
+    dict.fromkeys(INPUT_BY_JOB_KIND, VALIDATION_JOB_HANDLER)
 )
 
 
@@ -1116,12 +1124,11 @@ def check_worker_settings(settings: Settings) -> None:
     if settings.http_timeout_seconds >= lease_seconds(settings):
         raise WorkerConfigError("HTTP_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS.")
     # The handler renews the lease before each judge call, and the adapter stops waiting after
-    # the call budget (timeout per attempt times attempts), so a call ends inside its lease.
+    # the call budget (one attempt; the job owns retries), so a call ends inside its lease.
     live_judge = settings.validation_model_mode == "live"
     if live_judge and judge_call_budget_seconds(settings) >= lease_seconds(settings):
         raise WorkerConfigError(
-            "VALIDATION_MODEL_TIMEOUT_SECONDS x (BEDROCK_MAX_RETRIES + 1) must be below "
-            "WORKER_LEASE_SECONDS."
+            "VALIDATION_MODEL_TIMEOUT_SECONDS must be below WORKER_LEASE_SECONDS."
         )
     problems = missing_live_judge_settings(settings)
     if problems:
@@ -1153,6 +1160,14 @@ def build_providers(settings: Settings) -> dict[str, ImageProvider]:
     return {HIGGSFIELD_NAME: create_provider(settings)}
 
 
+def prepare_validation(settings: Settings) -> None:
+    # The judge client and context provider, built once at start with the settings _serve uses.
+    try:
+        VALIDATION_JOB_HANDLER.prepare(settings)
+    except ProviderConfigError as error:
+        raise WorkerConfigError(str(error)) from None
+
+
 def load_provider_secrets(settings: Settings) -> Settings:
     # Staging/production read the Higgsfield key from Secrets Manager; it stays in memory only.
     try:
@@ -1165,6 +1180,7 @@ async def run_forever(settings: Settings) -> None:
     database_url = worker_database_url()
     settings = await asyncio.to_thread(load_provider_secrets, settings)
     providers = build_providers(settings)
+    await asyncio.to_thread(prepare_validation, settings)
     try:
         # The originals are closed below; the guarded ones only add the circuit breaker.
         await _serve(settings, guard_providers(providers, settings), database_url)
