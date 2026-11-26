@@ -9,6 +9,7 @@ from pydantic import AwareDatetime, Field, StringConstraints
 
 from app.models.enums import (
     BundleLifecycleState,
+    Channel,
     CheckCode,
     CheckType,
     Command,
@@ -19,6 +20,7 @@ from app.models.enums import (
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
+    PostFormat,
     ProposalOrigin,
     ReviewItemKind,
     ReviewState,
@@ -55,10 +57,12 @@ class BundleCreate(RequestModel):
 
 
 class Applicability(RequestModel):
-    # Empty lists mean "no restriction", as retrieval reads them.
+    # Empty lists mean "no restriction", as retrieval reads them. Conditions with an enum use it,
+    # as the import script does: a typo is a 422 instead of a rule that never applies.
     input_kinds: list[ValidationInputKind] = Field(default_factory=list, max_length=3)
-    channels: list[Tag] = Field(default_factory=list, max_length=20)
-    languages: list[Tag] = Field(default_factory=list, max_length=10)
+    channels: list[Channel] = Field(default_factory=list, max_length=20)
+    post_formats: list[PostFormat] = Field(default_factory=list, max_length=20)
+    languages: list[PolicyLanguage] = Field(default_factory=list, max_length=10)
     audiences: list[Tag] = Field(default_factory=list, max_length=20)
     jurisdictions: list[Tag] = Field(default_factory=list, max_length=20)
     study_ids: list[UUID] = Field(default_factory=list, max_length=100)
@@ -80,8 +84,9 @@ class NodeUpdate(RequestModel):
     text: Text | None = None
     source_clause_id: UUID | None = None
     input_kinds: list[ValidationInputKind] | None = Field(default=None, max_length=3)
-    channels: list[Tag] | None = Field(default=None, max_length=20)
-    languages: list[Tag] | None = Field(default=None, max_length=10)
+    channels: list[Channel] | None = Field(default=None, max_length=20)
+    post_formats: list[PostFormat] | None = Field(default=None, max_length=20)
+    languages: list[PolicyLanguage] | None = Field(default=None, max_length=10)
     audiences: list[Tag] | None = Field(default=None, max_length=20)
     jurisdictions: list[Tag] | None = Field(default=None, max_length=20)
     study_ids: list[UUID] | None = Field(default=None, max_length=100)
@@ -245,6 +250,7 @@ class PolicyNodeRead(ReviewRead):
     # Applicability, as NodeCreate takes it; an empty list means no restriction.
     input_kinds: list[str]
     channels: list[str]
+    post_formats: list[str]
     languages: list[str]
     audiences: list[str]
     jurisdictions: list[str]

@@ -5114,7 +5114,7 @@
           "policy"
         ],
         "summary": "Move a bundle: submit, return_to_draft, approve, reject, build, activate, rollback or retire",
-        "description": "Each command needs its own capability (approve and activate are not policy:manage). 409 POLICY_BUNDLE_STATE carries details.state and details.allowed; 409 POLICY_BUNDLE_HAS_ISSUES carries details.issues. The reason is required for reject, activate, rollback and retire.",
+        "description": "Each command needs its own capability. Approval and activation are separate (policy bundle D-16): submit needs policy:manage (roles: policy_admin); return_to_draft needs policy:approve (roles: policy_approver) or policy:manage (roles: policy_admin); approve needs policy:approve (roles: policy_approver); reject needs policy:approve (roles: policy_approver); build needs policy:activate (roles: policy_admin); activate needs policy:activate (roles: policy_admin); rollback needs policy:activate (roles: policy_admin); retire needs policy:activate (roles: policy_admin). A caller without it gets 403. 409 POLICY_BUNDLE_STATE carries details.state and details.allowed; 409 POLICY_BUNDLE_HAS_ISSUES carries details.issues. The reason is required for reject, activate, rollback and retire.",
         "operationId": "transition_policy_bundle",
         "security": [
           {
@@ -7255,21 +7255,23 @@
           },
           "channels": {
             "items": {
-              "type": "string",
-              "maxLength": 64,
-              "minLength": 1,
-              "pattern": "\\S"
+              "$ref": "#/components/schemas/Channel"
             },
             "type": "array",
             "maxItems": 20,
             "title": "Channels"
           },
+          "post_formats": {
+            "items": {
+              "$ref": "#/components/schemas/PostFormat"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Post Formats"
+          },
           "languages": {
             "items": {
-              "type": "string",
-              "maxLength": 64,
-              "minLength": 1,
-              "pattern": "\\S"
+              "$ref": "#/components/schemas/PolicyLanguage"
             },
             "type": "array",
             "maxItems": 10,
@@ -7442,10 +7444,7 @@
             "anyOf": [
               {
                 "items": {
-                  "type": "string",
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "pattern": "\\S"
+                  "$ref": "#/components/schemas/Channel"
                 },
                 "type": "array",
                 "maxItems": 20
@@ -7456,14 +7455,26 @@
             ],
             "title": "Channels"
           },
+          "post_formats": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PostFormat"
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Post Formats"
+          },
           "languages": {
             "anyOf": [
               {
                 "items": {
-                  "type": "string",
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "pattern": "\\S"
+                  "$ref": "#/components/schemas/PolicyLanguage"
                 },
                 "type": "array",
                 "maxItems": 10
@@ -8336,6 +8347,13 @@
             "type": "array",
             "title": "Channels"
           },
+          "post_formats": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Post Formats"
+          },
           "languages": {
             "items": {
               "type": "string"
@@ -8416,6 +8434,7 @@
           "source_clause_id",
           "input_kinds",
           "channels",
+          "post_formats",
           "languages",
           "audiences",
           "jurisdictions",
@@ -9288,21 +9307,23 @@
           },
           "channels": {
             "items": {
-              "type": "string",
-              "maxLength": 64,
-              "minLength": 1,
-              "pattern": "\\S"
+              "$ref": "#/components/schemas/Channel"
             },
             "type": "array",
             "maxItems": 20,
             "title": "Channels"
           },
+          "post_formats": {
+            "items": {
+              "$ref": "#/components/schemas/PostFormat"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Post Formats"
+          },
           "languages": {
             "items": {
-              "type": "string",
-              "maxLength": 64,
-              "minLength": 1,
-              "pattern": "\\S"
+              "$ref": "#/components/schemas/PolicyLanguage"
             },
             "type": "array",
             "maxItems": 10,

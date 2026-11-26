@@ -586,7 +586,11 @@ async def test_the_whole_way_to_approval(env: Env) -> None:
         BundleLifecycleState.REVIEW,
         BundleLifecycleState.APPROVED,
     )
-    assert event.details == {"revision": draft.revision, "rules": 1}
+    assert event.details == {
+        "revision": draft.revision,
+        "actor_roles": ["policy_approver"],
+        "rules": 1,
+    }
 
 
 async def test_items_can_be_reviewed_while_in_review(env: Env) -> None:
@@ -717,7 +721,7 @@ async def test_build_queues_an_approved_bundle_again(env: Env) -> None:
     )
     await env.db.commit()
 
-    bundle = await env.move(draft, Command.BUILD, env.approver)
+    bundle = await env.move(draft, Command.BUILD, env.admin)
 
     assert bundle.lifecycle_state is BundleLifecycleState.APPROVED
     assert bundle.available_at is not None
@@ -730,17 +734,58 @@ async def test_build_queues_an_approved_bundle_again(env: Env) -> None:
     )
     assert event is not None
     assert (event.actor, event.from_state, event.to_state) == (
-        APPROVER,
+        ADMIN,
         BundleLifecycleState.APPROVED,
         BundleLifecycleState.APPROVED,
     )
 
 
-async def test_policy_admins_cannot_run_build(env: Env) -> None:
+# D-16: approval and activation are separate permissions. The capability is checked before the
+# bundle is loaded, so one approved bundle serves every command.
+@pytest.mark.parametrize(
+    "command", [Command.BUILD, Command.ACTIVATE, Command.ROLLBACK, Command.RETIRE]
+)
+async def test_approvers_cannot_activate_build_roll_back_or_retire(
+    env: Env, command: Command
+) -> None:
     draft = await approved_bundle(env)
 
     with pytest.raises(PermissionDeniedError, match="cannot do this"):
-        await env.move(draft, Command.BUILD, env.admin)
+        await env.move(draft, command, env.approver, because())
+
+
+@pytest.mark.parametrize("command", list(Command))
+@pytest.mark.parametrize("role", [Role.CREATOR, Role.REVIEWER, Role.PUBLISHER, Role.ADMIN])
+async def test_roles_without_policy_capabilities_cannot_move_a_bundle(
+    env: Env, command: Command, role: Role
+) -> None:
+    draft = await approved_bundle(env)
+    outsider = ctx_for(env.tenant_id, "outsider-a", role)
+
+    with pytest.raises(PermissionDeniedError, match="cannot do this"):
+        await env.move(draft, command, outsider, because())
+
+
+async def test_approval_and_activation_audit_the_actor_and_role(
+    connection: AsyncConnection, env: Env
+) -> None:
+    draft = await ready(connection, env)
+    await env.move(draft, Command.ACTIVATE, env.admin, because())
+
+    events = (
+        await env.db.execute(
+            select(PolicyAuditEvent.action, PolicyAuditEvent.actor, PolicyAuditEvent.details).where(
+                PolicyAuditEvent.policy_bundle_id == draft.id,
+                PolicyAuditEvent.action.in_(
+                    [PolicyAuditAction.APPROVE, PolicyAuditAction.ACTIVATE]
+                ),
+            )
+        )
+    ).all()
+    assert sorted((action, actor, details["actor_roles"]) for action, actor, details in events) == [
+        (PolicyAuditAction.ACTIVATE, ADMIN, ["policy_admin"]),
+        (PolicyAuditAction.APPROVE, APPROVER, ["policy_approver"]),
+    ]
 
 
 @pytest.mark.parametrize("state", [BundleLifecycleState.DRAFT, BundleLifecycleState.READY])
@@ -759,7 +804,7 @@ async def test_build_refuses_a_bundle_that_is_not_approved(
         await env.db.commit()
 
     with pytest.raises(PolicyBundleStateError, match="not in a state") as error:
-        await env.move(draft, Command.BUILD, env.approver)
+        await env.move(draft, Command.BUILD, env.admin)
     assert error.value.details == {"state": state.value, "allowed": ["APPROVED"]}
 
 
@@ -971,10 +1016,10 @@ async def test_activation_replaces_the_active_bundle_and_tells_consumers(
     old = world.a.policy_bundle_id
     draft = await ready(connection, env)
 
-    bundle = await env.move(draft, Command.ACTIVATE, env.approver, because())
+    bundle = await env.move(draft, Command.ACTIVATE, env.admin, because())
 
     assert bundle.lifecycle_state is BundleLifecycleState.ACTIVE
-    assert bundle.activated_by == APPROVER
+    assert bundle.activated_by == ADMIN
     assert bundle.activated_at is not None
     assert await active_bundles(env) == [draft.id]
     retired = await env.db.get(PolicyBundle, old, populate_existing=True)
@@ -988,7 +1033,7 @@ async def test_activation_replaces_the_active_bundle_and_tells_consumers(
     )
     assert activation is not None
     assert (activation.actor, activation.reason) == (
-        APPROVER,
+        ADMIN,
         "[SYNTHETIC] reviewed and signed off",
     )
     assert activation.details["previous_bundle_id"] == str(old)
@@ -1027,16 +1072,16 @@ async def test_activation_needs_a_reason_and_the_activate_capability(
     draft = await ready(connection, env)
 
     with pytest.raises(PolicyItemInvalidError, match="Give a reason"):
-        await env.move(draft, Command.ACTIVATE, env.approver)
+        await env.move(draft, Command.ACTIVATE, env.admin)
     with pytest.raises(PermissionDeniedError, match="cannot do this"):
-        await env.move(draft, Command.ACTIVATE, env.admin, because())
+        await env.move(draft, Command.ACTIVATE, env.approver, because())
 
 
 async def test_a_bundle_that_was_not_built_cannot_be_activated(env: Env) -> None:
     draft = await approved(env)
 
     with pytest.raises(PolicyBundleStateError, match="not in a state") as error:
-        await env.move(draft, Command.ACTIVATE, env.approver, because())
+        await env.move(draft, Command.ACTIVATE, env.admin, because())
     assert error.value.details == {"state": "APPROVED", "allowed": ["READY"]}
 
 
@@ -1060,7 +1105,7 @@ async def test_a_stale_index_blocks_activation_and_changes_nothing(
     await bind_tenant(env.db, env.tenant_id)
 
     with pytest.raises(PolicyBundleHasIssuesError, match="cannot be activated") as error:
-        await env.move(draft, Command.ACTIVATE, env.approver, because())
+        await env.move(draft, Command.ACTIVATE, env.admin, because())
 
     assert error.value.details is not None
     issues = error.value.details["issues"]
@@ -1075,9 +1120,9 @@ async def test_retiring_the_active_bundle_leaves_no_active_policy(
     connection: AsyncConnection, env: Env
 ) -> None:
     draft = await ready(connection, env)
-    await env.move(draft, Command.ACTIVATE, env.approver, because())
+    await env.move(draft, Command.ACTIVATE, env.admin, because())
 
-    bundle = await env.move(draft, Command.RETIRE, env.approver, because("[SYNTHETIC] withdrawn"))
+    bundle = await env.move(draft, Command.RETIRE, env.admin, because("[SYNTHETIC] withdrawn"))
 
     assert bundle.lifecycle_state is BundleLifecycleState.RETIRED
     assert await active_bundles(env) == []
@@ -1092,12 +1137,12 @@ async def test_rollback_returns_to_the_previously_active_bundle(
     connection: AsyncConnection, env: Env
 ) -> None:
     first = await ready(connection, env)
-    await env.move(first, Command.ACTIVATE, env.approver, because())
+    await env.move(first, Command.ACTIVATE, env.admin, because())
     second = await ready(connection, env)
-    await env.move(second, Command.ACTIVATE, env.approver, because())
+    await env.move(second, Command.ACTIVATE, env.admin, because())
     first.revision = await env.revision(first.id)
 
-    bundle = await env.move(first, Command.ROLLBACK, env.approver, because("[SYNTHETIC] v3 wrong"))
+    bundle = await env.move(first, Command.ROLLBACK, env.admin, because("[SYNTHETIC] v3 wrong"))
 
     assert bundle.lifecycle_state is BundleLifecycleState.ACTIVE
     assert await active_bundles(env) == [first.id]
@@ -1136,7 +1181,7 @@ async def test_only_a_bundle_that_was_active_can_be_rolled_back_to(
     await bind_tenant(env.db, env.tenant_id)
 
     with pytest.raises(PolicyBundleStateError, match="was active before"):
-        await env.move(draft, Command.ROLLBACK, env.approver, because())
+        await env.move(draft, Command.ROLLBACK, env.admin, because())
 
 
 async def test_parallel_activations_leave_exactly_one_active_bundle(
@@ -1155,9 +1200,9 @@ async def test_parallel_activations_leave_exactly_one_active_bundle(
 
     async def activate(draft: Draft) -> None:
         async with await session() as db:
-            approver = ctx_for(tenant_id, APPROVER, Role.POLICY_APPROVER)
+            activator = ctx_for(tenant_id, ADMIN, Role.POLICY_ADMIN)
             await bundles.transition(
-                db, approver, draft.id, draft.revision, Command.ACTIVATE, because(), EN
+                db, activator, draft.id, draft.revision, Command.ACTIVATE, because(), EN
             )
 
     try:

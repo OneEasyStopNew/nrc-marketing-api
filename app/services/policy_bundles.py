@@ -261,7 +261,12 @@ async def _finish(
             to_state=bundle.lifecycle_state if from_state is not None else None,
             actor=ctx.principal.sub,
             reason=reason,
-            details={"revision": bundle.revision, **(details or {})},
+            # D-16: each approval and activation records who acted and in which roles.
+            details={
+                "revision": bundle.revision,
+                "actor_roles": sorted(role.value for role in ctx.roles),
+                **(details or {}),
+            },
             request_id=request_id_var.get(),
         )
     )

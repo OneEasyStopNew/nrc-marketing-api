@@ -304,11 +304,12 @@ async def test_build_queues_a_failed_bundle_again(
     await work(sessions, settings, RaisingEmbedder(EmbeddingResponseError))
     failed = await bundle_row(connection, tenant, bundle_id)
     assert (failed.lifecycle_state, failed.available_at) == ("APPROVED", None)
-    approver = TenantContext(
+    # D-16: rebuilding is an activation step, held by the policy administrator.
+    activator = TenantContext(
         tenant_id=tenant,
         principal=Principal(sub=APPROVER, username=APPROVER, scopes=frozenset()),
-        roles=frozenset({Role.POLICY_APPROVER}),
-        capabilities=capabilities_for({Role.POLICY_APPROVER}),
+        roles=frozenset({Role.POLICY_ADMIN}),
+        capabilities=capabilities_for({Role.POLICY_ADMIN}),
         study_ids=frozenset(),
     )
 
@@ -316,7 +317,7 @@ async def test_build_queues_a_failed_bundle_again(
         await bind_tenant(db, tenant)
         await bundles.transition(
             db,
-            approver,
+            activator,
             bundle_id,
             failed.revision,
             Command.BUILD,

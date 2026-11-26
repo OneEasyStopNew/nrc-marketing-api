@@ -2,7 +2,7 @@
 # review it and move it through its lifecycle. Services enforce the exact capability of each
 # write; the routes only keep out roles that hold no policy capability at all.
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request, Response, status
@@ -10,6 +10,7 @@ from pydantic import AwareDatetime
 
 from app.api.deps import DbSession, IfMatch, PolicyManager, PolicyReader, SettingsDep
 from app.api.etags import etag, expected_version
+from app.auth.access import ROLE_CAPABILITIES
 from app.models.enums import BundleLifecycleState
 from app.schemas.common import ErrorBody
 from app.schemas.policy_admin import (
@@ -448,12 +449,28 @@ async def decide_policy_item(
     return detail
 
 
+# Built from the service's transition table and the role map, so the contract can't drift from them.
+_COMMAND_CAPABILITIES: Final = "; ".join(
+    f"{command.value} needs "
+    + " or ".join(
+        f"{capability.value} (roles: "
+        + ", ".join(
+            sorted(role.value for role, held in ROLE_CAPABILITIES.items() if capability in held)
+        )
+        + ")"
+        for capability in sorted(step.capabilities)
+    )
+    for command, step in policy_bundles.TRANSITIONS.items()
+)
+
+
 @router.post(
     "/policy-bundles/{policy_bundle_id}/transitions",
     summary="Move a bundle: submit, return_to_draft, approve, reject, build, activate, rollback "
     "or retire",
-    description="Each command needs its own capability (approve and activate are not "
-    "policy:manage). 409 POLICY_BUNDLE_STATE carries details.state and details.allowed; "
+    description="Each command needs its own capability. Approval and activation are separate "
+    f"(policy bundle D-16): {_COMMAND_CAPABILITIES}. A caller without it gets 403. "
+    "409 POLICY_BUNDLE_STATE carries details.state and details.allowed; "
     "409 POLICY_BUNDLE_HAS_ISSUES carries details.issues. The reason is required for reject, "
     "activate, rollback and retire.",
     responses=_EDIT_ERRORS,

@@ -49,12 +49,13 @@ ROLE_CAPABILITIES: Final[Mapping[Role, frozenset[Capability]]] = MappingProxyTyp
         Role.REVIEWER: frozenset(
             {Capability.CREATIVE_READ, Capability.VALIDATION_RUN, Capability.APPROVAL_DECIDE}
         ),
-        Role.POLICY_ADMIN: frozenset({Capability.CREATIVE_READ, Capability.POLICY_MANAGE}),
-        # Approving and activating rules is kept apart from editing them (NRC-4, Q3). Whether one
-        # person may hold both roles (four-eyes) is a governance decision still open (Q5).
-        Role.POLICY_APPROVER: frozenset(
-            {Capability.CREATIVE_READ, Capability.POLICY_APPROVE, Capability.POLICY_ACTIVATE}
+        # Policy bundle D-16: the policy owner (policy_approver) approves rule meaning and may not
+        # activate; the policy administrator activates, rolls back and retires an approved bundle
+        # and may not approve. Role names and whether one person may hold both are open (D-01).
+        Role.POLICY_ADMIN: frozenset(
+            {Capability.CREATIVE_READ, Capability.POLICY_MANAGE, Capability.POLICY_ACTIVATE}
         ),
+        Role.POLICY_APPROVER: frozenset({Capability.CREATIVE_READ, Capability.POLICY_APPROVE}),
         Role.PUBLISHER: frozenset({Capability.CREATIVE_READ, Capability.PUBLICATION_MANAGE}),
         Role.ADMIN: frozenset({Capability.CREATIVE_READ, Capability.MEMBERSHIP_MANAGE}),
     }

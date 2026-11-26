@@ -534,7 +534,7 @@ async def ready_bundle(
 
 async def activate(draft: Draft, reason: str = REASON) -> httpx.Response:
     await draft.reload()
-    return await draft.move("activate", APPROVER, reason)
+    return await draft.move("activate", ADMIN, reason)
 
 
 async def active_policy(api: Api, *, status: int = 200) -> dict[str, Any]:
@@ -605,7 +605,7 @@ async def test_the_whole_journey_from_upload_to_rollback(stack: Stack) -> None:
     # The build worker makes it READY; only then can it be activated (AC4, AC6).
     assert await stack.work() == 1
     assert await v2.state() == "READY"
-    activated = await v2.move("activate", APPROVER, REASON)
+    activated = await v2.move("activate", ADMIN, REASON)
     assert activated.json()["lifecycle_state"] == "ACTIVE"
     assert activated.json()["activated_by"] == APPROVER
     demo = Draft(api, {"id": world_a_bundle(stack), "version": 1, "revision": 1})
@@ -650,11 +650,11 @@ async def test_the_whole_journey_from_upload_to_rollback(stack: Stack) -> None:
     assert rule_by_id(await bundle_rules(api, v3), "REC-07")["exact_wording"] == WORDING
 
     # Retire leaves no active policy; rollback brings bundle 2 back with its own content (AC6).
-    await v3.move("retire", APPROVER, "[SYNTHETIC] Withdrawn.")
+    await v3.move("retire", ADMIN, "[SYNTHETIC] Withdrawn.")
     missing = await api.refused("GET", "/policies/active", READER, 404, "NOT_FOUND")
     assert "no active policy" in missing["message"]
     await v2.reload()
-    rolled = await v2.move("rollback", APPROVER, "[SYNTHETIC] v3 was wrong.")
+    rolled = await v2.move("rollback", ADMIN, "[SYNTHETIC] v3 was wrong.")
     assert rolled.json()["lifecycle_state"] == "ACTIVE"
     policy = await active_policy(api)
     assert policy["policy_bundle_id"] == v2.id
@@ -843,10 +843,10 @@ async def test_ac2_a_bundle_with_a_defect_cannot_be_approved_built_or_activated(
     assert checks.json() == {"issues": body["details"]["issues"]}
     detail = await draft.reload()
     assert (detail["lifecycle_state"], detail["approved_by"]) == ("REVIEW", None)
-    # Neither a worker pass nor an approver's activate or build gets it any further.
+    # Neither a worker pass nor an admin's activate or build gets it any further.
     assert await stack.work() == 0
     for command, allowed in (("activate", "READY"), ("build", "APPROVED")):
-        stuck = await draft.move(command, APPROVER, REASON, status=409)
+        stuck = await draft.move(command, ADMIN, REASON, status=409)
         assert stuck.json()["code"] == "POLICY_BUNDLE_STATE"
         assert stuck.json()["details"] == {"state": "REVIEW", "allowed": [allowed]}
     assert (await active_policy(api))["policy_bundle_id"] == world_a_bundle(stack)
@@ -867,7 +867,7 @@ async def test_ac2_a_bundle_that_is_not_fully_built_cannot_activate(stack: Stack
     await draft.move("approve", APPROVER)
 
     # Approved but not built yet.
-    early = await draft.move("activate", APPROVER, REASON, status=409)
+    early = await draft.move("activate", ADMIN, REASON, status=409)
     assert early.json()["details"] == {"state": "APPROVED", "allowed": ["READY"]}
 
     # Built, but an index of other content is on record: it no longer matches the approved nodes.
@@ -879,7 +879,7 @@ async def test_ac2_a_bundle_that_is_not_fully_built_cannot_activate(stack: Stack
         {"id": uuid4(), "t": stack.world.a.tenant_id, "b": UUID(draft.id), "sum": "0" * 64},
     )
     assert await draft.state() == "READY"
-    stale = await draft.move("activate", APPROVER, REASON, status=409)
+    stale = await draft.move("activate", ADMIN, REASON, status=409)
 
     assert stale.json()["code"] == "POLICY_BUNDLE_HAS_ISSUES"
     assert [issue["code"] for issue in stale.json()["details"]["issues"]] == ["INDEX_STALE"]
@@ -978,7 +978,7 @@ async def test_ac4_a_crash_while_building_never_exposes_a_half_built_bundle(
 
     assert "policy work failed" in caplog.text
     assert await new.state() == "BUILDING"
-    stuck = await new.move("activate", APPROVER, REASON, status=409)
+    stuck = await new.move("activate", ADMIN, REASON, status=409)
     assert stuck.json()["details"] == {"state": "BUILDING", "allowed": ["READY"]}
     # Validation still reads the old bundle only, and no read shows the new one.
     policy = await active_policy(api)
@@ -1145,15 +1145,15 @@ async def test_ac5_editing_and_approving_are_kept_apart(stack: Stack) -> None:
     found = await targets(stack)
     drafts = [found.ready, found.draft]
     before = await observed(stack, drafts)
-    # What an approver may not do: everything except approve, activate and retire.
+    # What an approver may not do (D-16): everything except approve.
     not_approving = [
         call
         for call in alterations(found)
-        if call[1] != "/transitions" or call[3]["command"] == "submit"
+        if call[1] != "/transitions" or call[3]["command"] != "approve"
     ]
 
-    # A policy admin edits and submits but cannot approve, build, activate, roll back or retire.
-    for command in ("approve", "reject", "build", "activate", "rollback", "retire"):
+    # A policy admin edits, submits and activates but cannot approve or reject (D-16).
+    for command in ("approve", "reject"):
         refused = await stack.api.refused(
             "POST",
             f"{found.ready.path}/transitions",
@@ -1164,7 +1164,7 @@ async def test_ac5_editing_and_approving_are_kept_apart(stack: Stack) -> None:
             if_match=found.ready.revision,
         )
         assert "cannot do this" in refused["message"]
-    # An approver approves and activates but cannot edit, review, submit or create.
+    # An approver approves but cannot edit, review, submit, create, activate or retire.
     for method, suffix, draft, body in not_approving:
         await stack.api.refused(
             method,
@@ -1254,7 +1254,7 @@ async def test_ac6_every_change_of_the_active_bundle_names_who_why_when_and_is_a
     ]
     for draft, command, reason, *_ in steps:
         await draft.reload()
-        await draft.move(command, APPROVER, reason)
+        await draft.move(command, ADMIN, reason)
 
     events = {event["audit_event_id"]: event for event in await stack.events()}
     assert Counter(event["action"] for event in events.values()) == {
@@ -1270,7 +1270,7 @@ async def test_ac6_every_change_of_the_active_bundle_names_who_why_when_and_is_a
             and item["reason"] == reason
             and item["from_state"] == from_state
         ]
-        assert (entry["actor"], entry["to_state"]) == (APPROVER, to_state)
+        assert (entry["actor"], entry["to_state"]) == (ADMIN, to_state)
         assert entry["request_id"]
         assert datetime.fromisoformat(entry["created_at"]).utcoffset() is not None
         # The outbox row points at that audit entry, so a consumer can tell who and why.
@@ -1300,7 +1300,7 @@ async def test_ac6_a_change_without_a_reason_is_refused_and_announces_nothing(
     draft, _ = await ready_bundle(stack, ingested)
     before = await draft.reload()
 
-    missing = await draft.move("activate", APPROVER, status=409)
+    missing = await draft.move("activate", ADMIN, status=409)
     blank = await stack.api.refused(
         "POST",
         f"{draft.path}/transitions",
@@ -1496,7 +1496,7 @@ async def test_ac8_the_guide_flow_returns_the_documented_shapes_and_states(stack
     states.append(await draft.state())
     ready_etag = (await api.ok("GET", draft.path, APPROVER)).headers["ETag"]
     assert ready_etag == f'"{draft.revision}"'
-    activated = await draft.move("activate", APPROVER, REASON)
+    activated = await draft.move("activate", ADMIN, REASON)
     assert set(activated.json()) == shape("policy_bundle_active")
     states.append(activated.json()["lifecycle_state"])
     assert states == ["DRAFT", "REVIEW", "APPROVED", "READY", "ACTIVE"]

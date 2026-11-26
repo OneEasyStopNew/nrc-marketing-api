@@ -18,8 +18,8 @@ POLICY_CAPABILITIES = {
     [
         (Role.CREATOR, set()),
         (Role.REVIEWER, set()),
-        (Role.POLICY_ADMIN, {Capability.POLICY_MANAGE}),
-        (Role.POLICY_APPROVER, {Capability.POLICY_APPROVE, Capability.POLICY_ACTIVATE}),
+        (Role.POLICY_ADMIN, {Capability.POLICY_MANAGE, Capability.POLICY_ACTIVATE}),
+        (Role.POLICY_APPROVER, {Capability.POLICY_APPROVE}),
         (Role.PUBLISHER, set()),
         (Role.ADMIN, set()),
     ],
@@ -32,25 +32,23 @@ def test_every_role_is_mapped() -> None:
     assert set(ROLE_CAPABILITIES) == set(Role)
 
 
-def test_policy_admin_cannot_approve_or_activate() -> None:
+def test_policy_admin_activates_but_cannot_approve() -> None:
+    # D-16: the policy administrator activates an approved bundle and may not approve one.
     capabilities = capabilities_for(parse_roles(["policy_admin"]))
 
+    assert Capability.POLICY_ACTIVATE in capabilities
     assert Capability.POLICY_APPROVE not in capabilities
-    assert Capability.POLICY_ACTIVATE not in capabilities
 
 
-def test_policy_approver_cannot_edit_rules() -> None:
+def test_policy_approver_approves_but_cannot_activate_or_edit() -> None:
+    # D-16: the policy owner approves and may not activate.
     capabilities = capabilities_for(parse_roles(["policy_approver"]))
 
-    assert capabilities == {
-        Capability.CREATIVE_READ,
-        Capability.POLICY_APPROVE,
-        Capability.POLICY_ACTIVATE,
-    }
+    assert capabilities == {Capability.CREATIVE_READ, Capability.POLICY_APPROVE}
 
 
 def test_both_policy_roles_together_hold_all_policy_capabilities() -> None:
-    # No four-eyes rule yet (Q5): one membership may hold both roles.
+    # Whether one person may hold both roles is still open (D-01).
     capabilities = capabilities_for(parse_roles(["policy_admin", "policy_approver"]))
 
     assert capabilities >= POLICY_CAPABILITIES

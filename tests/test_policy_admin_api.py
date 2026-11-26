@@ -331,13 +331,13 @@ async def test_a_bundle_goes_from_upload_to_active(
         api.call(
             "POST",
             transitions,
-            APPROVER,
+            ADMIN,
             json={"command": "activate", "reason": "[SYNTHETIC] Reviewed sample."},
             if_match=ready.headers["ETag"],
         )
     )
     assert activated.json()["lifecycle_state"] == "ACTIVE"
-    assert activated.json()["activated_by"] == APPROVER
+    assert activated.json()["activated_by"] == ADMIN
 
     active = (await api.ok(api.call("GET", "/policy-bundles", params={"state": "ACTIVE"}))).json()
     assert [item["id"] for item in active["items"]] == [bundle_id]
@@ -351,7 +351,7 @@ async def test_a_bundle_goes_from_upload_to_active(
     actions = {item["action"] for item in audit}
     assert {"CREATE", "EDIT", "REVIEW", "SUBMIT", "APPROVE", "ACTIVATE"} <= actions
     assert audit[0]["action"] == "ACTIVATE"
-    assert audit[0]["actor"] == APPROVER
+    assert audit[0]["actor"] == ADMIN
     assert audit[0]["reason"] == "[SYNTHETIC] Reviewed sample."
     assert audit[0]["from_state"] == "READY"
     assert audit[0]["to_state"] == "ACTIVE"
@@ -442,15 +442,30 @@ async def test_roles_without_a_policy_capability_are_refused(
     assert response.json()["code"] == "FORBIDDEN"
 
 
-@pytest.mark.parametrize(
-    "command", ["approve", "reject", "build", "activate", "rollback", "retire"]
-)
-async def test_a_policy_admin_cannot_approve_or_activate(api: Api, command: str) -> None:
+# D-16: approval and activation are separate permissions, each refused to the other role.
+@pytest.mark.parametrize("command", ["approve", "reject"])
+async def test_a_policy_admin_cannot_approve(api: Api, command: str) -> None:
     bundle = await new_bundle(api)
 
     response = await api.call(
         "POST",
         f"/policy-bundles/{bundle['id']}/transitions",
+        json={"command": command, "reason": "[SYNTHETIC] reason"},
+        if_match=1,
+    )
+
+    assert response.status_code == 403, response.text
+    assert "cannot do this" in response.json()["message"]
+
+
+@pytest.mark.parametrize("command", ["build", "activate", "rollback", "retire"])
+async def test_an_approver_cannot_activate(api: Api, command: str) -> None:
+    bundle = await new_bundle(api)
+
+    response = await api.call(
+        "POST",
+        f"/policy-bundles/{bundle['id']}/transitions",
+        APPROVER,
         json={"command": command, "reason": "[SYNTHETIC] reason"},
         if_match=1,
     )
@@ -657,7 +672,7 @@ async def test_activating_a_bundle_that_is_not_ready_is_a_state_conflict(api: Ap
     response = await api.call(
         "POST",
         f"/policy-bundles/{bundle['id']}/transitions",
-        APPROVER,
+        ADMIN,
         json={"command": "activate", "reason": "[SYNTHETIC] reason"},
         if_match=1,
     )
@@ -899,6 +914,53 @@ async def test_a_node_key_at_the_length_limit_is_accepted(
     )
 
     assert response.status_code == 201, response.text
+
+
+# Conditions use the same enums as the import script: a typo is refused, not a rule that never
+# applies to any post. One wrong value per field, on create and on update.
+@pytest.mark.parametrize(
+    ("field", "wrong"),
+    [
+        ("input_kinds", "caption"),
+        ("channels", "Facebook"),
+        ("post_formats", "feed-image"),
+        ("languages", "english"),
+    ],
+)
+async def test_a_condition_outside_its_enum_is_refused(api: Api, field: str, wrong: str) -> None:
+    bundle = await new_bundle(api)
+    path = f"/policy-bundles/{bundle['id']}/nodes"
+
+    created = await api.call("POST", path, json=node_body() | {field: [wrong]}, if_match=1)
+    updated = await api.call("PATCH", f"{path}/{SOME_ID}", json={field: [wrong]}, if_match=1)
+
+    for response in (created, updated):
+        assert response.status_code == 422, response.text
+        assert response.json()["code"] == "VALIDATION_FAILED"
+
+
+async def test_a_node_keeps_its_typed_conditions(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+    conditions = {
+        "input_kinds": ["text"],
+        "channels": ["facebook"],
+        "post_formats": ["feed_image"],
+        "languages": ["en"],
+    }
+
+    response = await api.call(
+        "POST",
+        f"/policy-bundles/{bundle['id']}/nodes",
+        json=node_body(clause_id) | conditions,
+        if_match=1,
+    )
+
+    assert response.status_code == 201, response.text
+    assert {field: response.json()[field] for field in conditions} == conditions
 
 
 async def test_an_unknown_command_is_a_validation_error(api: Api) -> None:
