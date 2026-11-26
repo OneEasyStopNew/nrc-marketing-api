@@ -384,7 +384,8 @@ def format_markdown(
         "USD.",
         "",
         "| Model | Missed mandatory violations | False flags | Valid answers | Citations ok |"
-        " Spans ok | PASS citing evidence | p50 / p95 ms | Tokens in / out | Cost USD |",
+        " Model's offsets exact | PASS citing evidence | p50 / p95 ms | Tokens in / out |"
+        " Cost USD |",
         "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for report in reports:

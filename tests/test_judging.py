@@ -154,15 +154,8 @@ async def test_fake_citation_from_the_simulator_is_rejected() -> None:
         (
             {
                 "result": RuleResultValue.FAIL,
+                # Not in the text: the quote must match exactly, case included.
                 "findings": [JudgeFinding(start=2, end=12, excerpt="guaranteed")],
-            },
-            JudgeFailure.BAD_SPAN,
-        ),
-        (
-            {
-                "result": RuleResultValue.FAIL,
-                # UTF-16 offsets (the emoji counted twice) must not pass as code points.
-                "findings": [JudgeFinding(start=3, end=13, excerpt="Guaranteed")],
             },
             JudgeFailure.BAD_SPAN,
         ),
@@ -179,6 +172,38 @@ def test_answers_that_do_not_match_the_context_or_text_are_rejected(
     rec04: dict[str, object], failure: JudgeFailure
 ) -> None:
     assert _failure(_answer(**rec04)) is failure
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (3, 13),  # UTF-16 offsets: the emoji counted twice
+        (0, 10),  # simply wrong
+        (2, 30),  # the right start, the wrong end
+    ],
+)
+def test_wrong_offsets_for_an_exact_quote_are_replaced_with_code_points(
+    start: int, end: int
+) -> None:
+    # Models quote reliably but count characters badly; the quote is what is verified.
+    finding = JudgeFinding(start=start, end=end, excerpt="Guaranteed")
+    raw = _answer(result=RuleResultValue.FAIL, findings=[finding])
+
+    answers = judging.verify(_reply(raw), _request(), CONTEXT)
+
+    (fixed,) = answers["REC-04"].findings
+    assert (fixed.start, fixed.end) == (2, 12)
+    assert TEXT[fixed.start : fixed.end] == "Guaranteed"
+
+
+def test_a_quote_found_twice_takes_the_occurrence_nearest_the_given_offset() -> None:
+    text = "Guaranteed help. Results guaranteed? Guaranteed."
+    finding = JudgeFinding(start=36, end=46, excerpt="Guaranteed")
+    raw = _answer(result=RuleResultValue.FAIL, findings=[finding])
+
+    answers = judging.verify(_reply(raw), _request(text), CONTEXT)
+
+    assert answers["REC-04"].findings[0].start == text.rindex("Guaranteed")
 
 
 def test_not_applicable_with_an_applicable_exception_is_accepted() -> None:

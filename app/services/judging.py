@@ -28,6 +28,7 @@ from app.services.policy_context.manifest import EvidenceItem, ExceptionItem
 from app.services.providers import text_judge
 from app.services.providers.text_judge import (
     JudgeAnswer,
+    JudgeFinding,
     JudgeReply,
     JudgeRequest,
     JudgeRuleAnswer,
@@ -184,9 +185,8 @@ def verify(
     ids = [result.rule_id for result in answer.results]
     if len(ids) != len(set(ids)) or set(ids) != set(request.rule_ids):
         raise InvalidJudgeAnswerError(JudgeFailure.WRONG_RULES)
-    for result in answer.results:
-        _check_answer(result, request.text, context)
-    return {result.rule_id: result for result in answer.results}
+    checked = [_check_answer(result, request.text, context) for result in answer.results]
+    return {result.rule_id: result for result in checked}
 
 
 def parse_answer(raw: str) -> JudgeAnswer:
@@ -201,7 +201,8 @@ def parse_answer(raw: str) -> JudgeAnswer:
         raise InvalidJudgeAnswerError(JudgeFailure.MALFORMED) from None
 
 
-def _check_answer(result: JudgeRuleAnswer, text: str, context: JudgeContext) -> None:
+def _check_answer(result: JudgeRuleAnswer, text: str, context: JudgeContext) -> JudgeRuleAnswer:
+    # The answer as verified, with each finding's offsets taken from its quote.
     if not set(result.evidence_node_keys) <= context.evidence.keys():
         raise InvalidJudgeAnswerError(JudgeFailure.UNKNOWN_EVIDENCE)
     allowed = context.exceptions.get(result.rule_id, {})
@@ -211,11 +212,27 @@ def _check_answer(result: JudgeRuleAnswer, text: str, context: JudgeContext) -> 
         raise InvalidJudgeAnswerError(JudgeFailure.BAD_EXCEPTION)
     if result.findings and result.result is not RuleResultValue.FAIL:
         raise InvalidJudgeAnswerError(JudgeFailure.CONTRADICTION)
-    for finding in result.findings:
-        if finding.end > len(text) or finding.start >= finding.end:
-            raise InvalidJudgeAnswerError(JudgeFailure.BAD_SPAN)
-        if text[finding.start : finding.end] != finding.excerpt:
-            raise InvalidJudgeAnswerError(JudgeFailure.BAD_SPAN)
+    if not result.findings:
+        return result
+    located = [_locate(finding, text) for finding in result.findings]
+    return result.model_copy(update={"findings": located})
+
+
+def _locate(finding: JudgeFinding, text: str) -> JudgeFinding:
+    """The finding with code-point offsets of its quote in the text.
+
+    The quote must appear verbatim, or the answer is invalid (BAD_SPAN). Models quote reliably
+    but count characters badly (the judge evaluation, 26 Nov: most spans from three of four models
+    were off), so wrong offsets for an exact quote are replaced, taking the occurrence nearest the
+    model's start when the quote appears more than once.
+    """
+    if text[finding.start : finding.end] == finding.excerpt:
+        return finding
+    starts = [match.start() for match in re.finditer(re.escape(finding.excerpt), text)]
+    if not starts:
+        raise InvalidJudgeAnswerError(JudgeFailure.BAD_SPAN)
+    start = min(starts, key=lambda position: abs(position - finding.start))
+    return finding.model_copy(update={"start": start, "end": start + len(finding.excerpt)})
 
 
 def aimed_at_checker(text: str) -> bool:
