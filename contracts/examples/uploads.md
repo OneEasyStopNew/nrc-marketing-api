@@ -28,8 +28,10 @@ comes later.
   removed; blank values and spaces inside are refused.
 - `429 UPLOAD_LIMIT_REACHED` (retryable): the tenant has the most uploads in progress it may
   have. Uploads waiting for inspection count, and so do pending ones while their URL is valid.
-  Show "too many uploads in progress" and let the user try again later; also possible on
-  `POST /assets/{asset_id}/upload-url` for an upload whose URL expired.
+  Show "too many uploads in progress" and let the user try again later. It is also possible for
+  an upload whose URL expired, on `POST /assets/{asset_id}/upload-url` and on
+  `POST /assets/{asset_id}/complete` (the file was sent but completed late). The upload stays
+  pending, so calling complete again works once another upload finishes.
 
 ## Reasons and polling
 

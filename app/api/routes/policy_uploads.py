@@ -95,18 +95,25 @@ async def reissue_policy_upload_url(
     status_code=status.HTTP_202_ACCEPTED,
     summary="Tell the API the file was sent; it is checked and queued for inspection",
     description="Safe to repeat: returns the current status and queues inspection once. "
-    "409 UPLOAD_NOT_RECEIVED (retryable) means the file has not arrived yet.",
+    "409 UPLOAD_NOT_RECEIVED (retryable) means the file has not arrived yet. If the upload URL "
+    "had expired, the upload is admitted again like a new one, so it can meet the in-progress "
+    "limit (429).",
     responses={
         403: _NOT_UPLOADER,
         404: _NOT_FOUND,
         409: {"model": ErrorBody, "description": "The file has not been received yet."},
+        429: _UPLOAD_LIMIT,
         503: _STORAGE_UNAVAILABLE,
     },
 )
 async def complete_policy_upload(
-    upload_id: UUID, ctx: PolicyManager, db: DbSession, storage: PolicySourceStorageDep
+    upload_id: UUID,
+    ctx: PolicyManager,
+    db: DbSession,
+    storage: PolicySourceStorageDep,
+    settings: SettingsDep,
 ) -> PolicyUploadRead:
-    return await uploads.complete_policy_upload(db, ctx, upload_id, storage)
+    return await uploads.complete_policy_upload(db, ctx, upload_id, storage, settings)
 
 
 @router.get(

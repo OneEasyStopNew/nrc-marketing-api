@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.api.deps import get_optional_storage, get_policy_source_storage, get_storage
 from app.core.config import Settings, get_settings
 from app.core.errors import PolicySourceStorageUnavailableError
-from app.services.storage import ObjectStorage
+from app.services.storage import ObjectHead, ObjectStorage
 from tests.conftest import (
     APP_ROLE,
     BUCKET,
@@ -349,6 +349,46 @@ async def test_policy_uploads_take_slots_under_the_pending_cap(
     assert over.status_code == 429
     assert over.json()["code"] == "UPLOAD_LIMIT_REACHED"
     assert over.json()["retryable"] is True
+
+
+@pytest.mark.usefixtures("pending_cap_of_two")
+async def test_completing_an_expired_policy_upload_at_the_pending_cap_is_refused(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Same admission as creative uploads (review on api#23): a policy upload whose link expired
+    # holds no slot, so completing it must be admitted like a new upload.
+    old = await _created(client, auth, world)
+    await _owner_sql(
+        connection,
+        world.a.tenant_id,
+        "UPDATE media_uploads SET upload_url_expires_at = now() - interval '1 second'"
+        " WHERE id = :id",
+        {"id": UUID(old["upload_id"])},
+    )
+    await _created(client, auth, world)
+    await _created(client, auth, world)
+    stored = ObjectHead(
+        size_bytes=len(PDF),
+        version_id="v1",
+        checksum_sha256=hashlib.sha256(PDF).hexdigest(),
+        content_type="application/pdf",
+    )
+
+    async def head(self: ObjectStorage, key: str, *, version_id: str | None = None) -> ObjectHead:
+        return stored
+
+    monkeypatch.setattr(ObjectStorage, "head", head)
+
+    refused = await _call(client, auth, world, "complete", old["upload_id"])
+
+    assert refused.status_code == 429, refused.text
+    assert refused.json()["code"] == "UPLOAD_LIMIT_REACHED"
+    assert refused.json()["retryable"] is True
+    assert (await _row(connection, world, old["upload_id"])).state == "PENDING_UPLOAD"
 
 
 # ---- Policy storage is never the media bucket

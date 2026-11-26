@@ -152,18 +152,21 @@ async def reissue_upload_url(
     status_code=status.HTTP_202_ACCEPTED,
     summary="Tell the API the file was sent; it is checked and queued for inspection",
     description="Safe to repeat: returns the current status and queues inspection once. "
-    "409 UPLOAD_NOT_RECEIVED (retryable) means the file has not arrived yet.",
+    "409 UPLOAD_NOT_RECEIVED (retryable) means the file has not arrived yet. If the upload URL "
+    "had expired, the upload is admitted again like a new one, so it can meet the in-progress "
+    "limit (429).",
     responses={
         403: _NOT_UPLOADER,
         404: _UPLOAD_NOT_FOUND,
         409: {"model": ErrorBody, "description": "The file has not been received yet."},
+        429: _UPLOAD_LIMIT,
         503: _STORAGE_UNAVAILABLE,
     },
 )
 async def complete_upload(
-    asset_id: UUID, ctx: CreativeWriter, db: DbSession, storage: StorageDep
+    asset_id: UUID, ctx: CreativeWriter, db: DbSession, storage: StorageDep, settings: SettingsDep
 ) -> UploadRead:
-    return await uploads.complete_upload(db, ctx, asset_id, storage)
+    return await uploads.complete_upload(db, ctx, asset_id, storage, settings)
 
 
 @router.get(

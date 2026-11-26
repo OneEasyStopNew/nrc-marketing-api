@@ -24,7 +24,7 @@ FORCE on its table for the length of the step (the owner then bypasses RLS) and 
 needs no superuser. Everything stays inside the migration's transaction.
 
 Revision ID: 8e41b6d0a7c3
-Revises: 5c3a9e1f7b24
+Revises: a1a439290791
 Create Date: 2026-11-20 16:00:00.000000
 """
 
@@ -35,7 +35,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "8e41b6d0a7c3"
-down_revision: str | None = "5c3a9e1f7b24"
+down_revision: str | None = "a1a439290791"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
