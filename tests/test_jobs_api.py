@@ -19,6 +19,7 @@ from app.core.config import get_settings
 from app.core.errors import ValidationNotPassedError
 from app.main import create_app
 from app.models import PolicyBundle
+from app.models.enums import BundleLifecycleState
 from app.services import generation_checks
 from scripts.seed_demo import demo_policy_rules
 from tests.conftest import (
@@ -174,6 +175,7 @@ async def test_pass_under_an_older_policy_is_not_eligible(
             is_synthetic=True,
             approved_by="synthetic-fixture",
             approved_at=datetime(2026, 11, 2, tzinfo=UTC),
+            lifecycle_state=BundleLifecycleState.ACTIVE,
         )
     )
     await connection.execute(text("SET LOCAL ROLE marketing_app"))

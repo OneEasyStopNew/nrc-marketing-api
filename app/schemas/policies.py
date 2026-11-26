@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import Field
 
+from app.models.policy_graph import RULE_ID_PATTERN
 from app.schemas.common import ApiModel
 from app.schemas.validations import Gate, Severity, SourceReference, ValidationInputKind
 
@@ -15,7 +16,7 @@ MAX_RULES_PER_BUNDLE = 200
 class PolicyRule(ApiModel):
     """One rule a creative is validated against. Findings cite rule_id and rule_version."""
 
-    rule_id: str = Field(pattern=r"^[A-Z][A-Z0-9-]{1,39}$", examples=["REC-01"])
+    rule_id: str = Field(pattern=RULE_ID_PATTERN, examples=["REC-01"])
     rule_version: int = Field(ge=1)
     title: str = Field(min_length=1, max_length=200)
     requirement: str = Field(min_length=1, max_length=1000)

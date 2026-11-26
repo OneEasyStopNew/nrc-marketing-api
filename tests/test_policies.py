@@ -13,7 +13,7 @@ from sqlalchemy import insert, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.models import PolicyBundle, StudySnapshot
-from app.models.enums import Language, RecruitmentStatus
+from app.models.enums import BundleLifecycleState, Language, RecruitmentStatus
 from app.schemas.policies import PolicyRule
 from scripts.seed_demo import DEMO_POLICY_RULES, SYNTHETIC_FACTS, demo_policy_rules
 from tests.conftest import AuthHeaders, SeededTenant, World
@@ -114,6 +114,7 @@ async def test_highest_policy_version_is_active(
                 is_synthetic=True,
                 approved_by="synthetic-fixture",
                 approved_at=datetime(2026, 11, 2, tzinfo=UTC),
+                lifecycle_state=BundleLifecycleState.ACTIVE,
             )
         )
 
@@ -124,6 +125,100 @@ async def test_highest_policy_version_is_active(
     assert response.status_code == 200
     assert response.json()["version"] == 2
     assert len(response.json()["rules"]) == 2
+
+
+async def _add_bundle(
+    connection: AsyncConnection, tenant_id: UUID, version: int, state: BundleLifecycleState
+) -> None:
+    async with as_owner(connection):
+        await connection.execute(
+            insert(PolicyBundle).values(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                version=version,
+                name=f"[SYNTHETIC] Policy v{version}",
+                source_ref="synthetic:test-fixture",
+                rules=demo_policy_rules()[:2],
+                is_synthetic=True,
+                approved_by="synthetic-fixture",
+                approved_at=datetime(2026, 11, 2, tzinfo=UTC),
+                lifecycle_state=state,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "state", [state for state in BundleLifecycleState if state is not BundleLifecycleState.ACTIVE]
+)
+async def test_higher_version_that_is_not_active_is_ignored(
+    client: httpx.AsyncClient,
+    world: World,
+    auth: AuthHeaders,
+    connection: AsyncConnection,
+    state: BundleLifecycleState,
+) -> None:
+    await _add_bundle(connection, world.a.tenant_id, 2, state)
+    headers = auth("creator-a", world.a.tenant_id)
+
+    active = await client.get(f"{API}/policies/active", headers=headers)
+    context = await client.get(f"{API}/context", headers=headers)
+
+    assert active.status_code == 200
+    assert active.json()["version"] == 1
+    assert active.json()["policy_bundle_id"] == str(world.a.policy_bundle_id)
+    assert context.json()["active_policy"]["version"] == 1
+
+
+async def test_active_version_above_an_older_active_one_wins_over_a_newer_draft(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders, connection: AsyncConnection
+) -> None:
+    await _add_bundle(connection, world.a.tenant_id, 2, BundleLifecycleState.ACTIVE)
+    await _add_bundle(connection, world.a.tenant_id, 3, BundleLifecycleState.DRAFT)
+
+    response = await client.get(
+        f"{API}/policies/active", headers=auth("creator-a", world.a.tenant_id)
+    )
+
+    assert response.json()["version"] == 2
+
+
+async def test_bundle_inserted_without_a_state_does_not_become_active(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders, connection: AsyncConnection
+) -> None:
+    # A writer that forgets the state (seed script, later NRC-4 code) gets a DRAFT, not v2 active.
+    async with as_owner(connection):
+        await connection.execute(
+            insert(PolicyBundle).values(
+                id=uuid4(),
+                tenant_id=world.a.tenant_id,
+                version=2,
+                name="[SYNTHETIC] Policy v2",
+                source_ref="synthetic:test-fixture",
+                rules=demo_policy_rules()[:2],
+                is_synthetic=True,
+                approved_by="synthetic-fixture",
+                approved_at=datetime(2026, 11, 2, tzinfo=UTC),
+            )
+        )
+
+    response = await client.get(
+        f"{API}/policies/active", headers=auth("creator-a", world.a.tenant_id)
+    )
+
+    assert response.json()["version"] == 1
+
+
+async def test_tenant_with_only_a_draft_policy_has_no_active_policy(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders, connection: AsyncConnection
+) -> None:
+    await _add_bundle(connection, world.b.tenant_id, 1, BundleLifecycleState.DRAFT)
+    headers = auth("creator-b", world.b.tenant_id)
+
+    active = await client.get(f"{API}/policies/active", headers=headers)
+    context = await client.get(f"{API}/context", headers=headers)
+
+    assert active.status_code == 404
+    assert context.json()["active_policy"] is None
 
 
 async def test_policy_requires_a_token(client: httpx.AsyncClient, world: World) -> None:

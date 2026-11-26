@@ -5,7 +5,7 @@ encrypted by the API; the database never sees them in clear. The app role may no
 table: disconnecting an account keeps its row.
 
 Revision ID: c4e81a7d93f2
-Revises: b3e6bfed9303
+Revises: 4b7d2e9f1a63
 Create Date: 2026-11-25 12:00:00.000000
 """
 
@@ -16,7 +16,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "c4e81a7d93f2"
-down_revision: str | None = "b3e6bfed9303"
+down_revision: str | None = "4b7d2e9f1a63"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

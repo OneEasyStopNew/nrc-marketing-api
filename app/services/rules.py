@@ -11,10 +11,10 @@ contract's unit (see TextSpan).
 
 import re
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final
 
-from app.models.enums import Outcome, ValidationInputKind
+from app.models.enums import MissingContextCode, Outcome, ValidationInputKind
 from app.schemas.policies import PolicyBundleRead, PolicyRule
 from app.schemas.tenancy import StudyFacts
 from app.schemas.validations import (
@@ -27,11 +27,32 @@ from app.schemas.validations import (
     RuleResultValue,
     TextSpan,
 )
+from app.services.policy_context.manifest import ContextManifest
 
 PHRASE_AND_FACT_GAP: Final = CoverageGap(
     reason="Phrase and study-fact checks only; a review of meaning (AI or human) has not run."
 )
 NOT_CHECKED: Final = "No automated check exists for this rule yet."
+# A gap in the rule's policy context, saved with the rule result. {code} is a MissingContextCode.
+CONTEXT_GAP: Final = "The policy context for this rule is incomplete ({code}{detail})."
+# The rule result each blocking context gap gives a mandatory rule (policy bundle contract).
+_CONTEXT_RESULTS: Final[Mapping[MissingContextCode, RuleResultValue]] = {
+    MissingContextCode.APPLICABILITY_UNRESOLVED: RuleResultValue.UNABLE_TO_ASSESS,
+    MissingContextCode.SOURCE_MISSING: RuleResultValue.UNABLE_TO_ASSESS,
+    MissingContextCode.TRAVERSAL_TRUNCATED: RuleResultValue.UNABLE_TO_ASSESS,
+    MissingContextCode.CONFLICT: RuleResultValue.NEEDS_REVIEW,
+}
+# Mandatory results that keep a run from passing without failing it.
+_UNSETTLED: Final = frozenset({RuleResultValue.UNABLE_TO_ASSESS, RuleResultValue.NEEDS_REVIEW})
+# A result from outside the checks only replaces a less strict one. UNABLE_TO_ASSESS outranks
+# NEEDS_REVIEW because a reviewer may resolve only the latter.
+_STRICTNESS: Final[Mapping[RuleResultValue, int]] = {
+    RuleResultValue.PASS: 0,
+    RuleResultValue.NOT_APPLICABLE: 0,
+    RuleResultValue.NEEDS_REVIEW: 1,
+    RuleResultValue.UNABLE_TO_ASSESS: 2,
+    RuleResultValue.FAIL: 3,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,17 +279,132 @@ def summarise(
 
 
 def outcome_of(results: Iterable[tuple[PolicyRule, RuleResultValue]]) -> Outcome:
-    """A failed mandatory rule fails; a failed optional rule or an unchecked mandatory rule
-    needs a human decision; otherwise the input passes."""
+    """A failed mandatory rule fails; a failed optional rule, or a mandatory rule that is
+    unchecked or waiting for a person, needs a human decision; otherwise the input passes."""
     outcome = Outcome.PASS
     for rule, result in results:
         if result is RuleResultValue.FAIL and rule.mandatory:
             return Outcome.FAIL
-        if result is RuleResultValue.FAIL or (
-            result is RuleResultValue.UNABLE_TO_ASSESS and rule.mandatory
-        ):
+        if result is RuleResultValue.FAIL or (result in _UNSETTLED and rule.mandatory):
             outcome = Outcome.NEEDS_REVIEW
     return outcome
+
+
+def apply_policy_context(
+    evaluation: Evaluation, rules: Mapping[str, PolicyRule], manifest: ContextManifest
+) -> Evaluation:
+    """The evaluation with what the policy context couldn't settle made part of the saved result.
+
+    Contract (policy bundle, "Retrieval gaps"): a mandatory rule with unresolved applicability, a
+    missing source or an incomplete graph walk is UNABLE_TO_ASSESS; one in a conflict is
+    NEEDS_REVIEW; FAIL stays FAIL. A gap on an optional rule is a warning (a coverage gap only).
+    A walk cut short names no rule, so it affects every mandatory rule. Search-only codes
+    (full-text only, statements cut) are left in the manifest: search never selects a rule.
+    """
+    mandatory = {rule.rule_id for rule in manifest.required_rules} | {
+        rule_id for rule_id, rule in rules.items() if rule.mandatory
+    }
+    changes: dict[str, tuple[RuleResultValue, str]] = {}
+    gaps: list[CoverageGap] = []
+    for item in manifest.missing_context:
+        value = _CONTEXT_RESULTS.get(item.code)
+        if value is None:
+            continue
+        reason = CONTEXT_GAP.format(
+            code=item.code, detail=f": {item.detail}" if item.detail else ""
+        )
+        for rule_id in [item.rule_id] if item.rule_id else sorted(mandatory):
+            if rule_id not in mandatory:
+                gaps.append(CoverageGap(rule_id=rule_id, reason=f"{reason} (optional rule)"))
+                continue
+            gaps.append(CoverageGap(rule_id=rule_id, reason=reason))
+            if rule_id not in changes or _STRICTNESS[value] > _STRICTNESS[changes[rule_id][0]]:
+                changes[rule_id] = (value, reason)
+    result = with_results(evaluation, rules, changes, gaps)
+    # The graph may call a rule mandatory that the checks didn't run, or ran as optional (the
+    # import matches rule ids, not flags). outcome_of can't see those, but they still block: the
+    # run and the rule's gate can't pass.
+    unseen = {
+        rule_id for rule_id in changes if rule_id not in rules or not rules[rule_id].mandatory
+    }
+    if unseen:
+        gate_of = {rule.rule_id: rule.gate for rule in manifest.required_rules}
+        blocked = {gate_of.get(rule_id) for rule_id in unseen}
+        result = replace(
+            result,
+            outcome=_settled_at_most(result.outcome),
+            gates=[
+                gate.model_copy(update={"outcome": _settled_at_most(gate.outcome)})
+                if gate.gate in blocked or None in blocked
+                else gate
+                for gate in result.gates
+            ],
+        )
+    return result
+
+
+def apply_missing_policy_context(
+    evaluation: Evaluation, rules: Mapping[str, PolicyRule], reason: str
+) -> Evaluation:
+    """No policy context at all: every mandatory rule is UNABLE_TO_ASSESS (FAIL stays FAIL), and
+    the run can't pass even when it has no mandatory rule."""
+    changes = {
+        rule_id: (RuleResultValue.UNABLE_TO_ASSESS, reason)
+        for rule_id, rule in rules.items()
+        if rule.mandatory
+    }
+    result = with_results(evaluation, rules, changes, [])
+    return replace(
+        result,
+        outcome=_settled_at_most(result.outcome),
+        gates=[
+            gate.model_copy(update={"outcome": _settled_at_most(gate.outcome)})
+            for gate in result.gates
+        ],
+    )
+
+
+def with_results(
+    evaluation: Evaluation,
+    rules: Mapping[str, PolicyRule],
+    changes: Mapping[str, tuple[RuleResultValue, str]],
+    gaps: Iterable[CoverageGap],
+) -> Evaluation:
+    """The evaluation with rule results changed from outside the checks, gates and outcome
+    recomputed. A change only ever makes a result stricter: FAIL stays FAIL."""
+    rule_results = [
+        result.model_copy(
+            update={"result": changes[result.rule_id][0], "reason": changes[result.rule_id][1]}
+        )
+        if result.rule_id in changes
+        and _STRICTNESS[changes[result.rule_id][0]] > _STRICTNESS[result.result]
+        else result
+        for result in evaluation.rule_results
+    ]
+    values = {result.rule_id: result.result for result in rule_results}
+    return replace(
+        evaluation,
+        outcome=outcome_of((rule, values[rule_id]) for rule_id, rule in rules.items()),
+        gates=[
+            gate.model_copy(
+                update={
+                    "outcome": outcome_of(
+                        (rule, values[rule_id])
+                        for rule_id, rule in rules.items()
+                        if rule.gate is gate.gate
+                    )
+                }
+            )
+            for gate in evaluation.gates
+        ],
+        rule_results=rule_results,
+        coverage_gaps=[*evaluation.coverage_gaps, *gaps],
+    )
+
+
+def _settled_at_most(outcome: Outcome) -> Outcome:
+    # PASS becomes NEEDS_REVIEW; FAIL and NEEDS_REVIEW stay.
+    return Outcome.NEEDS_REVIEW if outcome is Outcome.PASS else outcome
 
 
 def _result(rule_id: str, hits: Mapping[str, list[Hit]]) -> RuleResultValue:

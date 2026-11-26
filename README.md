@@ -104,8 +104,10 @@ Without `AWS_S3_BUCKET` the simulator worker still runs, but finished jobs stop 
 
 The worker connects as `marketing_worker` through `WORKER_DATABASE_URL` and refuses to start
 without it. A job it gives up on while the provider may still have it stays `UNKNOWN` with its
-credits held; `uv run python -m scripts.list_unknown_jobs` lists those (ids only, read-only) for an
-operator to settle.
+credits held; `uv run python -m scripts.list_unknown_jobs` lists those (ids and codes only,
+read-only), and `uv run python -m scripts.job_operations` replays or settles one with an audit row.
+Job states, cancel, replay, settle and the provider limits:
+[docs/runbooks/durable-jobs.md](docs/runbooks/durable-jobs.md).
 
 ### Higgsfield (live)
 
@@ -248,6 +250,22 @@ Send it as `Authorization: Bearer <token>`. `DEMO_STUBS` and `DEV_JWKS_FILE` wor
 `APP_ENV=local` or `demo`; any other value refuses to start. The private key never leaves the
 machine that ran `init`.
 
+### Client uploads and the media worker (NRC-3)
+
+Uploads go straight from the browser to the bucket through a short-lived presigned PUT; the API
+never proxies file bytes. `POST /assets/{id}/complete` puts an upload in quarantine, and the media
+worker inspects it (size and SHA-256, the decoded image type and pixel cap, then a malware scan)
+before it becomes `READY` and an asset. In a third terminal:
+
+```powershell
+uv run python -m app.workers.media
+```
+
+Locally set `MALWARE_SCAN_MODE=simulator` (as in the example environment file): every verdict is
+then labelled SIMULATED, in the API (`scan.simulated: true`) and in the logs. The default, `live`,
+refuses to start because no real scanner is chosen yet, and `simulator` is refused outside local
+and demo. The flow for the frontend and the examples are in `contracts/examples/uploads.md`.
+
 ## Staging prerequisites
 
 - A Postgres login role `marketing_app` that does not own the tables and has no `BYPASSRLS`. The API's
@@ -263,6 +281,13 @@ machine that ran `init`.
 - `APP_ENV=staging` (or `production`), `ENABLE_DOCS=false`, `CORS_ORIGINS` set to the frontend origin, and `FORWARDED_ALLOW_IPS` set to the
   load balancer's subnet range.
 - Image: `docker build -t nrc-marketing .`. Run `alembic upgrade head` as a separate release step.
+- Uploads (NRC-3): bucket CORS allowing `PUT` from the frontend origin with the headers that
+  `POST /assets/uploads` returns; the API's role signs the uploads, so it needs `s3:PutObject`,
+  `s3:PutObjectTagging` and `s3:GetObject` (for the completion check) on `uploads/`, plus
+  `s3:ListBucket` limited to that prefix (without it S3 answers a not-yet-uploaded file with 403,
+  and complete returns 503 instead of the retryable 409); the media
+  worker's role needs `s3:GetObject` and `s3:GetObjectVersion` there; a real malware scanner (until then the media worker refuses
+  to start there, so uploads stay `QUARANTINED`).
 
 ## Not done yet
 

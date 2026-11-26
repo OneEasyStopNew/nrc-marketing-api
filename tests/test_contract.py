@@ -7,7 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from app.models.enums import JobStage
-from app.schemas.assets import AssetRead
+from app.schemas.assets import AssetRead, MediaPage
 from app.schemas.channel_accounts import (
     ChannelAccountList,
     ChannelAccountPage,
@@ -19,7 +19,9 @@ from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeRead, CreativeVersionPage
 from app.schemas.jobs import JobAccepted, JobRead
 from app.schemas.policies import GenerationEligibility, PolicyBundleRead
+from app.schemas.policy_evidence import PolicyBundleRulesRead, ValidationContextRead
 from app.schemas.tenancy import ContextRead, MeRead
+from app.schemas.uploads import UploadLimits, UploadPage, UploadRead
 from scripts.export_openapi import CONTRACT_PATH, render
 
 EXAMPLE_FILES = sorted(
@@ -39,10 +41,16 @@ SCHEMAS: dict[str, type[BaseModel]] = {
         GenerationEligibility,
         JobAccepted,
         JobRead,
+        MediaPage,
         MeRead,
         MetaConnectStarted,
         MetaConnectionRead,
         PolicyBundleRead,
+        PolicyBundleRulesRead,
+        UploadLimits,
+        UploadPage,
+        UploadRead,
+        ValidationContextRead,
     )
 }
 

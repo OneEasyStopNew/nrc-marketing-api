@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.workers.connector import WorkerConfigError, worker_database_url
+from app.workers.common import WorkerConfigError, worker_database_url
 from tests.conftest import APP_ROLE, WORKER_ROLE, AuthHeaders, World, _creative, _post_job, as_role
 
 LEASE = "lease_outbox_events(text, integer, integer, text[])"
@@ -171,6 +171,11 @@ async def test_worker_role_has_exactly_the_table_privileges_it_uses(
         "outbox_events": {"SELECT", "INSERT", "UPDATE"},
         "assets": {"SELECT", "INSERT"},
         "provider_spend": {"SELECT", "UPDATE"},
+        # The media worker (NRC-3) moves uploads through inspection; the API creates them.
+        "media_uploads": {"SELECT", "UPDATE"},
+        # The operator script (NRC-6) appends the audit rows; nothing may change them. The API
+        # role only reads them (tests/test_job_operations.py).
+        "job_operator_actions": {"SELECT", "INSERT"},
     }
     rows = (
         await connection.execute(

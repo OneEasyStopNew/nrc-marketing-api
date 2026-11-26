@@ -1,25 +1,45 @@
 """Brief and caption validation (NRC-7): rule checks run in the request and are stored.
 
 The checks are fast, deterministic string matches (app.services.rules), so a run finishes
-before POST /validations returns and is stored as SUCCEEDED. The contract still returns a
-job_id: until validation moves onto the job framework (NRC-6), it equals validation_run_id.
+before POST /validations returns and is stored as SUCCEEDED. Each run also stores the policy
+context for its text (NRC-5: rules selected by their conditions, their evidence and a full-text
+search, no model call). That context is evidence only: the outcome comes from the rule checks
+until NRC-7's judge uses it. The contract still returns a job_id: until validation moves onto
+the job framework (NRC-6), it equals validation_run_id.
 
 Image validation (D4) is not built here; the routes answer it from the demo stubs or with 501.
 """
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, select
+from sqlalchemy import text as sql_text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
-from app.core.errors import FeatureNotAvailableError, NoActivePolicyError, NotFoundError
+from app.core.errors import (
+    FeatureNotAvailableError,
+    NoActivePolicyError,
+    NotFoundError,
+    PolicyContextUnavailableError,
+)
 from app.models import Creative, CreativeVersion, StudySnapshot, ValidationRun
-from app.models.enums import ExecutionState, Outcome, ValidationInputKind
+from app.models.enums import (
+    Channel,
+    ExecutionState,
+    Language,
+    Outcome,
+    PolicyContextReason,
+    PolicyLanguage,
+    PostFormat,
+    ValidationInputKind,
+)
 from app.schemas.common import ApiModel
 from app.schemas.policies import PolicyBundleRead
 from app.schemas.tenancy import StudyFacts
@@ -35,8 +55,27 @@ from app.schemas.validations import (
 )
 from app.services import idempotency, policies, rules
 from app.services.creatives import visible_to
+from app.services.policy_context import (
+    ContextRequest,
+    ContextScope,
+    PolicyContextProvider,
+    StoredManifest,
+)
+from app.services.policy_context.manifest import MAX_STATEMENT_CHARS, Statement
 
 VALIDATE_ROUTE: Final = "POST /validations"
+# Postgres "query_canceled": a statement hit statement_timeout.
+QUERY_CANCELED_SQLSTATE: Final = "57014"
+# Recorded when the policy context couldn't be gathered; the rule checks still ran. The reason
+# in brackets is a code (e.g. GRAPH_MISSING): CoverageGap has no code field.
+CONTEXT_UNAVAILABLE_GAP: Final = (
+    "Policy evidence was not gathered for this run ({reason}), so its mandatory rules can't be "
+    "assessed."
+)
+# Saved on each mandatory rule (that didn't fail) of a run without policy context.
+CONTEXT_UNAVAILABLE_RULE: Final = "No policy context was gathered for this rule."
+
+logger = logging.getLogger(__name__)
 
 
 class _StoredResult(ApiModel):
@@ -56,7 +95,12 @@ class BriefOutcome:
 
 
 async def create_validation(
-    db: AsyncSession, ctx: TenantContext, body: ValidationCreate, idempotency_key: str
+    db: AsyncSession,
+    ctx: TenantContext,
+    body: ValidationCreate,
+    idempotency_key: str,
+    context_provider: PolicyContextProvider,
+    context_timeout: float,
 ) -> tuple[ValidationAccepted, bool]:
     """Check a brief or caption and store the run. Returns it and whether this was a replay.
 
@@ -79,7 +123,28 @@ async def create_validation(
     policy = await _active_policy(db, ctx)
     text = target.prompt if body.input_kind is ValidationInputKind.BRIEF else target.caption or ""
     evaluation = rules.evaluate_text(body.input_kind, text, policy, target.facts)
-    run = _new_run(ctx, body, text, target, policy, evaluation)
+    evaluated_at = datetime.now(tz=UTC)
+    stored, context_gaps = await _gather_context(
+        db,
+        ctx,
+        context_provider,
+        context_timeout,
+        body.input_kind,
+        text,
+        target,
+        policy,
+        evaluated_at,
+    )
+    # What the policy context couldn't settle is part of the saved result, so the generation gate
+    # sees it (policy bundle contract, "Retrieval gaps"; Vishnu's review of #26).
+    checked = rules.applicable_rules(policy, body.input_kind)
+    if stored is None:
+        evaluation = rules.apply_missing_policy_context(
+            evaluation, checked, CONTEXT_UNAVAILABLE_RULE
+        )
+    else:
+        evaluation = rules.apply_policy_context(evaluation, checked, stored.manifest)
+    run = _new_run(ctx, body, text, target, policy, evaluation, evaluated_at, stored, context_gaps)
     db.add(run)
     await idempotency.complete(db, ctx.tenant_id, VALIDATE_ROUTE, idempotency_key, run.id)
     await db.commit()
@@ -192,7 +257,11 @@ async def latest_summary(
 class _Target:
     prompt: str
     caption: str | None
+    language: Language
+    channel: Channel
+    post_format: PostFormat
     facts: StudyFacts
+    snapshot_id: UUID
     snapshot_version: int
 
 
@@ -203,7 +272,11 @@ async def _target(db: AsyncSession, ctx: TenantContext, creative_id: UUID, versi
             select(
                 CreativeVersion.prompt,
                 CreativeVersion.caption,
+                CreativeVersion.language,
+                CreativeVersion.channel,
+                CreativeVersion.post_format,
                 StudySnapshot.facts,
+                StudySnapshot.id.label("snapshot_id"),
                 StudySnapshot.version,
             )
             .join(
@@ -232,7 +305,11 @@ async def _target(db: AsyncSession, ctx: TenantContext, creative_id: UUID, versi
     return _Target(
         prompt=row.prompt,
         caption=row.caption,
+        language=row.language,
+        channel=row.channel,
+        post_format=row.post_format,
         facts=StudyFacts.model_validate(row.facts),
+        snapshot_id=row.snapshot_id,
         snapshot_version=row.version,
     )
 
@@ -244,6 +321,9 @@ def _new_run(
     target: _Target,
     policy: PolicyBundleRead,
     evaluation: rules.Evaluation,
+    evaluated_at: datetime,
+    context: StoredManifest | None,
+    context_gaps: list[CoverageGap],
 ) -> ValidationRun:
     return ValidationRun(
         id=uuid4(),
@@ -257,15 +337,108 @@ def _new_run(
         policy_bundle_id=policy.policy_bundle_id,
         policy_bundle_version=policy.version,
         study_snapshot_version=target.snapshot_version,
+        context_manifest_id=context.id if context else None,
+        context_manifest_sha256=context.sha256 if context else None,
         result=_StoredResult(
             gates=evaluation.gates,
             rule_results=evaluation.rule_results,
             findings=evaluation.findings,
-            coverage_gaps=evaluation.coverage_gaps,
+            coverage_gaps=[*evaluation.coverage_gaps, *context_gaps],
         ).model_dump(mode="json"),
         created_by=ctx.principal.sub,
-        evaluated_at=datetime.now(tz=UTC),
+        evaluated_at=evaluated_at,
     )
+
+
+async def _gather_context(
+    db: AsyncSession,
+    ctx: TenantContext,
+    provider: PolicyContextProvider,
+    deadline_seconds: float,
+    kind: ValidationInputKind,
+    text: str,
+    target: _Target,
+    policy: PolicyBundleRead,
+    evaluated_at: datetime,
+) -> tuple[StoredManifest | None, list[CoverageGap]]:
+    """The stored context, or no context and a coverage gap saying why.
+
+    Failing to gather it never fails the request: the run is stored with the gap, and the caller
+    makes sure it can't pass. Each of its statements has a time limit
+    (POLICY_CONTEXT_TIMEOUT_SECONDS). Uses the run's pinned bundle and snapshot, and the whole
+    brief or caption as one statement. Inside a request there is no embedder, so
+    search is full-text only (flagged in the manifest); an identical earlier request reuses its
+    stored manifest.
+    """
+    language = policy_language(target.language)
+    # A PolicyContextReason; str, because the provider's reason arrives in the error's details.
+    reason: str
+    if language is None:
+        reason = PolicyContextReason.LANGUAGE_NOT_SUPPORTED
+    elif len(text) > MAX_STATEMENT_CHARS:
+        # Possible after NFC normalisation of a text at the length limit.
+        reason = PolicyContextReason.STATEMENT_TOO_LONG
+    else:
+        request = ContextRequest(
+            policy_bundle_id=policy.policy_bundle_id,
+            study_snapshot_id=target.snapshot_id,
+            scope=ContextScope(
+                input_kind=kind,
+                channel=target.channel,
+                post_format=target.post_format,
+                language=language,
+                evaluated_at=evaluated_at,
+            ),
+            statements=(Statement(text=text),) if text else (),
+        )
+        try:
+            # A savepoint, so a database error here leaves the run's own transaction usable. The
+            # deadline is Postgres's statement_timeout, not asyncio.timeout: cancelling asyncpg
+            # mid-query invalidates the connection, and the run could then not be stored.
+            # Rolling back to the savepoint undoes the limit; on success it is reset explicitly.
+            async with db.begin_nested():
+                await db.execute(
+                    sql_text("SELECT set_config('statement_timeout', :ms, true)"),
+                    {"ms": str(max(1, round(deadline_seconds * 1000)))},
+                )
+                stored = await provider.build(db, request, actor=ctx.principal.sub)
+                await db.execute(sql_text("SET LOCAL statement_timeout TO DEFAULT"))
+        except PolicyContextUnavailableError as error:
+            # E.g. an older bundle without a graph.
+            reason = str((error.details or {}).get("reason", error.code))
+        except SQLAlchemyError as error:
+            sqlstate = getattr(getattr(error, "orig", None), "sqlstate", None)
+            if sqlstate == QUERY_CANCELED_SQLSTATE:
+                reason = PolicyContextReason.RETRIEVAL_TIMEOUT
+            else:
+                reason = PolicyContextReason.RETRIEVAL_ERROR
+                # With the traceback, so the failing query can be found. The engine sets
+                # hide_parameters, so SQLAlchemy's part of the error carries the SQL but no bound
+                # values; asyncpg's own message can still quote a value it failed to encode.
+                logger.exception(
+                    "policy context failed tenant=%s bundle=%s sqlstate=%s",
+                    ctx.tenant_id,
+                    policy.policy_bundle_id,
+                    sqlstate,
+                )
+        else:
+            return stored, []
+    logger.warning(
+        "policy context unavailable tenant=%s bundle=%s reason=%s",
+        ctx.tenant_id,
+        policy.policy_bundle_id,
+        reason,
+    )
+    return None, [CoverageGap(reason=CONTEXT_UNAVAILABLE_GAP.format(reason=reason))]
+
+
+def policy_language(language: Language | str) -> PolicyLanguage | None:
+    # Policy text may support a language before the public enum does (F33), and the reverse must
+    # not crash validation: a language without policy text gets no context and a gap.
+    try:
+        return PolicyLanguage(language)
+    except ValueError:
+        return None
 
 
 async def _active_policy(db: AsyncSession, ctx: TenantContext) -> PolicyBundleRead:
