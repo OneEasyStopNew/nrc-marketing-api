@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.orm import aliased
 
@@ -17,7 +17,7 @@ from app.models import (
     PolicySource,
     PolicySourceClause,
 )
-from app.models.enums import PolicyEdgeType, PolicyLanguage, PolicyNodeType
+from app.models.enums import PolicyEdgeType, PolicyLanguage, PolicyNodeType, PostFormat
 from scripts.import_policy_graph import (
     EdgeImport,
     NodeImport,
@@ -376,7 +376,9 @@ def _change_edge(graph: PolicyGraphImport) -> PolicyGraphImport:
 def _change_node(graph: PolicyGraphImport) -> PolicyGraphImport:
     first, *rest = graph.nodes
     return graph.model_copy(
-        update={"nodes": [first.model_copy(update={"post_formats": ["story_image"]}), *rest]}
+        update={
+            "nodes": [first.model_copy(update={"post_formats": [PostFormat.FEED_IMAGE]}), *rest]
+        }
     )
 
 
@@ -432,6 +434,50 @@ def test_effective_date_without_a_timezone_is_rejected(field: str) -> None:
     NodeImport.model_validate({**node, field: "2026-12-01T00:00:00Z"})
     with pytest.raises(ValueError, match="timezone info"):
         NodeImport.model_validate({**node, field: "2026-12-01T00:00:00"})
+
+
+@pytest.mark.parametrize(
+    ("field", "valid", "typo"),
+    [
+        ("channels", "facebook", "Facebook"),
+        ("post_formats", "feed_image", "feed-image"),
+        ("input_kinds", "brief", "briefs"),
+        ("languages", "es", "spanish"),
+    ],
+)
+def test_condition_value_outside_its_enum_is_rejected(field: str, valid: str, typo: str) -> None:
+    # A typo must stop the import, not import a rule that never applies to any post.
+    node = {"node_key": "R-1", "node_type": "RULE", "text": "[SYNTHETIC] rule"}
+
+    assert getattr(NodeImport.model_validate({**node, field: [valid]}), field) == [valid]
+    # The typo is the second item, so it is reported at index 1.
+    with pytest.raises(ValueError, match=rf"{field}\.1\s+Input should be"):
+        NodeImport.model_validate({**node, field: [valid, typo]})
+
+
+async def test_stored_value_outside_the_enums_is_a_different_graph(
+    connection: AsyncConnection, world: World
+) -> None:
+    # Rows imported before the enums were enforced may hold such values; a re-run must still get
+    # the import's own refusal, not a validation error from reading the stored side.
+    tenant_id, bundle_id = world.a.tenant_id, _bundle_of(world)
+    async with owner_session(connection, tenant_id) as db:
+        await import_policy_graph(db, tenant_id, bundle_id, load_synthetic_graph())
+        await db.execute(
+            update(PolicyNode)
+            .where(PolicyNode.policy_bundle_id == bundle_id)
+            .values(channels=["instagram"])
+        )
+        with pytest.raises(PolicyGraphImportError, match="already has a different graph"):
+            await import_policy_graph(db, tenant_id, bundle_id, load_synthetic_graph())
+
+
+def test_a_typo_in_a_graph_file_stops_the_whole_import() -> None:
+    graph = load_synthetic_graph().model_dump(mode="json")
+    graph["nodes"][0]["channels"] = ["Facebook"]
+
+    with pytest.raises(ValueError, match=r"nodes\.0\.channels\.0\s+Input should be 'facebook'"):
+        PolicyGraphImport.model_validate(graph)
 
 
 def test_rule_import_rejects_unknown_fields() -> None:

@@ -338,12 +338,13 @@ async def test_exception_without_an_approved_path_or_matching_conditions_cannot_
         [
             _rule_node("R-1"),
             _exception_node("X-UNAPPROVED-EDGE"),
-            _exception_node("X-OTHER-CHANNEL", channels=["instagram"]),
+            # Facebook is the only channel the import accepts, so the mismatch is the input kind.
+            _exception_node("X-OTHER-INPUT", input_kinds=["image"]),
         ],
         [_rule("R-1")],
         [
             _edge("except_when", "R-1", "X-UNAPPROVED-EDGE", approved=False),
-            _edge("except_when", "R-1", "X-OTHER-CHANNEL"),
+            _edge("except_when", "R-1", "X-OTHER-INPUT"),
         ],
     )
     bundle_id = await _custom(connection, world, graph)
@@ -352,9 +353,9 @@ async def test_exception_without_an_approved_path_or_matching_conditions_cannot_
         await _build(connection, world.a.tenant_id, bundle_id, world.a.snapshot_id)
     ).manifest
 
-    assert [item.node_key for item in manifest.exceptions] == ["X-OTHER-CHANNEL"]
+    assert [item.node_key for item in manifest.exceptions] == ["X-OTHER-INPUT"]
     assert manifest.exceptions[0].applicable is Applicability.FALSE
-    assert manifest.exceptions[0].reasons == ("CHANNEL_NOT_MATCHED",)
+    assert manifest.exceptions[0].reasons == ("INPUT_KIND_NOT_MATCHED",)
     assert _ids(manifest.required_rules) == ["R-1"]
 
 
@@ -452,13 +453,15 @@ async def test_hitting_the_node_limit_is_recorded(
     assert _ids(manifest.required_rules) == ["R-1"]
 
 
-async def test_rule_for_another_post_format_is_dropped_and_unknown_format_flagged(
+async def test_post_format_rule_applies_to_its_format_and_is_flagged_when_unknown(
     connection: AsyncConnection, world: World
 ) -> None:
-    # A story-only rule doesn't apply to a feed image; with the format unknown it is kept.
+    # A feed-only rule applies to a feed image; with the format unknown it is kept and flagged.
+    # The import accepts only formats the API supports (feed_image today), so the "other format"
+    # case is covered by test_policy_context_units.py.
     graph = _graph(
-        [_rule_node("R-STORY", post_formats=["story_image"]), _rule_node("R-ALL")],
-        [_rule("R-STORY"), _rule("R-ALL")],
+        [_rule_node("R-FEED", post_formats=["feed_image"]), _rule_node("R-ALL")],
+        [_rule("R-FEED"), _rule("R-ALL")],
         [],
     )
     bundle_id = await _custom(connection, world, graph)
@@ -469,10 +472,10 @@ async def test_rule_for_another_post_format_is_dropped_and_unknown_format_flagge
     )
     unknown = await _build(connection, tenant, bundle_id, snapshot)
 
-    assert _ids(feed.manifest.required_rules) == ["R-ALL"]
+    assert _ids(feed.manifest.required_rules) == ["R-ALL", "R-FEED"]
     assert feed.manifest.missing_context == ()
-    assert _ids(unknown.manifest.required_rules) == ["R-ALL", "R-STORY"]
-    assert _codes(unknown.manifest) == [(MissingContextCode.APPLICABILITY_UNRESOLVED, "R-STORY")]
+    assert _ids(unknown.manifest.required_rules) == ["R-ALL", "R-FEED"]
+    assert _codes(unknown.manifest) == [(MissingContextCode.APPLICABILITY_UNRESOLVED, "R-FEED")]
     # The format is part of the cache key: the second request built its own manifest.
     assert (unknown.reused, unknown.id != feed.id) == (False, True)
 

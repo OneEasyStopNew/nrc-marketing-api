@@ -53,9 +53,12 @@ _VALIDATIONS: dict[int | str, dict[str, Any]] = {
     "validation runs as a job. Images need DEMO_STUBS (501 otherwise); poll those until "
     "SUCCEEDED. A retry with the same Idempotency-Key and body returns the original run. Each "
     "brief or caption run also stores the policy context it was checked against (see "
-    "GET /validations/{validation_run_id}/context). If that context can't be gathered (each "
-    "of its database queries has a time limit), the run is stored as NEEDS_REVIEW (or FAIL), "
-    "never PASS, with a coverage gap.",
+    "GET /validations/{validation_run_id}/context). What that context can't settle is part of "
+    "the stored run: a mandatory rule with a missing source, unresolved applicability or an "
+    "incomplete walk is UNABLE_TO_ASSESS, one in a conflict NEEDS_REVIEW, and a FAIL stays "
+    "FAIL; the run is then never PASS. If the context can't be gathered at all (each of its "
+    "database queries has a time limit), every mandatory rule is UNABLE_TO_ASSESS. Gaps on "
+    "optional rules are coverage gaps only.",
     responses=_VALIDATIONS,
 )
 async def create_validation(

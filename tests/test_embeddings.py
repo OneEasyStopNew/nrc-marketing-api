@@ -10,10 +10,18 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any
+from unittest.mock import patch
 
 import boto3
 import pytest
-from botocore.exceptions import ConnectTimeoutError, EndpointConnectionError, ReadTimeoutError
+from botocore.exceptions import (
+    ConnectTimeoutError,
+    CredentialRetrievalError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+    SSOError,
+    TokenRetrievalError,
+)
 from botocore.response import StreamingBody
 from botocore.stub import ANY, Stubber
 from pydantic import ValidationError
@@ -352,16 +360,6 @@ async def test_bedrock_error_codes_map_to_typed_provider_errors(
     assert caught.value.__cause__ is None
 
 
-class _FailingClient:
-    # Stands in for a client whose call raises a botocore error (a Stubber cannot).
-
-    def __init__(self, error: Exception) -> None:
-        self._error = error
-
-    def invoke_model(self, **kwargs: object) -> object:
-        raise self._error
-
-
 @pytest.mark.parametrize(
     "error",
     [
@@ -372,13 +370,41 @@ class _FailingClient:
     ids=["read-timeout", "connect-timeout", "endpoint-connection"],
 )
 async def test_timeouts_and_connection_failures_are_unavailable(error: Exception) -> None:
-    provider = BedrockEmbeddingProvider(model_id=TITAN_V2_MODEL_ID, client=_FailingClient(error))  # type: ignore[arg-type]
+    # A real client whose call raises the botocore error (a Stubber can't raise these).
+    client = boto3.Session().client("bedrock-runtime", region_name="us-east-1")
+    provider = BedrockEmbeddingProvider(model_id=TITAN_V2_MODEL_ID, client=client)
 
-    with pytest.raises(ProviderUnavailableError, match="could not be reached") as caught:
+    with (
+        patch.object(client, "invoke_model", side_effect=error),
+        pytest.raises(ProviderUnavailableError, match="could not be reached") as caught,
+    ):
         await provider.embed(["a"], DOCUMENT)
 
     assert caught.value.retryable
     assert "bedrock-runtime.example" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        SSOError(),
+        TokenRetrievalError(provider="sso", error_msg="the SSO session has expired"),
+        CredentialRetrievalError(provider="assume-role", error_msg="role can't be assumed"),
+    ],
+    ids=["sso", "expired-token", "credential-retrieval"],
+)
+async def test_expired_or_unloadable_credentials_are_a_config_error(error: Exception) -> None:
+    # Retrying won't renew a sign-in, so these must not be the retryable "unavailable" error.
+    client = boto3.Session().client("bedrock-runtime", region_name="us-east-1")
+    provider = BedrockEmbeddingProvider(model_id=TITAN_V2_MODEL_ID, client=client)
+
+    with (
+        patch.object(client, "invoke_model", side_effect=error),
+        pytest.raises(ProviderConfigError, match="credentials missing or expired") as caught,
+    ):
+        await provider.embed(["a"], DOCUMENT)
+
+    assert not caught.value.retryable
 
 
 def test_unsupported_model_id_is_a_config_error() -> None:
