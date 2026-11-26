@@ -6,18 +6,21 @@ from datetime import UTC, datetime, timedelta
 from typing import Final
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.access import TenantContext
 from app.core.config import Settings
 from app.core.errors import DependencyUnavailableError, NotFoundError
-from app.models import Asset, Creative, Job, OutboxEvent
+from app.core.media_types import IMAGE_EXTENSIONS
+from app.models import Asset, Creative, Job, MediaUpload, OutboxEvent
 from app.models.enums import ExecutionState
 from app.schemas.assets import AssetOrigin, AssetRead, MediaItem, MediaPage
-from app.services import media, tenancy
+from app.schemas.uploads import MediaAuthorization
+from app.services import media, tenancy, uploads
 from app.services.jobs import JobContentMissingError, job_content
 from app.services.media import MediaRejectedError
+from app.services.paging import newest_first_page
 from app.services.providers.base import FetchedImage, ProviderError, ProviderOutputError
 from app.services.storage import ObjectStorage, StorageError
 
@@ -162,32 +165,32 @@ async def emit_asset_generated(db: AsyncSession, asset_id: UUID) -> None:
     )
 
 
-async def get_asset(
-    db: AsyncSession,
-    ctx: TenantContext,
-    asset_id: UUID,
-    storage: ObjectStorage,
-    settings: Settings,
-) -> AssetRead:
-    # Tenant isolation comes from RLS plus the explicit tenant filter; the study check hides
-    # assets of studies the caller cannot see. Both look like "not found".
-    asset = (
-        await db.execute(
-            select(Asset)
-            .join(
-                Creative,
-                (Creative.tenant_id == Asset.tenant_id) & (Creative.id == Asset.creative_id),
-            )
-            .where(
-                Asset.tenant_id == ctx.tenant_id,
-                Asset.id == asset_id,
-                Creative.study_id.in_(ctx.study_ids),
-            )
+def _visible_assets(ctx: TenantContext) -> Select[Asset, MediaUpload]:
+    """Assets the caller can see, with the upload behind each uploaded one (None otherwise:
+    an outer join, whatever the static type says).
+
+    Tenant isolation comes from RLS plus the explicit tenant filter. The study check hides
+    assets of studies the caller cannot see: an upload carries its study, a generated asset
+    reaches it through its creative. Both look like "not found".
+    """
+    return (
+        select(Asset, MediaUpload)
+        .outerjoin(
+            Creative,
+            (Creative.tenant_id == Asset.tenant_id) & (Creative.id == Asset.creative_id),
         )
-    ).scalar_one_or_none()
-    if asset is None:
-        raise NotFoundError("Asset not found.")
-    ttl = settings.asset_url_ttl_seconds
+        .outerjoin(
+            MediaUpload,
+            (MediaUpload.tenant_id == Asset.tenant_id) & (MediaUpload.id == Asset.upload_id),
+        )
+        .where(
+            Asset.tenant_id == ctx.tenant_id,
+            func.coalesce(Asset.study_id, Creative.study_id).in_(ctx.study_ids),
+        )
+    )
+
+
+async def _signed(storage: ObjectStorage, asset: Asset, ttl: int) -> tuple[str, datetime]:
     expires_at = datetime.now(UTC) + timedelta(seconds=ttl)
     # The URL is returned to the caller only: never stored or logged.
     try:
@@ -196,10 +199,32 @@ async def get_asset(
         )
     except StorageError:
         raise DependencyUnavailableError("Image storage is temporarily unavailable.") from None
+    return url, expires_at
+
+
+def _authorization(upload: MediaUpload | None, now: datetime) -> MediaAuthorization | None:
+    return uploads.media_authorization(upload, now) if upload is not None else None
+
+
+async def get_asset(
+    db: AsyncSession,
+    ctx: TenantContext,
+    asset_id: UUID,
+    storage: ObjectStorage,
+    settings: Settings,
+) -> AssetRead:
+    row = (await db.execute(_visible_assets(ctx).where(Asset.id == asset_id))).one_or_none()
+    if row is None:
+        raise NotFoundError("Asset not found.")
+    asset, upload = row
+    url, expires_at = await _signed(storage, asset, settings.asset_url_ttl_seconds)
     return AssetRead(
         asset_id=asset.id,
         creative_id=asset.creative_id,
         origin=AssetOrigin(asset.origin),
+        study_id=asset.study_id,
+        name=asset.name,
+        authorization=_authorization(upload, datetime.now(UTC)),
         mime_type=asset.mime_type,
         width_px=asset.width_px,
         height_px=asset.height_px,
@@ -222,63 +247,51 @@ async def list_media(
     before: datetime | None,
     limit: int,
 ) -> MediaPage:
-    """List completed stored images with the same tenant/study boundary as get_asset.
+    """List finished generated images and uploads that passed inspection, newest first.
 
-    Keep the existing timestamp cursor contract. Include timestamp ties at the page boundary
-    rather than silently dropping them on the next page (which uses a strict `<` cursor).
+    Same tenant/study boundary as get_asset, and the existing timestamp cursor contract
+    (app.services.paging).
     """
     query = (
-        select(Asset)
-        .join(
-            Creative,
-            (Creative.tenant_id == Asset.tenant_id) & (Creative.id == Asset.creative_id),
-        )
-        .join(Job, (Job.tenant_id == Asset.tenant_id) & (Job.id == Asset.job_id))
+        _visible_assets(ctx)
+        .outerjoin(Job, (Job.tenant_id == Asset.tenant_id) & (Job.id == Asset.job_id))
         .where(
-            Asset.tenant_id == ctx.tenant_id,
-            Creative.study_id.in_(ctx.study_ids),
-            Asset.origin == AssetOrigin.GENERATED.value,
-            Asset.mime_type.in_(("image/png", "image/jpeg")),
-            Job.state == ExecutionState.SUCCEEDED,
-            Job.result_asset_id == Asset.id,
+            Asset.mime_type.in_(tuple(IMAGE_EXTENSIONS)),
+            or_(
+                and_(
+                    Asset.origin == AssetOrigin.GENERATED.value,
+                    Job.state == ExecutionState.SUCCEEDED,
+                    Job.result_asset_id == Asset.id,
+                ),
+                # An uploaded asset exists only once its upload is READY.
+                Asset.origin == AssetOrigin.UPLOADED.value,
+            ),
         )
-        .order_by(Asset.created_at.desc())
     )
-    if before is not None:
-        query = query.where(Asset.created_at < before)
-    # WITH TIES applies only to created_at; sort equal timestamps by id below for a stable
-    # display order. Check for older rows separately: even limit+1 could land inside a tie.
-    rows = (await db.scalars(query.fetch(limit, with_ties=True))).all()
-    page = sorted(
-        rows,
-        key=lambda row: (row.created_at, row.id),
-        reverse=True,
+    page, next_cursor = await newest_first_page(
+        db,
+        query,
+        created_at=Asset.created_at,
+        row_id=Asset.id,
+        sort_key=lambda row: (row[0].created_at, row[0].id),
+        before=before,
+        limit=limit,
     )
-    next_cursor = None
-    if page:
-        boundary = page[-1].created_at
-        older = await db.scalar(
-            query.with_only_columns(Asset.id).where(Asset.created_at < boundary).limit(1)
-        )
-        if older is not None:
-            next_cursor = boundary
-    names = await tenancy.display_names(db, ctx, {row.created_by for row in page})
+    names = await tenancy.display_names(db, ctx, {asset.created_by for asset, _ in page})
     ttl = settings.asset_url_ttl_seconds
+    now = datetime.now(UTC)
     items: list[MediaItem] = []
-    for asset in page:
-        expires_at = datetime.now(UTC) + timedelta(seconds=ttl)
-        try:
-            url = await storage.presigned_get(
-                asset.s3_key, version_id=asset.s3_version_id, expires_in=ttl
-            )
-        except StorageError:
-            raise DependencyUnavailableError("Image storage is temporarily unavailable.") from None
+    for asset, upload in page:
+        url, expires_at = await _signed(storage, asset, ttl)
         items.append(
             MediaItem(
                 asset_id=asset.id,
                 creative_id=asset.creative_id,
                 creative_version=asset.creative_version,
                 origin=AssetOrigin(asset.origin),
+                study_id=asset.study_id,
+                name=asset.name,
+                authorization=_authorization(upload, now),
                 mime_type=asset.mime_type,
                 width_px=asset.width_px,
                 height_px=asset.height_px,

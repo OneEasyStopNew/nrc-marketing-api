@@ -15,31 +15,20 @@ repeated step is harmless (guarded transitions, the stored provider idempotency 
 
 import asyncio
 import logging
-import os
-import secrets
-import signal
-import socket
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_CEILING, Decimal
 from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 from uuid import UUID
 
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 from sqlalchemy import ARRAY, Row, Text, Update, bindparam, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
 
-from app.core.config import (
-    LEASE_MAX_SECONDS,
-    LEASE_MIN_SECONDS,
-    Settings,
-    WorkerDatabaseSettings,
-    get_settings,
-)
+from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import bind_tenant, create_engine, create_sessionmaker
 from app.models import Job, OutboxEvent
@@ -80,7 +69,18 @@ from app.services.providers.higgsfield import (
     with_higgsfield_key,
 )
 from app.services.providers.simulator import SIMULATOR_NAME, SimulatedImageProvider
+from app.services.spend import usd_micros as _usd_micros
 from app.services.storage import ObjectStorage
+from app.workers.cancellation import finish_cancel, give_up_cancel
+from app.workers.common import (
+    DEFAULT_OWNER,
+    WorkerConfigError,
+    backoff_seconds,
+    lease_seconds,
+    stop_on_signals,
+    worker_database_url,
+)
+from app.workers.limits import guard_providers, submit_slot_free
 
 logger = logging.getLogger(__name__)
 
@@ -114,21 +114,6 @@ _LEASE = text(
     "SELECT event_id, tenant_id, job_id, event_type"
     " FROM lease_outbox_events(:owner, 1, :lease, :event_types)"
 ).bindparams(bindparam("event_types", type_=ARRAY(Text)))
-_jitter = secrets.SystemRandom()
-
-
-def process_owner() -> str:
-    # Hostname and PID can repeat across containers (both PID 1), so add a random suffix.
-    return f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
-
-
-# Computed once, so every lease this process takes carries the same owner.
-DEFAULT_OWNER: Final = process_owner()
-
-
-class WorkerConfigError(Exception):
-    # The worker cannot start with this configuration. Messages name settings, never values.
-    pass
 
 
 @runtime_checkable
@@ -241,13 +226,6 @@ class JobHandler(Protocol):
     async def handle(self, db: AsyncSession, job: Job, step: Step) -> float | None: ...
 
 
-def backoff_seconds(attempt: int, settings: Settings) -> float:
-    # Exponential from WORKER_BACKOFF_BASE_SECONDS up to WORKER_BACKOFF_MAX_SECONDS, with jitter
-    # between 50% and 100% so many jobs don't retry in lockstep.
-    delay = settings.worker_backoff_base_seconds * 2.0 ** max(attempt - 1, 0)
-    return min(settings.worker_backoff_max_seconds, delay) * _jitter.uniform(0.5, 1.0)
-
-
 class ImageGenerationHandler:
     async def handle(self, db: AsyncSession, job: Job, step: Step) -> float | None:
         if job.state in TERMINAL_STATES:
@@ -319,6 +297,18 @@ class ImageGenerationHandler:
             values["provider_cost_estimate_usd_micros"] = micros
             set_committed_value(job, "provider_cost_estimate_usd_micros", micros)
         await step.heartbeat(db)
+        if not await submit_slot_free(db, str(job.provider), step.settings):
+            # The provider is at its concurrency cap: wait without counting a failure. A fresh
+            # estimate is kept (guarded, same state), so the job is never priced twice.
+            if values:
+                await transition(
+                    db,
+                    job.id,
+                    allowed_from={ExecutionState.QUEUED, ExecutionState.RUNNING},
+                    to=job.state,
+                    **values,
+                )
+            return backoff_seconds(step.event_attempts, step.settings)
         moved = await transition(
             db,
             job.id,
@@ -378,6 +368,23 @@ class ImageGenerationHandler:
             _log_review_stop(job, JOB_CONTENT_MISSING)
             return None
         await step.heartbeat(db)
+        if job.state is ExecutionState.UNKNOWN:
+            # If the provider never got the original, the resend starts a new billed generation,
+            # so it takes a provider slot like a first submit: it waits as UNKNOWN past the cap,
+            # else it is counted in flight (submitting) from before the call, committed.
+            # A RUNNING/submitting job already holds its slot.
+            if not await submit_slot_free(db, str(job.provider), step.settings):
+                return backoff_seconds(step.event_attempts, step.settings)
+            if not await transition(
+                db,
+                job.id,
+                allowed_from={ExecutionState.UNKNOWN},
+                to=ExecutionState.RUNNING,
+                stage=JobStage.SUBMITTING,
+            ):
+                return None
+            await db.commit()
+            await step.heartbeat(db)
         try:
             submitted = await provider.submit(request)
         except ProviderError as error:
@@ -417,6 +424,16 @@ class ImageGenerationHandler:
             failure_code=None,
         )
         if not moved:
+            # A cancel arrived during the submit: keep the request id, so the cancel polls the
+            # outcome instead of holding the credits as unknown.
+            await transition(
+                db,
+                job.id,
+                allowed_from={ExecutionState.CANCEL_REQUESTED},
+                to=ExecutionState.CANCEL_REQUESTED,
+                stage=JobStage.WAITING_PROVIDER,
+                provider_request_id=submitted.provider_request_id,
+            )
             return None
         # The sink records it on the asset; the job was loaded before the id was known.
         set_committed_value(job, "provider_request_id", submitted.provider_request_id)
@@ -581,11 +598,32 @@ class JobRunHandler:
         handler = self._job_handlers.get(JobKind(job.kind)) if job and job.kind in JobKind else None
         if job is None or handler is None:
             raise NoHandlerError
-        return await handler.handle(db, job, step)
+        if job.state is ExecutionState.CANCEL_REQUESTED:
+            return await finish_cancel(
+                db,
+                job,
+                step.providers.get(job.provider or ""),
+                settings=step.settings,
+                now=step.now,
+                event_attempts=step.event_attempts,
+                heartbeat=step.heartbeat,
+            )
+        retry = await handler.handle(db, job, step)
+        # FOR SHARE waits for a cancel that is updating the job right now, so this check either
+        # sees it or commits first (request_cancel then adds a new event after its update).
+        if retry is None and await db.scalar(
+            select(Job.state).where(Job.id == job.id).with_for_update(read=True)
+        ) is (ExecutionState.CANCEL_REQUESTED):
+            # A cancel arrived mid-step and won the step's guarded update: keep the event, so
+            # the cancel is finished instead of the job being left behind.
+            return backoff_seconds(1, step.settings)
+        return retry
 
     async def give_up(self, db: AsyncSession, event: LeasedEvent, code: str) -> None:
         job = await db.get(Job, event.job_id)
-        if job is not None:
+        if job is not None and job.state is ExecutionState.CANCEL_REQUESTED:
+            await give_up_cancel(db, job)
+        elif job is not None:
             await _give_up(db, job, code, _GIVE_UP_MESSAGES[code])
 
 
@@ -668,11 +706,6 @@ async def run_once(
                 event.event_id,
             )
     return leased
-
-
-def lease_seconds(settings: Settings) -> int:
-    # Settings validate this range; the clamp also covers copies made without validation.
-    return min(max(settings.worker_lease_seconds, LEASE_MIN_SECONDS), LEASE_MAX_SECONDS)
 
 
 async def _process(run: _Run, event: Row[tuple[UUID, UUID, UUID, str]]) -> None:
@@ -836,11 +869,6 @@ async def _estimate_usd_micros(provider: ImageProvider, request: ImageRequest) -
         # Never submit without a price: a missing estimate is a non-retryable provider error.
         raise ProviderError("The provider returned no cost estimate.")
     return _usd_micros(usd)
-
-
-def _usd_micros(usd: Decimal) -> int:
-    # Money stays in integer units; round up so the cap is never undercut.
-    return int((usd * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
 
 
 def _log_call(
@@ -1059,20 +1087,13 @@ def load_provider_secrets(settings: Settings) -> Settings:
         raise WorkerConfigError(str(error)) from None
 
 
-def worker_database_url() -> SecretStr:
-    # The worker connects as marketing_worker, never as the API's role.
-    try:
-        return WorkerDatabaseSettings().worker_database_url
-    except ValidationError:
-        raise WorkerConfigError("WORKER_DATABASE_URL is missing or invalid.") from None
-
-
 async def run_forever(settings: Settings) -> None:
     database_url = worker_database_url()
     settings = await asyncio.to_thread(load_provider_secrets, settings)
     providers = build_providers(settings)
     try:
-        await _serve(settings, providers, database_url)
+        # The originals are closed below; the guarded ones only add the circuit breaker.
+        await _serve(settings, guard_providers(providers, settings), database_url)
     finally:
         await close_providers(providers)
     logger.info("connector worker stopped")
@@ -1084,7 +1105,7 @@ async def _serve(
     engine = create_engine(settings, database_url)
     sessions = create_sessionmaker(engine)
     stop = asyncio.Event()
-    _stop_on_signals(stop)
+    stop_on_signals(stop)
     # Simulator mode may run without storage: completed jobs then park at the provider result.
     sink = StoredImageSink(ObjectStorage(settings), settings) if settings.aws_s3_bucket else None
     logger.info("connector worker started mode=%s", settings.generation_mode)
@@ -1106,17 +1127,6 @@ async def close_providers(providers: Mapping[str, ImageProvider]) -> None:
     for provider in providers.values():
         if isinstance(provider, _Closable):
             await provider.aclose()
-
-
-def _stop_on_signals(stop: asyncio.Event) -> None:
-    # Finish the current event, then exit.
-    loop = asyncio.get_running_loop()
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(signum, stop.set)
-        except NotImplementedError:
-            # Windows event loops have no add_signal_handler.
-            signal.signal(signum, lambda *_: loop.call_soon_threadsafe(stop.set))
 
 
 def main() -> None:

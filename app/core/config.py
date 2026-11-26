@@ -8,16 +8,21 @@ from typing import Annotated, Final, Literal, Self
 from pydantic import Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.core.media_types import IMAGE_EXTENSIONS
+
 AppEnv = Literal["local", "demo", "staging", "production"]
 # Environments where simulated data and locally signed tokens are allowed.
 NON_PRODUCTION_ENVS: Final[frozenset[str]] = frozenset({"local", "demo"})
 # lease_outbox_events() clamps its lease to the same range in SQL; keep the two in sync.
 LEASE_MIN_SECONDS = 5
 LEASE_MAX_SECONDS = 600
+# The types app.services.media can decode (app.core.media_types).
+SUPPORTED_UPLOAD_IMAGE_TYPES: Final[frozenset[str]] = frozenset(IMAGE_EXTENSIONS)
 
 
-class Settings(BaseSettings):
-    # Typed configuration. Required values have no default, so a missing one fails at startup.
+class EmbeddingSettings(BaseSettings):
+    # What policy embeddings need, on its own so owner scripts (seed, index build) can load it
+    # without the API's settings (Cognito, DATABASE_URL). Settings inherits every field here.
 
     # .env.local (git-ignored, local only) overrides .env; it holds provider keys such as
     # HIGGSFIELD_API_KEY.
@@ -27,6 +32,55 @@ class Settings(BaseSettings):
 
     # Defaults to the strictest value: a deployment that forgets it gets no dev shortcuts.
     app_env: AppEnv = "production"
+    aws_region: str = "us-east-1"
+    # Policy embeddings (NRC-5). "off" builds and uses no vectors (retrieval is lexical only), so
+    # staging and production start unchanged until Bedrock access exists. "live" never falls back
+    # to the simulator and refuses to start without BEDROCK_EMBEDDING_MODEL_ID. The simulator's
+    # vectors carry no meaning: local and demo only.
+    embedding_mode: Literal["off", "simulator", "live"] = "off"
+    # One of the pinned models in app.services.providers.bedrock_embeddings.PINNED_MODELS.
+    bedrock_embedding_model_id: str | None = None
+    # Bedrock client: connect and read timeout per request, and botocore's retries after the
+    # first attempt (standard mode). The region is AWS_REGION; access comes from the IAM role.
+    bedrock_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    bedrock_max_retries: int = Field(default=3, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def _simulated_embeddings_only_outside_production(self) -> Self:
+        if self.embedding_mode == "simulator" and self.app_env not in NON_PRODUCTION_ENVS:
+            raise ValueError(
+                f"EMBEDDING_MODE=simulator cannot be used when APP_ENV={self.app_env!r}; "
+                "set APP_ENV=local (or demo) for development"
+            )
+        return self
+
+
+class RetrievalSettings(EmbeddingSettings):
+    # What policy retrieval needs (its bounds plus the embedding settings), on its own so the
+    # retrieval evaluation script runs without the API's settings. Settings inherits it.
+
+    # Policy retrieval (NRC-5): bounds on the graph walk from the selected rules: hops per rule,
+    # and evidence nodes plus exception entries per manifest. Hitting either is recorded in the
+    # context manifest (TRAVERSAL_TRUNCATED), never silently dropped.
+    policy_retrieval_max_hops: int = Field(default=3, ge=1, le=10)
+    policy_retrieval_max_nodes: int = Field(default=200, ge=10, le=2000)
+    # Search: matches kept per statement (per search, and after fusing them), and statements
+    # searched per request (more are recorded as STATEMENTS_TRUNCATED, not silently dropped).
+    policy_retrieval_top_k: int = Field(default=5, ge=1, le=50)
+    policy_retrieval_max_statements: int = Field(default=50, ge=1, le=200)
+    # Limit on each database statement (Postgres statement_timeout) while building the policy
+    # context inside a validation request; a run that hits it is stored as NEEDS_REVIEW (never
+    # PASS) with a coverage gap. Per statement, so a build's worst case is a few times this.
+    # Must be below DB_TIMEOUT_SECONDS (checked in Settings).
+    # At least 1 ms: statement_timeout is in whole milliseconds and 0 would mean no limit.
+    policy_context_timeout_seconds: float = Field(default=5, ge=0.001, le=30)
+
+
+class Settings(RetrievalSettings):
+    # Typed configuration. Required values have no default, so a missing one fails at startup.
+    # app_env, aws_region, the embedding settings and the retrieval bounds come from
+    # RetrievalSettings.
+
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     enable_docs: bool = False
     max_request_body_bytes: int = Field(default=1_048_576, ge=1024)
@@ -77,6 +131,19 @@ class Settings(BaseSettings):
     # How long past its deadline an accepted job may stay queued or in progress at the provider
     # before it is parked as UNKNOWN for review. Does not apply once the provider has completed.
     generation_accepted_grace_seconds: int = Field(default=3600, ge=60, le=86_400)
+    # Generations one provider may run at once, across all tenants and workers; a job past the
+    # cap waits in the state it was in (QUEUED, RUNNING in retry_wait, or UNKNOWN for a resend).
+    # Kept low until the provider's concurrency quota is confirmed (NRC-6, follow-ups Q7, owner
+    # Prabhu/Vishnu).
+    generation_max_in_flight_per_provider: int = Field(default=4, ge=1, le=100)
+    # Circuit breaker per provider in each worker: after this many transient estimate or submit
+    # failures in a row, new requests to it pause for the open period.
+    provider_circuit_failure_threshold: int = Field(default=5, ge=1, le=100)
+    provider_circuit_open_seconds: float = Field(default=60, gt=0, le=3600)
+    # How long a cancel request waits for the job's row (another transaction holds it) before it
+    # answers a retryable 503 instead of hanging the request. It becomes lock_timeout in whole
+    # milliseconds, where 0 means no timeout at all, so the floor is 1 ms.
+    job_cancel_lock_timeout_seconds: float = Field(default=2.0, ge=0.001, le=30)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
     # Retry and poll backoff per event: doubles from the base up to the max, with jitter.
     worker_backoff_base_seconds: float = Field(default=2.0, gt=0, le=60)
@@ -104,8 +171,8 @@ class Settings(BaseSettings):
     # Higgsfield's documented minimum retention.
     provider_output_retention_fallback_seconds: int = Field(default=604_800, ge=3600, le=1_209_600)
 
-    # Media storage (NRC-3). The bucket comes only from configuration, never from code.
-    aws_region: str = "us-east-1"
+    # Media storage (NRC-3). The bucket comes only from configuration, never from code. The
+    # region (AWS_REGION) is in EmbeddingSettings.
     aws_s3_bucket: str | None = None
     # Local SeaweedFS only; never set on servers, where the IAM role gives access.
     aws_endpoint_url_s3: str | None = None
@@ -123,12 +190,60 @@ class Settings(BaseSettings):
     # The S3 standard caps presigned links at 15 minutes.
     asset_url_ttl_seconds: int = Field(default=900, ge=60, le=900)
 
-    @field_validator("cognito_client_ids", "cors_origins", "higgsfield_output_hosts", mode="before")
+    # Client uploads (NRC-3). Final limits come from the product owner; these are the defaults.
+    # Presigned upload URLs share the 15-minute S3 cap above.
+    upload_url_ttl_seconds: int = Field(default=600, ge=60, le=900)
+    # The worker holds the whole file in memory while inspecting it: 50 MiB at most.
+    upload_image_max_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
+    # Accepted MIME types, comma-separated in the environment.
+    upload_image_types: Annotated[tuple[str, ...], NoDecode] = ("image/png", "image/jpeg")
+    # Uploads one tenant may have in progress: waiting in quarantine or inspection, or awaiting
+    # their file while the upload URL is still valid. Bounds storage growth until the cleanup job
+    # (NRC-3 item 8) exists.
+    upload_max_pending_per_tenant: int = Field(default=20, ge=1, le=1000)
+    # Defaults to the strict value: a deployment that forgets it gets no simulator. The simulator
+    # marks its verdicts as simulated; live needs a real scanner, and the media worker refuses to
+    # start without one.
+    # Temporary (owner Firoz, NRC-3): "simulator" exists only until Prabhu picks the scanner. When
+    # the live scanner lands, keep this setting for local use but add its implementation in
+    # app.services.scanning.build_scanner and remove the live-mode refusal test named there.
+    malware_scan_mode: Literal["simulator", "live"] = "live"
+    # Longest one malware scan may take before the upload waits and is retried
+    # (SCAN_UNAVAILABLE). Bounds a scanner that never answers.
+    malware_scan_timeout_seconds: int = Field(default=300, ge=10, le=3600)
+    # Failed inspection attempts (a crash, an expired lease) before an upload is rejected as
+    # INSPECTION_FAILED. Retryable scanner and storage outages are bounded separately.
+    media_inspection_max_attempts: int = Field(default=3, ge=1, le=10)
+    # How long after completion temporary scanner or storage outages may keep an upload waiting
+    # before it is rejected as INSPECTION_FAILED (the uploader can then upload again).
+    media_inspection_retry_window_seconds: int = Field(default=86_400, ge=600, le=604_800)
+
+    @field_validator(
+        "cognito_client_ids",
+        "cors_origins",
+        "higgsfield_output_hosts",
+        "upload_image_types",
+        mode="before",
+    )
     @classmethod
     def _split_comma_separated(cls, value: object) -> object:
         if isinstance(value, str):
             return tuple(item.strip() for item in value.split(",") if item.strip())
         return value
+
+    @field_validator("upload_image_types")
+    @classmethod
+    def _upload_types_are_decodable(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        types = tuple(item.strip().lower() for item in value)
+        if not types:
+            raise ValueError("upload_image_types must list at least one MIME type")
+        unsupported = sorted(set(types) - SUPPORTED_UPLOAD_IMAGE_TYPES)
+        if unsupported:
+            raise ValueError(
+                f"upload_image_types has unsupported type(s): {', '.join(unsupported)}; "
+                f"supported: {', '.join(sorted(SUPPORTED_UPLOAD_IMAGE_TYPES))}"
+            )
+        return types
 
     @field_validator("dev_jwks_file", mode="before")
     @classmethod
@@ -139,12 +254,28 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
+    def _context_timeout_below_db_timeout(self) -> Self:
+        # Postgres's statement_timeout must fire first: asyncpg's own timeout (DB_TIMEOUT_SECONDS)
+        # raises outside SQLAlchemy and would fail the request instead of recording NEEDS_REVIEW.
+        if self.policy_context_timeout_seconds >= self.db_timeout_seconds:
+            raise ValueError(
+                "POLICY_CONTEXT_TIMEOUT_SECONDS must be below DB_TIMEOUT_SECONDS "
+                f"({self.policy_context_timeout_seconds} >= {self.db_timeout_seconds})"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _shortcuts_only_outside_production(self) -> Self:
         if self.app_env in NON_PRODUCTION_ENVS:
             return self
         enabled = [
             name
-            for name, on in (("DEMO_STUBS", self.demo_stubs), ("DEV_JWKS_FILE", self.dev_jwks_file))
+            # EMBEDDING_MODE=simulator is refused by EmbeddingSettings' own validator.
+            for name, on in (
+                ("DEMO_STUBS", self.demo_stubs),
+                ("DEV_JWKS_FILE", self.dev_jwks_file),
+                ("MALWARE_SCAN_MODE=simulator", self.malware_scan_mode == "simulator"),
+            )
             if on
         ]
         if enabled:
