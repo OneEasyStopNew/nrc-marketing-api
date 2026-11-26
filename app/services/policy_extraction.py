@@ -240,7 +240,7 @@ async def extract_in_child_process(
     try:
         # poll returns early when the child answers or exits (end of file).
         if not await asyncio.to_thread(reader.poll, timeout_seconds):
-            raise TimeoutError
+            raise TimeoutError("Extraction ran past its deadline; the process was killed.")
         try:
             result: _ChildResult = await asyncio.to_thread(reader.recv)
         except EOFError:

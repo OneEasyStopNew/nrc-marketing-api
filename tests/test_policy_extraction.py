@@ -294,7 +294,7 @@ async def test_the_child_process_passes_on_an_extraction_failure() -> None:
 async def test_a_child_that_runs_past_the_timeout_is_killed() -> None:
     started = time.monotonic()
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(TimeoutError, match="ran past its deadline"):
         await extract_in_child_process(b"x", PLAIN, **LIMITS, timeout_seconds=0.5, target=_hangs)
 
     assert time.monotonic() - started < 30
