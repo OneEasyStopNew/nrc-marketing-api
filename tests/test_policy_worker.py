@@ -366,6 +366,33 @@ async def test_a_slow_read_times_out_and_is_retried(
     assert state.deferred is True
 
 
+async def test_a_stop_during_work_takes_no_further_lease(
+    connection: AsyncConnection, world: World, sessions: Sessions, settings: Settings
+) -> None:
+    stop = asyncio.Event()
+
+    class StoppingStorage(FakeStorage):
+        # SIGTERM arrives while the first source is being read.
+        async def read(self, key: str, *, version_id: str | None = None) -> bytes:
+            stop.set()
+            return await super().read(key, version_id=version_id)
+
+    storage = StoppingStorage({})
+    first = await add_source(connection, storage, world.a.tenant_id, MARKDOWN)
+    second = await add_source(connection, storage, world.a.tenant_id, MARKDOWN + b"\n\nMore.")
+
+    assert await run_once(sessions, storage, settings, owner="w1", stop=stop) == 1
+
+    states = {
+        source_id: await row(connection, world.a.tenant_id, source_id)
+        for source_id in (first, second)
+    }
+    assert sorted(s.extraction_state for s in states.values()) == ["EXTRACTED", "PENDING"]
+    waiting = next(s for s in states.values() if s.extraction_state == "PENDING")
+    # Never leased: no lease to expire and count as a failed attempt.
+    assert (waiting.leased_until, waiting.lease_owner) == (None, None)
+
+
 # ---- Interrupted work, leases and the attempt cap
 
 

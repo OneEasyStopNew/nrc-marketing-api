@@ -85,6 +85,8 @@ _INPUT_KINDS: Final[dict[str, ValidationInputKind]] = {
 # Media validation can't take yet (NRC-9): a rule only for these must not turn into "every input".
 _UNSUPPORTED_INPUTS: Final = frozenset({"video", "video_captions"})
 _SECTION_MAX: Final = 200
+# v0.3 is about 200 KB; a document 25 times that is not a policy bundle.
+MAX_DOCUMENT_BYTES: Final = 5 * 1024 * 1024
 
 
 class _Doc(BaseModel):
@@ -397,11 +399,33 @@ async def export_policy_bundle(
     return document
 
 
-def load_document(path: Path) -> dict[str, Any]:
-    document = json.loads(path.read_text(encoding="utf-8"))
+def load_document(path: Path, *, max_bytes: int = MAX_DOCUMENT_BYTES) -> dict[str, Any]:
+    # Strict on purpose: with plain json.loads a repeated key (a second "approval") silently wins
+    # and the checksum, computed from the parsed document, still matches.
+    if path.stat().st_size > max_bytes:
+        raise PolicyGraphImportError(f"A bundle document is at most {max_bytes} bytes.")
+    try:
+        document = json.loads(
+            path.read_bytes().decode("utf-8"),
+            object_pairs_hook=_unique_keys,
+            parse_constant=_no_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise PolicyGraphImportError(f"A bundle document is UTF-8 JSON: {error}") from None
     if not isinstance(document, dict):
         raise PolicyGraphImportError("A bundle document is a JSON object.")
     return document
+
+
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [key for key, _ in pairs]
+    if duplicates := sorted({key for key in keys if keys.count(key) > 1}):
+        raise PolicyGraphImportError(f"Repeated keys in one object: {', '.join(duplicates)}.")
+    return dict(pairs)
+
+
+def _no_constant(name: str) -> Any:
+    raise PolicyGraphImportError(f"{name} is not a JSON number.")
 
 
 async def _run(tenant_id: UUID, bundle_id: UUID, document: dict[str, Any]) -> ImportResult:

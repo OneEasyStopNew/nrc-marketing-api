@@ -344,3 +344,42 @@ async def test_a_bundle_document_needs_its_checksum(
                     .where(PolicyBundle.id == draft)
                     .values(contract_document={"rules": []})
                 )
+
+
+# ---- Reading the file
+
+
+def test_a_repeated_key_in_the_file_is_refused(tmp_path: Path) -> None:
+    # A second "approval" would otherwise win, and the checksum of the parsed document matches.
+    path = tmp_path / "bundle.json"
+    path.write_text('{"bundle": {"approval": "a", "approval": "b"}}', encoding="utf-8")
+
+    with pytest.raises(PolicyGraphImportError, match="Repeated keys in one object: approval"):
+        load_document(path)
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_a_non_number_constant_is_refused(tmp_path: Path, constant: str) -> None:
+    path = tmp_path / "bundle.json"
+    path.write_text(f'{{"bundle": {{"weight": {constant}}}}}', encoding="utf-8")
+
+    with pytest.raises(PolicyGraphImportError, match=f"{constant} is not a JSON number"):
+        load_document(path)
+
+
+def test_a_file_over_the_size_cap_is_refused_before_it_is_read(tmp_path: Path) -> None:
+    path = tmp_path / "bundle.json"
+    path.write_text('{"bundle": "0123456789"}', encoding="utf-8")
+    size = path.stat().st_size
+
+    assert load_document(path, max_bytes=size) == {"bundle": "0123456789"}
+    with pytest.raises(PolicyGraphImportError, match=f"at most {size - 1} bytes"):
+        load_document(path, max_bytes=size - 1)
+
+
+def test_a_file_that_is_not_utf8_json_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "bundle.json"
+    path.write_bytes(b'{"bundle": "caf\xe9"}')
+
+    with pytest.raises(PolicyGraphImportError, match="UTF-8 JSON"):
+        load_document(path)

@@ -130,6 +130,12 @@ class _Run:
     owner: str
     # None is EMBEDDING_MODE=off: bundles become READY with full-text search only.
     embedder: EmbeddingProvider | None = None
+    # Set on SIGTERM: no new lease after it, or the kill that follows would turn each one into a
+    # failed attempt.
+    stop: asyncio.Event | None = None
+
+    def stopping(self) -> bool:
+        return self.stop is not None and self.stop.is_set()
 
 
 type _Handler = Callable[[_Run, UUID, UUID], Awaitable[None]]
@@ -143,11 +149,12 @@ async def run_once(
     embedder: EmbeddingProvider | None = None,
     owner: str = DEFAULT_OWNER,
     max_items: int | None = None,
+    stop: asyncio.Event | None = None,
 ) -> int:
     # Lease and process up to max_items (default WORKER_MAX_EVENTS_PER_RUN) due sources and then
-    # as many due bundles, one lease each. Returns how many were leased.
+    # as many due bundles, one lease each, until stop is set. Returns how many were leased.
     limit = settings.worker_max_events_per_run if max_items is None else max_items
-    run = _Run(sessions, storage, settings, owner, embedder)
+    run = _Run(sessions, storage, settings, owner, embedder, stop)
     extracted = await _drain(run, _LEASE_SOURCES, _extract, limit)
     return extracted + await _drain(run, _LEASE_BUILDS, _build, limit)
 
@@ -155,7 +162,7 @@ async def run_once(
 async def _drain(run: _Run, lease: TextClause, handle: _Handler, limit: int) -> int:
     # One queue: lease an item, handle it. A second queue is another lease statement and handler.
     leased = 0
-    while leased < limit:
+    while leased < limit and not run.stopping():
         async with run.sessions() as db:
             row = (
                 await db.execute(lease, {"owner": run.owner, "lease": lease_seconds(run.settings)})
@@ -585,7 +592,7 @@ async def run_forever(settings: Settings) -> None:
     try:
         while not stop.is_set():
             try:
-                leased = await run_once(sessions, storage, settings, embedder=embedder)
+                leased = await run_once(sessions, storage, settings, embedder=embedder, stop=stop)
             except Exception:
                 logger.exception("policy worker iteration failed")
                 leased = 0
