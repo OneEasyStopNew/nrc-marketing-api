@@ -228,6 +228,9 @@ class Settings(RetrievalSettings):
     # cap fails with a typed code instead of exhausting memory or the database.
     policy_source_max_pages: int = Field(default=500, ge=1, le=5000)
     policy_extraction_max_clauses: int = Field(default=5000, ge=1, le=100_000)
+    # Characters of extracted text, checked as each page arrives. 5,000 clauses of 1,000
+    # characters each.
+    policy_extraction_max_chars: int = Field(default=5_000_000, ge=1000, le=50_000_000)
     # Reading and extracting one source. It must stay under WORKER_LEASE_SECONDS (the policy worker
     # refuses to start otherwise), so a source is never extracted while another worker holds it.
     policy_extraction_timeout_seconds: float = Field(default=30, ge=1, le=300)

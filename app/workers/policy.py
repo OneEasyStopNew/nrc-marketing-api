@@ -6,9 +6,10 @@ return ids only; everything else runs in a session bound to the item's tenant, s
 security applies.
 
 For each source it reads exactly the pinned object version from the policy bucket, extracts the
-clauses off the event loop (app.services.policy_extraction), and then, in ONE transaction, inserts
-every clause and marks the source EXTRACTED. A crash or failure before that commit leaves no
-clauses and a source that is not EXTRACTED: a source never shows a partial clause set (AC4).
+clauses in a child process that is killed on timeout (app.services.policy_extraction), and then,
+in ONE transaction, inserts every clause and marks the source EXTRACTED. A crash or failure before
+that commit leaves no clauses and a source that is not EXTRACTED: a source never shows a partial
+clause set (AC4).
 
 A file that cannot be turned into clauses ends as FAILED with a code. Temporary storage problems
 and timeouts send the source back to PENDING with a backoff, up to POLICY_WORKER_MAX_ATTEMPTS
@@ -57,7 +58,7 @@ from app.models.enums import (
 from app.services.policy_extraction import (
     Extraction,
     ExtractionError,
-    extract_clauses,
+    extract_in_child_process,
 )
 from app.services.policy_index import build_policy_index, record_failed_build
 from app.services.providers.base import ProviderConfigError, ProviderError
@@ -239,18 +240,20 @@ async def _read_and_extract(run: _Run, db: AsyncSession, source: PolicySource) -
     # is not the configured one the source waits (and fails after the attempt cap).
     if run.storage.bucket != upload.bucket:
         raise _TransientError(ExtractionCode.STORAGE_UNAVAILABLE)
+    # One deadline covers the read and the extraction, so together they stay under the lease.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.policy_extraction_timeout_seconds
     try:
-        # shortcut: a timed-out extraction thread cannot be stopped and runs on until it ends,
-        # bounded by the page and clause caps; move extraction to a subprocess if that ever hurts.
-        async with asyncio.timeout(settings.policy_extraction_timeout_seconds):
+        async with asyncio.timeout_at(deadline):
             content = await run.storage.read(upload.s3_key, version_id=upload.s3_version_id)
-            return await asyncio.to_thread(
-                extract_clauses,
-                content,
-                upload.mime_type,
-                max_pages=settings.policy_source_max_pages,
-                max_clauses=settings.policy_extraction_max_clauses,
-            )
+        return await extract_in_child_process(
+            content,
+            upload.mime_type,
+            max_pages=settings.policy_source_max_pages,
+            max_clauses=settings.policy_extraction_max_clauses,
+            max_chars=settings.policy_extraction_max_chars,
+            timeout_seconds=max(deadline - loop.time(), 0.0),
+        )
     except StorageError:
         raise _TransientError(ExtractionCode.STORAGE_UNAVAILABLE) from None
     except TimeoutError:

@@ -5,18 +5,36 @@ Every file here is built in the test and labelled [SYNTHETIC]; no binary fixture
 
 import hashlib
 import io
+import multiprocessing
+import os
+import time
+from multiprocessing.connection import Connection
+from typing import Any
 
 import pytest
-from pypdf import PdfWriter
+from pypdf import PageObject, PdfWriter
 
 from app.models.enums import ExtractionCode
-from app.services.policy_extraction import ExtractionError, extract_clauses
+from app.services.policy_extraction import (
+    ExtractionError,
+    extract_clauses,
+    extract_in_child_process,
+)
 from tests.conftest import make_pdf
 
 PDF = "application/pdf"
 MARKDOWN = "text/markdown"
 PLAIN = "text/plain"
-LIMITS = {"max_pages": 50, "max_clauses": 100}
+LIMITS = {"max_pages": 50, "max_clauses": 100, "max_chars": 100_000}
+
+
+# Child-process targets: module-level, so a spawned child can import them.
+def _hangs(writer: Connection, *_: object) -> None:
+    time.sleep(60)
+
+
+def _dies(writer: Connection, *_: object) -> None:
+    os._exit(3)
 
 
 def texts(content: bytes, mime: str, **limits: int) -> list[str]:
@@ -142,7 +160,7 @@ def test_more_clauses_than_the_cap_fail() -> None:
 
     assert len(texts(content, PLAIN, max_clauses=3)) == 3
     with pytest.raises(ExtractionError, match="more than 2 clauses") as error:
-        extract_clauses(content, PLAIN, max_pages=1, max_clauses=2)
+        extract_clauses(content, PLAIN, **{**LIMITS, "max_pages": 1, "max_clauses": 2})
     assert error.value.failure_code is ExtractionCode.TOO_MANY_CLAUSES
 
 
@@ -150,9 +168,42 @@ def test_more_pages_than_the_cap_fail_before_any_text_is_read() -> None:
     pdf = make_pdf([["One."], ["Two."], ["Three."]])
 
     with pytest.raises(ExtractionError, match="more than 2 pages") as error:
-        extract_clauses(pdf, PDF, max_pages=2, max_clauses=100)
+        extract_clauses(pdf, PDF, **{**LIMITS, "max_pages": 2})
     assert error.value.failure_code is ExtractionCode.TOO_MANY_PAGES
-    assert extract_clauses(pdf, PDF, max_pages=3, max_clauses=100).page_count == 3
+    assert extract_clauses(pdf, PDF, **{**LIMITS, "max_pages": 3}).page_count == 3
+
+
+def test_more_text_than_the_cap_fails() -> None:
+    content = b"Twelve chars"
+
+    assert texts(content, PLAIN, max_chars=12) == ["Twelve chars"]
+    with pytest.raises(ExtractionError, match="more than 11 characters") as error:
+        texts(content, PLAIN, max_chars=11)
+    assert error.value.failure_code is ExtractionCode.TOO_MUCH_TEXT
+
+
+def test_the_text_cap_stops_a_pdf_at_the_page_that_crosses_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf = make_pdf([["[SYNTHETIC] Page one."], ["[SYNTHETIC] Page two."], ["Three."]])
+    extracted: list[str] = []
+    original = PageObject.extract_text
+
+    def counting(self: PageObject, *args: Any, **kwargs: Any) -> str:
+        text: str = original(self, *args, **kwargs)
+        extracted.append(text)
+        return text
+
+    monkeypatch.setattr(PageObject, "extract_text", counting)
+    extract_clauses(pdf, PDF, **LIMITS)
+    one_page = len(extracted[0])
+    extracted.clear()
+
+    with pytest.raises(ExtractionError, match="characters of text") as error:
+        extract_clauses(pdf, PDF, **{**LIMITS, "max_chars": one_page + 5})
+    assert error.value.failure_code is ExtractionCode.TOO_MUCH_TEXT
+    # The third page's text was never built.
+    assert len(extracted) == 2
 
 
 def test_an_encrypted_pdf_is_unreadable() -> None:
@@ -209,3 +260,48 @@ def test_a_text_file_without_clauses_is_empty(content: bytes) -> None:
     with pytest.raises(ExtractionError, match="no extractable text") as error:
         extract_clauses(content, MARKDOWN, **LIMITS)
     assert error.value.failure_code is ExtractionCode.EMPTY
+
+
+# ---- The child process the worker runs extraction in
+
+
+async def test_the_child_process_returns_the_clauses() -> None:
+    result = await extract_in_child_process(
+        b"[SYNTHETIC] One.\n\nTwo.\n",
+        PLAIN,
+        max_pages=1,
+        max_clauses=10,
+        max_chars=1000,
+        timeout_seconds=30,
+    )
+
+    assert [c.text for c in result.clauses] == ["[SYNTHETIC] One.", "Two."]
+
+
+async def test_the_child_process_passes_on_an_extraction_failure() -> None:
+    with pytest.raises(ExtractionError, match="more than 1 clauses") as error:
+        await extract_in_child_process(
+            b"One.\n\nTwo.\n",
+            PLAIN,
+            max_pages=1,
+            max_clauses=1,
+            max_chars=1000,
+            timeout_seconds=30,
+        )
+    assert error.value.failure_code is ExtractionCode.TOO_MANY_CLAUSES
+
+
+async def test_a_child_that_runs_past_the_timeout_is_killed() -> None:
+    started = time.monotonic()
+
+    with pytest.raises(TimeoutError):
+        await extract_in_child_process(b"x", PLAIN, **LIMITS, timeout_seconds=0.5, target=_hangs)
+
+    assert time.monotonic() - started < 30
+    assert multiprocessing.active_children() == []
+
+
+async def test_a_child_that_dies_without_an_answer_makes_the_file_unreadable() -> None:
+    with pytest.raises(ExtractionError, match="without a result") as error:
+        await extract_in_child_process(b"x", PLAIN, **LIMITS, timeout_seconds=30, target=_dies)
+    assert error.value.failure_code is ExtractionCode.UNREADABLE
