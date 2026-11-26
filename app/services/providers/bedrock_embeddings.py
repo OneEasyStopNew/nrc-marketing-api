@@ -26,7 +26,11 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import EmbeddingSettings
 from app.models.policy_graph import EMBEDDING_DIMENSIONS
-from app.services.providers.aws_errors import EXPIRED_CREDENTIAL_ERRORS, MISSING_CREDENTIAL_ERRORS
+from app.services.providers.aws_errors import (
+    EXPIRED_CREDENTIAL_ERRORS,
+    MISSING_CREDENTIAL_ERRORS,
+    is_transient_credential_error,
+)
 from app.services.providers.base import (
     ProviderConfigError,
     ProviderError,
@@ -202,7 +206,12 @@ class BedrockEmbeddingProvider:
             raise ProviderConfigError(
                 f"Bedrock embedding model {self.model_id}: AWS credentials or region missing"
             ) from None
-        except EXPIRED_CREDENTIAL_ERRORS:
+        except EXPIRED_CREDENTIAL_ERRORS as error:
+            if is_transient_credential_error(error):
+                raise ProviderUnavailableError(
+                    f"Bedrock embedding model {self.model_id}: AWS credentials temporarily "
+                    "unavailable"
+                ) from None
             raise ProviderConfigError(
                 f"Bedrock embedding model {self.model_id}: AWS credentials missing or expired"
             ) from None

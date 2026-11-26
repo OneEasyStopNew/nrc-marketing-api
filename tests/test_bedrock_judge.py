@@ -223,7 +223,7 @@ async def test_missing_credentials_are_a_config_error() -> None:
         TokenRetrievalError(provider="sso", error_msg="Token has expired and refresh failed"),
         SSOTokenLoadError(error_msg="no cached token"),
         UnauthorizedSSOTokenError(),
-        CredentialRetrievalError(provider="container-role", error_msg="refused"),
+        CredentialRetrievalError(provider="assume-role", error_msg="role can't be assumed"),
     ],
 )
 async def test_expired_or_unloadable_credentials_are_a_config_error_not_retried(
@@ -234,6 +234,19 @@ async def test_expired_or_unloadable_credentials_are_a_config_error_not_retried(
         await _judge_with(_Client(error=error)).judge(_request())
 
     assert raised.value.retryable is False
+
+
+async def test_a_container_credential_blip_is_retried_not_a_config_error() -> None:
+    # EKS Pod Identity serves credentials from a local agent ("container-role"); a short outage
+    # there is temporary, so the job backs off and retries instead of failing at once.
+    error = CredentialRetrievalError(provider="container-role", error_msg="connection refused")
+
+    with pytest.raises(
+        ProviderUnavailableError, match="credentials temporarily unavailable"
+    ) as raised:
+        await _judge_with(_Client(error=error)).judge(_request())
+
+    assert raised.value.retryable is True
 
 
 async def test_a_response_without_message_content_is_an_output_error() -> None:
