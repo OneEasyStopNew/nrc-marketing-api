@@ -4,7 +4,11 @@ Usage (runs as the database owner, MIGRATION_DATABASE_URL):
     uv run python -m scripts.import_study_snapshot --tenant-id <tenant-uuid> --file snapshot.json
 
 The file names the study in the source system (external_ref), the source version of these facts
-(source_ref), and who approved them and when. Marketing only stores what the file says: it never
+(source_ref), and who approved them and when. Each approved claim and required disclosure has a
+key that stays the same across source versions; the import stores it as an approval record
+(text, language, version, text hash, approved by and when). A wording whose text is unchanged
+since an earlier snapshot keeps that record; a changed text gets the next version and this
+file's approval. Marketing only stores what the file says: it never
 fills in or changes a study fact. The file holds marketing-safe study facts only, never patient
 data, and unknown fields are refused.
 
@@ -29,7 +33,7 @@ import argparse
 import asyncio
 import json
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -57,6 +61,7 @@ from app.core.config import OwnerDatabaseSettings
 from app.db.session import TenantSession, bind_tenant
 from app.models import Study, StudySnapshot, Tenant
 from app.models.enums import Language, RecruitmentStatus
+from app.schemas.tenancy import WORDING_KEY_PATTERN, ApprovedWording, StudyFacts, wording_sha256
 from scripts.grant_access import UnknownTenantError
 
 MAX_FILE_BYTES: Final = 256 * 1024
@@ -91,6 +96,27 @@ LongText = Annotated[str, AfterValidator(_text(1000))]
 Statement = Annotated[str, AfterValidator(_text(500))]
 
 
+class Wording(BaseModel):
+    """An approved claim or required disclosure in the file."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: Annotated[str, StringConstraints(pattern=WORDING_KEY_PATTERN)] = Field(
+        description="Keep the same key for this wording in every source version."
+    )
+    text: Statement
+
+
+def _unique_keys(items: list[Wording]) -> list[Wording]:
+    keys = [item.key for item in items]
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"keys must be unique: {sorted({k for k in keys if keys.count(k) > 1})}")
+    return items
+
+
+Wordings = Annotated[list[Wording], AfterValidator(_unique_keys)]
+
+
 def _https(value: HttpUrl) -> HttpUrl:
     if value.scheme != "https":
         raise ValueError("must be an https URL")
@@ -107,8 +133,8 @@ class SnapshotFacts(BaseModel):
     min_age: int | None = Field(default=None, ge=0, le=120)
     max_age: int | None = Field(default=None, ge=0, le=120)
     sites: list[ShortText] = Field(min_length=1, max_length=50)
-    approved_claims: list[Statement] = Field(min_length=1, max_length=50)
-    required_disclosures: list[Statement] = Field(max_length=20)
+    approved_claims: Wordings = Field(min_length=1, max_length=50)
+    required_disclosures: Wordings = Field(max_length=20)
     compensation_statement: Statement | None = None
     contact_url: Annotated[HttpUrl, AfterValidator(_https)] | None = None
 
@@ -229,7 +255,6 @@ async def import_snapshot(
             )
         )
     )
-    facts = doc.facts.model_dump(mode="json")
     study = await db.scalar(
         select(Study).where(Study.tenant_id == tenant_id, Study.external_ref == doc.external_ref)
     )
@@ -239,6 +264,7 @@ async def import_snapshot(
         )
         db.add(study)
         await db.flush()
+        facts = stored_facts(doc, earlier=[])
         return await _add_snapshot(db, study, doc, facts, version=1, result=ImportResult.CREATED)
 
     snapshots = list(
@@ -261,6 +287,8 @@ async def import_snapshot(
                 f"source version {doc.source_ref!r} is snapshot {same_source.version}, older than "
                 f"the latest ({snapshots[0].version}); import a new source version instead"
             )
+        # Rebuilt against the snapshots before it, as the first import did.
+        facts = stored_facts(doc, earlier=snapshots[1:])
         same = _content(
             same_source.recruitment_status,
             same_source.language,
@@ -276,9 +304,52 @@ async def import_snapshot(
         return ImportOutcome(ImportResult.UNCHANGED, study.id, same_source.id, same_source.version)
 
     study.title = doc.title
+    facts = stored_facts(doc, earlier=snapshots)
     version = (latest.version if latest is not None else 0) + 1
     return await _add_snapshot(
         db, study, doc, facts, version=version, result=ImportResult.NEW_VERSION
+    )
+
+
+def stored_facts(doc: SnapshotDocument, *, earlier: Iterable[StudySnapshot]) -> dict[str, object]:
+    """The facts as stored: the plain texts plus an approval record for each wording.
+
+    `earlier` are the study's snapshots before this one, newest first. For each key, the newest
+    earlier record decides: the same text (and language) keeps that record as it is; a changed
+    text gets the next version with this file's approval; a new key starts at version 1.
+    """
+    history = [StudyFacts.model_validate(snapshot.facts) for snapshot in earlier]
+    facts = doc.facts.model_dump(mode="json", exclude={"approved_claims", "required_disclosures"})
+    for texts_field, records_field, wordings in (
+        ("approved_claims", "approved_claim_records", doc.facts.approved_claims),
+        ("required_disclosures", "required_disclosure_records", doc.facts.required_disclosures),
+    ):
+        latest: dict[str, ApprovedWording] = {}
+        for old in reversed(history):  # oldest first, so the newest record per key wins
+            latest.update({record.key: record for record in getattr(old, records_field)})
+        records = [_record(wording, doc, latest.get(wording.key)) for wording in wordings]
+        facts[texts_field] = [record.text for record in records]
+        facts[records_field] = [record.model_dump(mode="json") for record in records]
+    # The stored shape is what the API reads back.
+    return StudyFacts.model_validate(facts).model_dump(mode="json")
+
+
+def _record(
+    wording: Wording, doc: SnapshotDocument, previous: ApprovedWording | None
+) -> ApprovedWording:
+    if (
+        previous is not None
+        and previous.text_sha256 == wording_sha256(wording.text)
+        and previous.language == doc.language
+    ):
+        return previous
+    return ApprovedWording.approve(
+        wording.key,
+        wording.text,
+        doc.language,
+        approved_by=doc.approved_by,
+        approved_at=doc.approved_at,
+        version=previous.version + 1 if previous is not None else 1,
     )
 
 

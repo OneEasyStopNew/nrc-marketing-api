@@ -70,8 +70,12 @@ uv run python -m scripts.import_study_snapshot --tenant-id <tenant-uuid> --file 
     "min_age": 18,
     "max_age": 75,
     "sites": ["Synthetic Site North"],
-    "approved_claims": ["The study is testing an investigational treatment."],
-    "required_disclosures": ["This is a research study. Taking part is voluntary."],
+    "approved_claims": [
+      {"key": "treatment", "text": "The study is testing an investigational treatment."}
+    ],
+    "required_disclosures": [
+      {"key": "voluntary", "text": "This is a research study. Taking part is voluntary."}
+    ],
     "compensation_statement": null,
     "contact_url": "https://example.org/synthetic-bp-study"
   },
@@ -85,6 +89,11 @@ uv run python -m scripts.import_study_snapshot --tenant-id <tenant-uuid> --file 
   the source version of these facts.
 - A new `source_ref` adds the next snapshot version. A new version with `"recruitment_status":
   "closed"` closes the study: no new drafts, and existing ones stay readable.
+- Each claim and disclosure has a `key` that stays the same in every source version. The import
+  stores an approval record per wording (text, language, version, SHA-256 of the text, approved
+  by and when). Unchanged text keeps its record; changed text gets the next version and this
+  file's approval. The API returns the records as `approved_claim_records` and
+  `required_disclosure_records` next to the plain text lists.
 - Importing the same file again changes nothing. A `source_ref` that was already imported with
   different content, an older `source_ref`, or mixing synthetic and real snapshots is refused
   (exit code 2) and nothing is written.

@@ -43,6 +43,8 @@
             "sites": ["Synthetic Demo Site"],
             "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
             "required_disclosures": ["This is a research study. Taking part is voluntary."],
+            "approved_claim_records": [{"key": "claim-1", "text": "The study is testing an investigational treatment for blood pressure.", "language": "en", "version": 1, "text_sha256": "9d11219d3db0a3abd2d02491808e1f5dd95fdfb3ad6f32f427b7dd9fd096c468", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
+            "required_disclosure_records": [{"key": "disclosure-1", "text": "This is a research study. Taking part is voluntary.", "language": "en", "version": 1, "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
             "compensation_statement": null,
             "contact_url": "https://example.org/synthetic-demo-study"
           },
@@ -95,6 +97,8 @@
               "sites": ["Synthetic Demo Site"],
               "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
               "required_disclosures": ["This is a research study. Taking part is voluntary."],
+              "approved_claim_records": [{"key": "claim-1", "text": "The study is testing an investigational treatment for blood pressure.", "language": "en", "version": 1, "text_sha256": "9d11219d3db0a3abd2d02491808e1f5dd95fdfb3ad6f32f427b7dd9fd096c468", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
+              "required_disclosure_records": [{"key": "disclosure-1", "text": "This is a research study. Taking part is voluntary.", "language": "en", "version": 1, "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
               "compensation_statement": null,
               "contact_url": "https://example.org/synthetic-demo-study"
             },
@@ -130,6 +134,8 @@
               "sites": ["Synthetic Demo Site"],
               "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
               "required_disclosures": ["This is a research study. Taking part is voluntary."],
+              "approved_claim_records": [{"key": "claim-1", "text": "The study is testing an investigational treatment for blood pressure.", "language": "en", "version": 1, "text_sha256": "9d11219d3db0a3abd2d02491808e1f5dd95fdfb3ad6f32f427b7dd9fd096c468", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
+              "required_disclosure_records": [{"key": "disclosure-1", "text": "This is a research study. Taking part is voluntary.", "language": "en", "version": 1, "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
               "compensation_statement": null,
               "contact_url": "https://example.org/synthetic-demo-study"
             },

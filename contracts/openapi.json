@@ -1944,6 +1944,57 @@
   },
   "components": {
     "schemas": {
+      "ApprovedWording": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,49}$",
+            "title": "Key",
+            "description": "Stays the same for this wording across snapshots."
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version",
+            "description": "Goes up each time the text under this key changes."
+          },
+          "text_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Text Sha256",
+            "description": "See wording_sha256."
+          },
+          "approved_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Approved By"
+          },
+          "approved_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Approved At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "text",
+          "language",
+          "version",
+          "text_sha256",
+          "approved_by",
+          "approved_at"
+        ],
+        "title": "ApprovedWording",
+        "description": "One approved claim or required disclosure, with the approval it carries."
+      },
       "AssetOrigin": {
         "type": "string",
         "enum": [
@@ -4004,6 +4055,20 @@
             "type": "array",
             "title": "Required Disclosures"
           },
+          "approved_claim_records": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovedWording"
+            },
+            "type": "array",
+            "title": "Approved Claim Records"
+          },
+          "required_disclosure_records": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovedWording"
+            },
+            "type": "array",
+            "title": "Required Disclosure Records"
+          },
           "compensation_statement": {
             "anyOf": [
               {
@@ -4033,10 +4098,12 @@
           "eligibility_summary",
           "sites",
           "approved_claims",
-          "required_disclosures"
+          "required_disclosures",
+          "approved_claim_records",
+          "required_disclosure_records"
         ],
         "title": "StudyFacts",
-        "description": "Approved, marketing-safe facts. Validation and generation may only rely on these."
+        "description": "Approved, marketing-safe facts. Validation and generation may only rely on these.\n\napproved_claims and required_disclosures are the plain texts; the *_records lists hold the\nsame texts, in the same order, each with its approval (key, version, hash, who and when)."
       },
       "StudyPage": {
         "properties": {

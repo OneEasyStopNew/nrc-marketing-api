@@ -24,16 +24,40 @@ from app.db.session import TenantSession, bind_tenant
 from app.models import Membership, MembershipStudy, PolicyBundle, Study, StudySnapshot, Tenant
 from app.models.enums import Language, RecruitmentStatus
 from app.schemas.policies import PolicyRule
+from app.schemas.tenancy import ApprovedWording
 
 _SUB = re.compile(r"[A-Za-z0-9-]{1,128}")
+_CLAIM = "The study is testing an investigational treatment for blood pressure."
+_DISCLOSURE = "This is a research study. Taking part is voluntary."
+# Who approved the fixture wording, and when (fixed, so the stored facts never change).
+_FIXTURE_APPROVER = "synthetic-fixture"
+_FIXTURE_APPROVED_AT = datetime(2026, 11, 1, tzinfo=UTC)
 SYNTHETIC_FACTS = {
     "condition": "high blood pressure",
     "eligibility_summary": "Adults aged 18 to 75 who have been told they have high blood pressure.",
     "min_age": 18,
     "max_age": 75,
     "sites": ["Synthetic Staging Site"],
-    "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
-    "required_disclosures": ["This is a research study. Taking part is voluntary."],
+    "approved_claims": [_CLAIM],
+    "required_disclosures": [_DISCLOSURE],
+    "approved_claim_records": [
+        ApprovedWording.approve(
+            "claim-1",
+            _CLAIM,
+            Language.EN,
+            approved_by=_FIXTURE_APPROVER,
+            approved_at=_FIXTURE_APPROVED_AT,
+        ).model_dump(mode="json")
+    ],
+    "required_disclosure_records": [
+        ApprovedWording.approve(
+            "disclosure-1",
+            _DISCLOSURE,
+            Language.EN,
+            approved_by=_FIXTURE_APPROVER,
+            approved_at=_FIXTURE_APPROVED_AT,
+        ).model_dump(mode="json")
+    ],
     "compensation_statement": None,
     "contact_url": "https://example.org/synthetic-staging-study",
 }
