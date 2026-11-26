@@ -59,7 +59,8 @@ from tests.conftest import (
 )
 from tests.ledger import assert_ledger_consistent
 
-ESTIMATE_MICROS = 94_000
+# Under the $0.09 per-image cap (NRC-10), so jobs reach submit.
+ESTIMATE_MICROS = 84_000
 IDEMPOTENCY_KEY = "crash-window-accept-0001"
 
 
@@ -80,7 +81,7 @@ async def job_id(
 def _priced() -> ScriptedProvider:
     # A price, so a double charge would show in provider_spend.
     provider = ScriptedProvider()
-    provider.cost_usd = Decimal("0.094")
+    provider.cost_usd = Decimal("0.084")
     return provider
 
 
