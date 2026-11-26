@@ -2,66 +2,83 @@
 
 One image, three workloads, one Helm chart: `deploy/helm/nrc-marketing-api`.
 
-| Workload | Runs | Notes |
+| Workload (staging name) | Runs | Notes |
 |---|---|---|
-| `<release>-api` | uvicorn (the image's CMD) on :8000 | 2 replicas spread over zones, PDB, probes on `/livez` and `/readyz` |
-| `<release>-worker` | `python -m app.workers.connector` | leases outbox events from the DB; no HTTP port |
-| `<release>-migrations` | `scripts.ensure_db_roles --set-passwords`, then `alembic upgrade head` | Helm pre-install/pre-upgrade hook, before any new pod |
+| `marketing-api` | uvicorn (the image's CMD) on :8000 | 2 replicas spread over zones, PDB, probes on `/livez` and `/readyz` |
+| `connector-worker` | `python -m app.workers.connector` | leases outbox events from the DB; no HTTP port |
+| `nrc-marketing-api-migrations` | `scripts.ensure_db_roles --set-passwords`, then `alembic upgrade head` | Helm pre-install/pre-upgrade hook, before any new pod |
 
-Pods run as uid 10001, read-only root filesystem, no Linux capabilities, no Kubernetes API token.
+Names default to `<release>-api` / `<release>-worker`; staging fixes them in
+`values-staging.yaml` (`api.name`, `worker.name`). Pods run as uid 10001, read-only root filesystem, no Linux capabilities, no Kubernetes API token.
 
 ## How a deploy runs
 
 GitHub Actions > **Deploy staging** > Run workflow (from `main`):
 
 1. the full CI (lint, types, migrations, tests, chart render) runs first;
-2. OIDC into AWS (no stored keys), build the image, push `ECR_REPOSITORY:<commit sha>`; a
-   rerun of the same commit reuses the image;
-3. `helm upgrade --install --rollback-on-failure --wait`: the migration job runs first; if it
+2. OIDC into AWS (role `nrc-stg-gha-api-deploy`, trusted only from this repository's `staging`
+   environment), build the image and push `nrc-stg/marketing-api:<commit sha>`. ECR tags are
+   immutable, so a rerun of the same commit reuses the image;
+3. the three database Secrets are rebuilt from Secrets Manager (below). RDS rotates the nrc_admin
+   password, so it is read on every deploy;
+4. `helm upgrade --install --rollback-on-failure --wait`: the migration job runs first; if it
    fails, nothing else changes. If the new pods don't become ready, Helm puts the previous
    release back.
 
 The schema is never rolled back. Every migration must work with the previous release's code
 too: add columns and tables first, remove them in a later release.
 
-## What has to exist first (Prabhu / infra)
+### First Helm deploy
 
-GitHub `staging` environment variables:
+Staging first ran from plain manifests (nrc-platform-infra `k8s/app`). Helm can't adopt those,
+and the Deployments' selectors can't change, so the first run deletes them: tick
+**remove_old_manifests**. It deletes only `deployment/marketing-api`, `deployment/connector-worker`,
+`service/marketing-api` and a TargetGroupBinding on the staging target group, and only when Helm
+doesn't manage them. Without the tick the run stops and lists them. The API is down for the few
+minutes between that delete and the new pods being ready. Other Deployments are left alone and
+listed as a warning.
 
-- `AWS_DEPLOY_ROLE_ARN`: the OIDC role for this repository. It needs ECR push to the backend
-  repository, `eks:DescribeCluster`, and an EKS access entry with rights in namespace
-  `nrc-marketing`.
-- `ECR_REPOSITORY`: e.g. `694702802041.dkr.ecr.us-east-1.amazonaws.com/nrc-stg/marketing-api`.
+## What staging provides (infra)
 
-In the cluster (namespace `nrc-marketing`), Secrets with these keys:
+GitHub `staging` environment variables (set by infra): `AWS_REGION`, `AWS_ROLE_ARN`,
+`ECR_REGISTRY`, `EKS_CLUSTER`.
 
-| Secret (values-staging.yaml) | Keys |
-|---|---|
-| `nrc-marketing-api-env` (API and worker) | `DATABASE_URL` (marketing_app via RDS Proxy, ending `?ssl=require`); later `META_APP_SECRET`, `TOKEN_ENCRYPTION_KEY` |
-| `nrc-marketing-worker-env` (worker only) | `WORKER_DATABASE_URL` (marketing_worker via RDS Proxy, `?ssl=require`) |
-| `nrc-marketing-migrations-env` (migration job only) | `MIGRATION_DATABASE_URL` (nrc_admin, `?ssl=require`), `APP_DB_PASSWORD`, `WORKER_DB_PASSWORD` |
+Secrets the workflow builds in namespace `nrc-marketing` (each source is a Secrets Manager login
+secret with `username` and `password`; every URL goes through RDS Proxy with `?ssl=require`):
 
-The two passwords must be the ones in `nrc/stg/db-app` and `nrc/stg/db-worker`, because RDS
-Proxy logs in with those secrets. The migration job sets them on the roles (as SCRAM verifiers,
-so the clear password never reaches the database logs).
+| Secret | Keys | Read by | Built from |
+|---|---|---|---|
+| `marketing-db-app` | `DATABASE_URL` | API | `nrc/stg/db-app` |
+| `marketing-db-worker` | `DATABASE_URL`, `WORKER_DATABASE_URL` | connector worker | `nrc/stg/db-worker` (it connects only with `WORKER_DATABASE_URL`) |
+| `marketing-db-admin` | `MIGRATION_DATABASE_URL`, `APP_DB_PASSWORD`, `WORKER_DB_PASSWORD` | migration job | the RDS-managed nrc_admin secret, plus the two passwords above |
 
-Pod Identity (or IRSA) for the service accounts:
+The migration job sets the two passwords on `marketing_app` and `marketing_worker` (as SCRAM
+verifiers, so the clear password never reaches the database logs), because RDS Proxy logs in
+with the same secrets.
 
-- `nrc-marketing-api`: S3 read/write on `nrc-stg-media-694702802041`, KMS for that bucket.
-- `nrc-marketing-worker`: the same S3 rights, plus `secretsmanager:GetSecretValue` on
-  `nrc/stg/higgsfield`.
-- `nrc-marketing-migrations`: nothing in AWS.
+Pod Identity, on existing ServiceAccounts (the chart doesn't create them):
 
-Networking: the internal ALB's target group (ARN in `values-staging.yaml`, target type `ip`)
-and the ALB subnets in `api.forwardedAllowIps`, so uvicorn trusts forwarded headers only from
-the ALB. If the ALB is created by an Ingress instead, set `targetGroupBinding.enabled: false`.
+- `marketing-api` (role `nrc-stg-pod-marketing-api`): S3 media, KMS. No Bedrock, so
+  `EMBEDDING_MODE=off` in the API.
+- `connector-worker` (role `nrc-stg-pod-connector-worker`): S3 media, KMS, the Higgsfield
+  secret (`nrc/stg/higgsfield`, read at startup), queues, Bedrock.
+- `nrc-marketing-migrations`: created by the chart, no AWS access.
 
-Lines in `values-staging.yaml` marked "from Prabhu" are the values still to confirm.
+Networking: the internal ALB's target group `nrc-stg-api` is bound to Service `marketing-api`
+port 8000 (target type `ip`, health check `/readyz`) by the chart's TargetGroupBinding.
+`api.forwardedAllowIps` is empty for now, so uvicorn ignores forwarded headers; set it to the ALB
+subnet CIDRs when the real client IP is needed.
+
+Lines in `values-staging.yaml` marked "to confirm" are still open. The run refuses to deploy
+while the file still has a `replace-with` placeholder.
+
+Test users (one per role, NRC Demo tenant) sign in only through the hosted login (code + PKCE);
+`USER_PASSWORD_AUTH` is off for the web client. Passwords are shared directly, never in the repo.
 
 ## Checking a deploy
 
 ```powershell
-kubectl -n nrc-marketing get deploy,pods,jobs -l app.kubernetes.io/instance=nrc-marketing-api
+kubectl -n nrc-marketing get deploy,pods,jobs,targetgroupbindings -l app.kubernetes.io/instance=nrc-marketing-api
 kubectl -n nrc-marketing logs job/nrc-marketing-api-migrations -c db-roles
 kubectl -n nrc-marketing logs job/nrc-marketing-api-migrations -c alembic
 helm -n nrc-marketing history nrc-marketing-api

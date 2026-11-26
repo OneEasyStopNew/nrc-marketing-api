@@ -1,12 +1,19 @@
 name: Deploy staging
 
 # Manual for now: Actions > Deploy staging > Run workflow, from main. Runs the full CI first,
-# builds one image tagged with the commit, pushes it to ECR and upgrades the Helm release. The
-# release's pre-upgrade job creates the DB login roles and migrates before any new pod starts;
-# --rollback-on-failure puts the previous pods back if the rollout fails (the schema stays, so
-# migrations must be backward compatible).
+# builds one image tagged with the commit, pushes it to ECR, rebuilds the database Secrets from
+# Secrets Manager and upgrades the Helm release. The release's pre-upgrade job syncs the DB login
+# roles and migrates before any new pod starts; --rollback-on-failure puts the previous pods back
+# if the rollout fails (the schema stays, so migrations must be backward compatible).
 on:
   workflow_dispatch:
+    inputs:
+      remove_old_manifests:
+        description: >-
+          First Helm deploy only: delete the marketing-api / connector-worker objects that the
+          old plain manifests (nrc-platform-infra k8s/app) created, so Helm can create its own.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,19 +31,22 @@ jobs:
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Repository variables and the approval rule live on the GitHub "staging" environment.
+    # The OIDC role trusts only this repository's "staging" environment, which also holds
+    # AWS_REGION, AWS_ROLE_ARN, ECR_REGISTRY and EKS_CLUSTER (set by infra).
     environment: staging
     permissions:
       contents: read
       # OIDC to AWS: no long-lived keys in GitHub.
       id-token: write
     env:
-      AWS_REGION: us-east-1
-      CLUSTER: nrc-stg
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CLUSTER: ${{ vars.EKS_CLUSTER }}
+      REPOSITORY: ${{ vars.ECR_REGISTRY }}/nrc-stg/marketing-api
       NAMESPACE: nrc-marketing
       RELEASE: nrc-marketing-api
       CHART: deploy/helm/nrc-marketing-api
       IMAGE_TAG: ${{ github.sha }}
+      TARGET_GROUP_ARN: arn:aws:elasticloadbalancing:us-east-1:694702802041:targetgroup/nrc-stg-api/cafb35b577afe242
     steps:
       - name: Only main deploys
         if: github.ref != 'refs/heads/main'
@@ -48,20 +58,23 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: No placeholder values left
+        run: |
+          if grep -n 'replace-with' "$CHART/values-staging.yaml"; then
+            echo "values-staging.yaml still has placeholder values" >&2
+            exit 1
+          fi
+
       - uses: aws-actions/configure-aws-credentials@45666896f5d8e0f10ae255413f3a4cdd03bdc8f5 # v6.3.1
         with:
-          # from Prabhu: the GitHub OIDC deploy role for this repository.
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
           role-session-name: nrc-marketing-api-${{ github.run_id }}
 
       - name: Log in to ECR
-        id: ecr
         uses: aws-actions/amazon-ecr-login@7290e214a610b32bc0eef81748948b6d466a8783 # v2.2.0
 
-      - name: Build and push the image (tag = commit, never overwritten)
-        env:
-          REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      - name: Build and push the image (tag = commit; ECR tags are immutable)
         run: |
           image="$REPOSITORY:$IMAGE_TAG"
           if aws ecr describe-images --repository-name "${REPOSITORY#*/}" \
@@ -79,9 +92,99 @@ jobs:
       - name: Connect to the cluster
         run: aws eks update-kubeconfig --name "$CLUSTER" --region "$AWS_REGION"
 
-      - name: Upgrade the release
+      # Plain k8s Secrets rebuilt on every deploy (no External Secrets yet). RDS rotates the
+      # nrc_admin password, so it is read fresh each time. Values never reach the log or argv.
+      - name: Build the database Secrets from Secrets Manager
         env:
-          REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          DB_HOST: nrc-stg.proxy-c8pockw8afo3.us-east-1.rds.amazonaws.com
+          DB_NAME: marketing
+          APP_SECRET: nrc/stg/db-app
+          WORKER_SECRET: nrc/stg/db-worker
+          ADMIN_SECRET: arn:aws:secretsmanager:us-east-1:694702802041:secret:rds!cluster-c8ae2ea8-42a2-4575-ba0b-4e1cd7889adf-52QMHO
+        run: |
+          set -euo pipefail
+          umask 077
+
+          login() {  # <secret id> <username|password>: one field of an RDS login secret
+            aws secretsmanager get-secret-value --secret-id "$1" \
+                --query SecretString --output text \
+              | jq -er --arg k "$2" '.[$k] | strings' \
+              || { echo "secret $1 has no usable '$2'" >&2; return 1; }
+          }
+          enc() { jq -rn --arg v "$1" '$v | @uri'; }
+
+          app_user="$(login "$APP_SECRET" username)"
+          app_pass="$(login "$APP_SECRET" password)"
+          worker_user="$(login "$WORKER_SECRET" username)"
+          worker_pass="$(login "$WORKER_SECRET" password)"
+          admin_user="$(login "$ADMIN_SECRET" username)"
+          admin_pass="$(login "$ADMIN_SECRET" password)"
+          for value in "$app_pass" "$worker_pass" "$admin_pass"; do
+            echo "::add-mask::$value"
+            echo "::add-mask::$(enc "$value")"
+          done
+
+          url() {  # <user> <password>
+            printf 'postgresql+asyncpg://%s:%s@%s:5432/%s?ssl=require' \
+              "$(enc "$1")" "$(enc "$2")" "$DB_HOST" "$DB_NAME"
+          }
+          apply_secret() {  # <name>, KEY=VALUE lines on stdin
+            local file="$RUNNER_TEMP/$1.env"
+            cat > "$file"
+            kubectl -n "$NAMESPACE" create secret generic "$1" --from-env-file="$file" \
+              --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+            rm -f "$file"
+            echo "Secret $1 updated"
+          }
+
+          apply_secret marketing-db-app <<EOF
+          DATABASE_URL=$(url "$app_user" "$app_pass")
+          EOF
+          apply_secret marketing-db-worker <<EOF
+          DATABASE_URL=$(url "$worker_user" "$worker_pass")
+          WORKER_DATABASE_URL=$(url "$worker_user" "$worker_pass")
+          EOF
+          # The migration job sets these passwords on the two login roles (as SCRAM verifiers),
+          # so RDS Proxy, which logs in with the same secrets, keeps working.
+          apply_secret marketing-db-admin <<EOF
+          MIGRATION_DATABASE_URL=$(url "$admin_user" "$admin_pass")
+          APP_DB_PASSWORD=$app_pass
+          WORKER_DB_PASSWORD=$worker_pass
+          EOF
+
+      # Helm can't adopt objects the old plain manifests created. They are only deleted when the
+      # run asks for it (first Helm deploy); otherwise the run stops and lists them.
+      - name: Objects from the old plain manifests
+        env:
+          REMOVE: ${{ inputs.remove_old_manifests }}
+        run: |
+          set -euo pipefail
+          not_helm='(.metadata.labels["app.kubernetes.io/managed-by"] // "") != "Helm"'
+          old="$(
+            {
+              kubectl -n "$NAMESPACE" get deployment,service -o json \
+                | jq -r "[.items[] | select(.metadata.name == \"marketing-api\" or .metadata.name == \"connector-worker\") | select($not_helm)] | .[] | \"\(.kind | ascii_downcase)/\(.metadata.name)\""
+              kubectl -n "$NAMESPACE" get targetgroupbindings.elbv2.k8s.aws -o json \
+                | jq -r --arg arn "$TARGET_GROUP_ARN" ".items[] | select(.spec.targetGroupARN == \$arn) | select($not_helm) | \"targetgroupbinding.elbv2.k8s.aws/\(.metadata.name)\""
+            }
+          )"
+          others="$(kubectl -n "$NAMESPACE" get deployment -o json \
+            | jq -r ".items[] | select($not_helm) | select(.metadata.name != \"marketing-api\" and .metadata.name != \"connector-worker\") | .metadata.name")"
+          if [ -n "$others" ]; then
+            echo "::warning::Deployments not managed by Helm, left alone: $(echo $others)"
+          fi
+          if [ -z "$old" ]; then
+            echo "Nothing from the old manifests is in the way."
+            exit 0
+          fi
+          echo "Not managed by Helm:"; echo "$old"
+          if [ "$REMOVE" != "true" ]; then
+            echo "Run again with remove_old_manifests ticked to delete them (first Helm deploy)." >&2
+            exit 1
+          fi
+          echo "$old" | xargs kubectl -n "$NAMESPACE" delete --wait=true
+
+      - name: Upgrade the release
         run: |
           helm upgrade --install "$RELEASE" "$CHART" \
             --namespace "$NAMESPACE" \

@@ -1,8 +1,8 @@
 # Staging (AWS account 694702802041, us-east-1, EKS nrc-stg, namespace nrc-marketing).
-# Values marked "from Prabhu" come from the infra repo and are still to be confirmed.
+# Infra values from Prabhu (26 Nov 2026). Lines marked "to confirm" are still open.
 
 image:
-  # from Prabhu: which of the nrc-stg/* ECR repositories is the backend's.
+  # One image for the API and the connector worker; tags are immutable (the git commit).
   repository: 694702802041.dkr.ecr.us-east-1.amazonaws.com/nrc-stg/marketing-api
 
 env:
@@ -12,37 +12,55 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
   COGNITO_REGION: us-east-1
   COGNITO_USER_POOL_ID: us-east-1_ozdBHK9iu
-  # from Prabhu: the web app client id(s), comma separated.
-  COGNITO_CLIENT_IDS: replace-with-staging-app-client-id
+  # The web app's public client (code + PKCE, scopes openid email profile marketing/api).
+  COGNITO_CLIENT_IDS: 6tmb5fjbpqgj44tqd29k1hrpuq
   REQUIRED_SCOPE: marketing/api
   CORS_ORIGINS: https://dh15flv1jiy9v.cloudfront.net
   WEB_APP_URL: https://dh15flv1jiy9v.cloudfront.net
   AWS_REGION: us-east-1
   AWS_S3_BUCKET: nrc-stg-media-694702802041
+  # Carried over from the plain manifests staging ran on before Helm.
   GENERATION_MODE: live
+  GENERATION_DAILY_CREDIT_CEILING_PER_TENANT: "100"
+  # to confirm against the old manifests: the approved model and Higgsfield's output host.
+  HIGGSFIELD_MODEL: higgsfield-ai/soul/v2/standard
+  HIGGSFIELD_OUTPUT_HOSTS: d3u0tzju9qaucj.cloudfront.net
+  # The worker reads the key at startup through its Pod Identity role; the API never needs it.
   HIGGSFIELD_SECRET_ID: nrc/stg/higgsfield
+  # Bedrock is not granted to marketing-api: policy search stays lexical in the API.
+  EMBEDDING_MODE: "off"
   # Meta stays unconfigured (connect answers 501) until the Meta app exists.
 
-# from Prabhu: the Secret names, once External Secrets (or ops) create them. Keys per Secret are
-# listed in docs/deploy.md.
+# Built by the deploy workflow from Secrets Manager before each upgrade (see docs/deploy.md):
+#   marketing-db-app     DATABASE_URL                       from nrc/stg/db-app
+#   marketing-db-worker  DATABASE_URL, WORKER_DATABASE_URL  from nrc/stg/db-worker (the worker
+#                        connects only with WORKER_DATABASE_URL; settings still require the other)
+#   marketing-db-admin   MIGRATION_DATABASE_URL, APP_DB_PASSWORD, WORKER_DB_PASSWORD
+#                        from the RDS-managed nrc_admin secret (rotated) and the two above
 secrets:
-  api: [nrc-marketing-api-env]
-  worker: [nrc-marketing-api-env, nrc-marketing-worker-env]
-  migrations: [nrc-marketing-migrations-env]
+  api: [marketing-db-app]
+  worker: [marketing-db-worker]
+  migrations: [marketing-db-admin]
 
 api:
+  # The ALB's TargetGroupBinding points at Service marketing-api:8000 (target type ip, health
+  # check /readyz).
+  name: marketing-api
   replicas: 2
-  # from Prabhu: the private subnets the internal ALB lives in.
-  forwardedAllowIps: "10.0.0.0/16"
+  # to confirm: the internal ALB's subnet CIDRs. Empty ignores forwarded headers, which is safe.
+  forwardedAllowIps: ""
   serviceAccount:
-    name: nrc-marketing-api
+    # Existing account with the Pod Identity association nrc-stg-pod-marketing-api.
+    create: false
+    name: marketing-api
   targetGroupBinding:
-    # from Prabhu: true plus the ARN if the ALB target group is in Terraform; false if an Ingress
-    # creates the ALB instead.
     enabled: true
-    targetGroupARN: arn:aws:elasticloadbalancing:us-east-1:694702802041:targetgroup/replace-me/0000000000000000
+    targetGroupARN: arn:aws:elasticloadbalancing:us-east-1:694702802041:targetgroup/nrc-stg-api/cafb35b577afe242
 
 worker:
+  name: connector-worker
   replicas: 1
   serviceAccount:
-    name: nrc-marketing-worker
+    # Existing account with the Pod Identity association nrc-stg-pod-connector-worker.
+    create: false
+    name: connector-worker

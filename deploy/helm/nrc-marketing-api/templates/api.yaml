@@ -2,7 +2,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}-api
+  name: {{ include "nrc.apiName" . }}
   labels:
     {{- include "nrc.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
@@ -56,9 +56,12 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+          {{- with .Values.api.forwardedAllowIps }}
           env:
+            # uvicorn trusts X-Forwarded-* only from these addresses (default: 127.0.0.1 only).
             - name: FORWARDED_ALLOW_IPS
-              value: {{ required "api.forwardedAllowIps is required (the ALB subnets)" .Values.api.forwardedAllowIps | quote }}
+              value: {{ . | quote }}
+          {{- end }}
           envFrom:
             {{- include "nrc.envFrom" (dict "root" . "secrets" .Values.secrets.api) | nindent 12 }}
           startupProbe:
@@ -91,7 +94,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Release.Name }}-api
+  name: {{ include "nrc.apiName" . }}
   labels:
     {{- include "nrc.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
@@ -108,7 +111,7 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ .Release.Name }}-api
+  name: {{ include "nrc.apiName" . }}
   labels:
     {{- include "nrc.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
@@ -123,7 +126,7 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ .Release.Name }}-api
+  name: {{ include "nrc.apiName" . }}
   labels:
     {{- include "nrc.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
@@ -131,7 +134,7 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ .Release.Name }}-api
+    name: {{ include "nrc.apiName" . }}
   minReplicas: {{ .Values.api.hpa.minReplicas }}
   maxReplicas: {{ .Values.api.hpa.maxReplicas }}
   metrics:
@@ -147,7 +150,7 @@ spec:
 apiVersion: elbv2.k8s.aws/v1beta1
 kind: TargetGroupBinding
 metadata:
-  name: {{ .Release.Name }}-api
+  name: {{ include "nrc.apiName" . }}
   labels:
     {{- include "nrc.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
@@ -155,6 +158,6 @@ spec:
   targetGroupARN: {{ required "api.targetGroupBinding.targetGroupARN is required" .Values.api.targetGroupBinding.targetGroupARN | quote }}
   targetType: ip
   serviceRef:
-    name: {{ .Release.Name }}-api
+    name: {{ include "nrc.apiName" . }}
     port: {{ .Values.api.service.port }}
 {{- end }}

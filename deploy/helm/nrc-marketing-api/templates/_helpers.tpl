@@ -13,6 +13,10 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
+{{/* Workload names: fixed in an environment that already has them (staging: marketing-api). */}}
+{{- define "nrc.apiName" -}}{{ .Values.api.name | default (printf "%s-api" .Release.Name) }}{{- end -}}
+{{- define "nrc.workerName" -}}{{ .Values.worker.name | default (printf "%s-worker" .Release.Name) }}{{- end -}}
+
 {{- define "nrc.image" -}}
 {{ required "image.repository is required" .Values.image.repository }}:{{ required "image.tag is required (the git commit)" .Values.image.tag }}
 {{- end -}}
