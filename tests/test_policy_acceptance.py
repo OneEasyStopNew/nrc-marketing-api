@@ -1301,7 +1301,7 @@ async def test_ac6_a_change_without_a_reason_is_refused_and_announces_nothing(
     draft, _ = await ready_bundle(stack, ingested)
     before = await draft.reload()
 
-    missing = await draft.move("activate", ADMIN, status=409)
+    missing = await draft.move("activate", ADMIN, status=422)
     blank = await stack.api.refused(
         "POST",
         f"{draft.path}/transitions",
@@ -1312,8 +1312,8 @@ async def test_ac6_a_change_without_a_reason_is_refused_and_announces_nothing(
         if_match=draft.revision,
     )
 
-    assert missing.json()["code"] == "POLICY_ITEM_INVALID"
-    assert missing.json()["details"] == {"field": "reason"}
+    assert missing.json()["code"] == "VALIDATION_FAILED"
+    assert "activate needs a reason" in missing.json()["details"]["fields"][0]["msg"]
     assert blank["code"] == "VALIDATION_FAILED"
     assert await draft.reload() == before
     assert await stack.events() == []

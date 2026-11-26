@@ -2,12 +2,13 @@
 # its lifecycle (NRC-4).
 
 from datetime import datetime
-from typing import Annotated, Literal, Self
+from typing import Annotated, Final, Literal, Self
 from uuid import UUID
 
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from app.models.enums import (
+    REASON_REQUIRED_COMMANDS,
     BundleLifecycleState,
     Channel,
     CheckCode,
@@ -30,7 +31,11 @@ from app.models.enums import (
     ValidationInputKind,
     WordingKind,
 )
-from app.models.policy_graph import NODE_KEY_PATTERN, RULE_ID_PATTERN
+from app.models.policy_graph import (
+    NODE_KEY_PATTERN,
+    PROHIBITED_PHRASE_MAX_CHARS,
+    RULE_ID_PATTERN,
+)
 from app.schemas.common import ApiModel, RequestModel
 
 # Names, titles, references and texts need a visible character: " " would pass min_length=1.
@@ -71,6 +76,25 @@ class Applicability(RequestModel):
     effective_to: AwareDatetime | None = None
     required_study_fact: Tag | None = None
 
+    @model_validator(mode="after")
+    def _window_in_order(self) -> Self:
+        _check_window(self.effective_from, self.effective_to)
+        return self
+
+
+def _check_window(start: datetime | None, end: datetime | None) -> None:
+    if start is not None and end is not None and start > end:
+        raise ValueError("effective_from must not be after effective_to.")
+
+
+def _check_not_cleared(model: RequestModel, nullable: frozenset[str]) -> None:
+    # null clears an optional field; a required one can only be changed, never emptied.
+    cleared = sorted(
+        name for name in model.model_fields_set - nullable if getattr(model, name) is None
+    )
+    if cleared:
+        raise ValueError(f"These fields cannot be empty: {', '.join(cleared)}.")
+
 
 class NodeCreate(Applicability):
     node_key: str = Field(min_length=1, max_length=80, pattern=NODE_KEY_PATTERN)
@@ -96,6 +120,18 @@ class NodeUpdate(RequestModel):
     effective_to: AwareDatetime | None = None
     required_study_fact: Tag | None = None
 
+    @model_validator(mode="after")
+    def _valid_change(self) -> Self:
+        _check_not_cleared(self, NULLABLE_NODE_FIELDS)
+        # Only when both are sent; one against the stored other is checked by the service.
+        _check_window(self.effective_from, self.effective_to)
+        return self
+
+
+NULLABLE_NODE_FIELDS: Final = frozenset(
+    {"source_clause_id", "effective_from", "effective_to", "required_study_fact"}
+)
+
 
 class RuleCreate(Applicability):
     rule_id: str = Field(pattern=RULE_ID_PATTERN, examples=["REC-01"])
@@ -119,6 +155,11 @@ class RuleUpdate(RequestModel):
     mandatory: bool | None = None
     check_type: CheckType | None = None
 
+    @model_validator(mode="after")
+    def _nothing_cleared(self) -> Self:
+        _check_not_cleared(self, frozenset())
+        return self
+
 
 class EdgeCreate(RequestModel):
     edge_type: PolicyEdgeType
@@ -128,6 +169,12 @@ class EdgeCreate(RequestModel):
     provenance_note: Note | None = Field(
         default=None, description="Why the link holds when no source clause states it."
     )
+
+    @model_validator(mode="after")
+    def _two_nodes(self) -> Self:
+        if self.from_node_id == self.to_node_id:
+            raise ValueError("An edge must join two different nodes.")
+        return self
 
 
 class WordingCreate(RequestModel):
@@ -143,6 +190,17 @@ class WordingCreate(RequestModel):
     )
     source_clause_id: UUID | None = None
     translation_of_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _phrase_fits(self) -> Self:
+        if (
+            self.kind is WordingKind.PROHIBITED_PHRASE
+            and len(self.text) > PROHIBITED_PHRASE_MAX_CHARS
+        ):
+            raise ValueError(
+                f"A prohibited phrase is at most {PROHIBITED_PHRASE_MAX_CHARS} characters."
+            )
+        return self
 
     @model_validator(mode="after")
     def _study_wording_is_a_pointer(self) -> Self:
@@ -181,6 +239,12 @@ class TransitionRequest(RequestModel):
 
 class TransitionCommandRequest(TransitionRequest):
     command: Command
+
+    @model_validator(mode="after")
+    def _reason_when_required(self) -> Self:
+        if self.command in REASON_REQUIRED_COMMANDS and self.reason is None:
+            raise ValueError(f"{self.command.value} needs a reason.")
+        return self
 
 
 class PolicySourceCreate(RequestModel):

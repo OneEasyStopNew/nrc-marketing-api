@@ -314,6 +314,11 @@ _FAILURES: dict[str, tuple[Callable[[PolicyGraphImport], PolicyGraphImport], str
         lambda g: _with_rule(g, prohibited_phrases=["proven", "   "]),
         "blank prohibited phrase",
     ),
+    # policy_rules.prohibited_phrases holds varchar(200).
+    "prohibited_phrase_over_its_column": (
+        lambda g: _with_rule(g, prohibited_phrases=["x" * 201]),
+        "prohibited phrase over 200 characters",
+    ),
     "rule_ids_differ_from_bundle": (
         lambda g: _with_rule(g, rule_id="REC-90"),
         "differ from the bundle's",

@@ -23,6 +23,7 @@ from app.models.enums import (
     UploadState,
     WordingKind,
 )
+from app.models.policy_graph import PROHIBITED_PHRASE_MAX_CHARS
 from tests.conftest import (
     AuthHeaders,
     World,
@@ -706,9 +707,29 @@ async def test_a_reason_is_required_to_reject(api: Api) -> None:
 
     response = await api.call("POST", path, APPROVER, json={"command": "reject"}, if_match=2)
 
-    assert response.status_code == 409, response.text
-    assert response.json()["code"] == "POLICY_ITEM_INVALID"
-    assert response.json()["details"] == {"field": "reason"}
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "VALIDATION_FAILED"
+    (field,) = response.json()["details"]["fields"]
+    assert "reject needs a reason" in field["msg"]
+
+
+@pytest.mark.parametrize("command", ["activate", "rollback", "retire"])
+async def test_a_reason_is_required_for_every_command_that_changes_the_active_bundle(
+    api: Api, command: str
+) -> None:
+    # Refused from the body alone, before the bundle's state is looked at.
+    bundle = await new_bundle(api)
+
+    response = await api.call(
+        "POST",
+        f"/policy-bundles/{bundle['id']}/transitions",
+        ADMIN,
+        json={"command": command},
+        if_match=1,
+    )
+
+    assert response.status_code == 422, response.text
+    assert f"{command} needs a reason" in response.json()["details"]["fields"][0]["msg"]
 
 
 @pytest.fixture
@@ -1116,8 +1137,9 @@ async def test_edits_return_the_item_and_the_next_revision(
         },
         if_match=5,
     )
-    assert invalid.status_code == 409
-    assert invalid.json()["code"] == "POLICY_ITEM_INVALID"
+    assert invalid.status_code == 422
+    assert invalid.json()["code"] == "VALIDATION_FAILED"
+    assert "two different nodes" in invalid.json()["details"]["fields"][0]["msg"]
     assert (await api.ok(api.call("GET", path))).headers["ETag"] == '"5"'
 
 
@@ -1143,6 +1165,94 @@ async def test_a_node_window_needs_a_time_zone(
     assert (await api.ok(api.call("GET", f"/policy-bundles/{bundle['id']}"))).headers[
         "ETag"
     ] == '"2"'
+
+
+WINDOW_BACKWARDS = {
+    "effective_from": "2027-01-02T00:00:00Z",
+    "effective_to": "2027-01-01T00:00:00Z",
+}
+
+
+async def test_a_window_that_ends_before_it_starts_is_a_validation_error(api: Api) -> None:
+    bundle = await new_bundle(api)
+    path = f"/policy-bundles/{bundle['id']}"
+
+    responses = [
+        await api.call("POST", f"{path}/nodes", json=node_body() | WINDOW_BACKWARDS, if_match=1),
+        await api.call("PATCH", f"{path}/nodes/{SOME_ID}", json=WINDOW_BACKWARDS, if_match=1),
+        await api.call("POST", f"{path}/rules", json=RULE_BODY | WINDOW_BACKWARDS, if_match=1),
+    ]
+
+    for response in responses:
+        assert response.status_code == 422, response.text
+        assert "must not be after" in response.json()["details"]["fields"][0]["msg"]
+
+
+async def test_one_date_against_the_stored_other_is_a_conflict(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    # Only the stored node shows the window is backwards, so this one stays a 409.
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+    path = f"/policy-bundles/{bundle['id']}/nodes"
+    body = {**node_body(clause_id), "effective_to": "2027-01-01T00:00:00Z"}
+    node = await api.ok(api.call("POST", path, json=body, if_match=1), 201)
+
+    response = await api.call(
+        "PATCH",
+        f"{path}/{node.json()['id']}",
+        json={"effective_from": "2027-01-02T00:00:00Z"},
+        if_match=2,
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "POLICY_ITEM_INVALID"
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [("nodes", {"text": None}), ("nodes", {"channels": None}), ("rules", {"title": None})],
+)
+async def test_a_required_field_cannot_be_cleared(
+    api: Api, path: str, body: dict[str, Any]
+) -> None:
+    bundle = await new_bundle(api)
+
+    response = await api.call(
+        "PATCH", f"/policy-bundles/{bundle['id']}/{path}/{SOME_ID}", json=body, if_match=1
+    )
+
+    assert response.status_code == 422, response.text
+    assert "cannot be empty" in response.json()["details"]["fields"][0]["msg"]
+
+
+async def test_a_prohibited_phrase_fits_its_column(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    # Approval copies each phrase into policy_rules.prohibited_phrases (varchar 200).
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+    graph = await draft_graph(api, bundle["id"], clause_id)
+    wordings = f"/policy-bundles/{bundle['id']}/rules/{graph['rule']}/wordings"
+
+    over = await api.call(
+        "POST",
+        wordings,
+        json={"kind": "PROHIBITED_PHRASE", "text": "x" * (PROHIBITED_PHRASE_MAX_CHARS + 1)},
+        if_match=graph["revision"],
+    )
+    at_limit = await api.call(
+        "POST",
+        wordings,
+        json={"kind": "PROHIBITED_PHRASE", "text": "x" * PROHIBITED_PHRASE_MAX_CHARS},
+        if_match=graph["revision"],
+    )
+
+    assert over.status_code == 422, over.text
+    assert "at most 200 characters" in over.json()["details"]["fields"][0]["msg"]
+    assert at_limit.status_code == 201, at_limit.text
 
 
 # ---- Paging

@@ -52,6 +52,9 @@ RULE_ID_PATTERN = r"^[A-Z][A-Z0-9-]{1,39}$"
 # Node keys (policy_nodes.node_key, 80 chars) appear in paths, audit details and import files:
 # letters, digits, '.', '_' and '-'. Used by the API schemas and the import script.
 NODE_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+# policy_rules.prohibited_phrases element size; approval copies each approved phrase there, so
+# requests and imports refuse a longer one up front instead of failing approval.
+PROHIBITED_PHRASE_MAX_CHARS: Final = 200
 # What search returns and the embedding index covers: supporting text. Rules are selected by
 # their conditions and exceptions reached through the graph, so neither is searched or embedded.
 SEARCHABLE_NODE_TYPES: Final = (
@@ -256,7 +259,7 @@ class PolicyRuleRecord(Base):
     exact_wording: Mapped[str | None] = mapped_column(Text)
     # Checked first, case-insensitive and whole-word; a hit fails the rule without a model call.
     prohibited_phrases: Mapped[list[str]] = mapped_column(
-        ARRAY(String(200)), server_default=_EMPTY_ARRAY
+        ARRAY(String(PROHIBITED_PHRASE_MAX_CHARS)), server_default=_EMPTY_ARRAY
     )
     # The rule's own record in an imported policy deliverable (layer, stage, outcome_policy,
     # approval, applicability, relations), kept as imported: editing the rule does not change it.

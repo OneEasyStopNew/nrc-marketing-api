@@ -358,6 +358,12 @@ class Command(StrEnum):
     RETIRE = "retire"
 
 
+# AC6: these commands always name a reason, kept in the audit trail.
+REASON_REQUIRED_COMMANDS: Final = frozenset(
+    {Command.REJECT, Command.ACTIVATE, Command.ROLLBACK, Command.RETIRE}
+)
+
+
 class ReviewItemKind(StrEnum):
     NODE = "node"
     EDGE = "edge"

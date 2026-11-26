@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -421,20 +422,11 @@ async def test_editing_a_rule_sends_its_node_back_to_review(env: Env) -> None:
     assert node.review_state is ReviewState.PROPOSED
 
 
-async def test_a_required_field_cannot_be_cleared(env: Env) -> None:
-    draft = await env.draft()
-
-    with pytest.raises(PolicyItemInvalidError, match="cannot be empty") as error:
-        await bundles.update_node(
-            env.db,
-            env.admin,
-            draft.id,
-            draft.revision,
-            draft.clause_node,
-            NodeUpdate.model_validate({"text": None}),
-            TEST_MAX_ITEMS,
-        )
-    assert error.value.details == {"fields": ["text"]}
+def test_a_required_field_cannot_be_cleared() -> None:
+    # Refused by the request model (a 422), so no update ever sees it.
+    with pytest.raises(ValidationError, match="These fields cannot be empty: text"):
+        NodeUpdate.model_validate({"text": None})
+    assert NodeUpdate.model_validate({"effective_to": None}).effective_to is None
 
 
 async def test_a_node_key_is_used_once_per_bundle(env: Env) -> None:

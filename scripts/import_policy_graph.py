@@ -60,7 +60,11 @@ from app.models.enums import (
     ValidationInputKind,
     WordingKind,
 )
-from app.models.policy_graph import NODE_KEY_PATTERN, RULE_ID_PATTERN
+from app.models.policy_graph import (
+    NODE_KEY_PATTERN,
+    PROHIBITED_PHRASE_MAX_CHARS,
+    RULE_ID_PATTERN,
+)
 from app.schemas.tenancy import StudyFacts
 
 SYNTHETIC_GRAPH_PATH: Final = (
@@ -192,6 +196,11 @@ def clean_phrases(rule: RuleImport) -> list[str]:
     phrases = [phrase.strip() for phrase in rule.prohibited_phrases]
     if not all(phrases):
         raise PolicyGraphImportError(f"Rule {rule.rule_id} has a blank prohibited phrase.")
+    if any(len(phrase) > PROHIBITED_PHRASE_MAX_CHARS for phrase in phrases):
+        raise PolicyGraphImportError(
+            f"Rule {rule.rule_id} has a prohibited phrase over "
+            f"{PROHIBITED_PHRASE_MAX_CHARS} characters."
+        )
     return phrases
 
 

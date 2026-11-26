@@ -42,6 +42,7 @@ from app.models import (
     PolicySourceClause,
 )
 from app.models.enums import (
+    REASON_REQUIRED_COMMANDS,
     BundleLifecycleState,
     CheckCode,
     Command,
@@ -84,7 +85,6 @@ class Transition:
     # Any one of these lets the caller run the command.
     capabilities: frozenset[Capability]
     action: PolicyAuditAction
-    needs_reason: bool = False
 
 
 TRANSITIONS: Final[Mapping[Command, Transition]] = {
@@ -112,7 +112,6 @@ TRANSITIONS: Final[Mapping[Command, Transition]] = {
         State.REJECTED,
         frozenset({Capability.POLICY_APPROVE}),
         PolicyAuditAction.REJECT,
-        needs_reason=True,
     ),
     # Queues the worker's index build again after a failed one (the bundle stays APPROVED).
     Command.BUILD: Transition(
@@ -127,7 +126,6 @@ TRANSITIONS: Final[Mapping[Command, Transition]] = {
         State.ACTIVE,
         frozenset({Capability.POLICY_ACTIVATE}),
         PolicyAuditAction.ACTIVATE,
-        needs_reason=True,
     ),
     # Back to a bundle that was active before (activated_at set); the graph never changed.
     Command.ROLLBACK: Transition(
@@ -135,7 +133,6 @@ TRANSITIONS: Final[Mapping[Command, Transition]] = {
         State.ACTIVE,
         frozenset({Capability.POLICY_ACTIVATE}),
         PolicyAuditAction.ROLLBACK,
-        needs_reason=True,
     ),
     # Leaves the tenant with no active policy: validation then answers NO_ACTIVE_POLICY.
     Command.RETIRE: Transition(
@@ -143,7 +140,6 @@ TRANSITIONS: Final[Mapping[Command, Transition]] = {
         State.RETIRED,
         frozenset({Capability.POLICY_ACTIVATE}),
         PolicyAuditAction.RETIRE,
-        needs_reason=True,
     ),
 }
 # Commands that change which bundle is active: serialised per tenant, and announced.
@@ -509,25 +505,16 @@ async def _node_key_free(db: AsyncSession, bundle: PolicyBundle, node_key: str) 
 
 
 def _check_window(values: Mapping[str, object]) -> None:
+    # Request models refuse a window they hold whole (422). This catches one sent date against
+    # the other one stored: a conflict with the node as it is.
     start, end = values.get("effective_from"), values.get("effective_to")
     if isinstance(start, datetime) and isinstance(end, datetime) and start > end:
         raise PolicyItemInvalidError("effective_from must not be after effective_to.")
 
 
-_NULLABLE_NODE_FIELDS: Final = frozenset(
-    {"source_clause_id", "effective_from", "effective_to", "required_study_fact"}
-)
-
-
-def _changes(body: NodeUpdate | RuleUpdate, *, nullable: frozenset[str]) -> dict[str, object]:
-    # Fields the caller sent; null only clears a field that may be empty.
-    changes = body.model_dump(exclude_unset=True)
-    cleared = sorted(
-        name for name, value in changes.items() if value is None and name not in nullable
-    )
-    if cleared:
-        raise PolicyItemInvalidError("These fields cannot be empty.", details={"fields": cleared})
-    return changes
+def _changes(body: NodeUpdate | RuleUpdate) -> dict[str, object]:
+    # Fields the caller sent. The request model already refused nulls for required fields.
+    return body.model_dump(exclude_unset=True)
 
 
 async def _open_for_add(
@@ -575,7 +562,6 @@ async def add_node(
     await _node_key_free(db, bundle, body.node_key)
     await _require_clause(db, ctx.tenant_id, body.source_clause_id)
     values = body.model_dump()
-    _check_window(values)
     node = PolicyNode(
         id=uuid4(),
         tenant_id=ctx.tenant_id,
@@ -604,7 +590,7 @@ async def update_node(
     bundle = await _open(db, ctx, bundle_id, revision, EDITABLE)
     node = await _in_bundle(db, PolicyNode, bundle, node_id, "Node")
     await _room_to_revive(db, bundle, node, max_items)
-    changes = _changes(body, nullable=_NULLABLE_NODE_FIELDS)
+    changes = _changes(body)
     await _require_clause(db, ctx.tenant_id, body.source_clause_id)
     _check_window(
         {
@@ -640,7 +626,6 @@ async def add_rule(
     rule_fields = {"rule_id", "rule_version", "title", "requirement", "gate", "severity"}
     rule_fields |= {"mandatory", "check_type"}
     node_values = body.model_dump(exclude=rule_fields)
-    _check_window(node_values)
     node = PolicyNode(
         id=uuid4(),
         tenant_id=ctx.tenant_id,
@@ -682,7 +667,7 @@ async def update_rule(
     rule = await _in_bundle(db, PolicyRuleRecord, bundle, rule_record_id, "Rule")
     node = await _in_bundle(db, PolicyNode, bundle, rule.node_id, "Rule node")
     await _room_to_revive(db, bundle, node, max_items)
-    for name, value in _changes(body, nullable=frozenset()).items():
+    for name, value in _changes(body).items():
         setattr(rule, name, value)
     _back_to_proposed(node)
     await _finish(
@@ -705,8 +690,6 @@ async def add_edge(
     max_items: int,
 ) -> PolicyEdge:
     bundle = await _open_for_add(db, ctx, bundle_id, revision, max_items)
-    if body.from_node_id == body.to_node_id:
-        raise PolicyItemInvalidError("An edge must join two different nodes.")
     await _in_bundle(db, PolicyNode, bundle, body.from_node_id, "Node")
     await _in_bundle(db, PolicyNode, bundle, body.to_node_id, "Node")
     await _require_clause(db, ctx.tenant_id, body.provenance_clause_id)
@@ -843,7 +826,9 @@ async def transition(
     """Move the bundle along TRANSITIONS. Approval needs a bundle with no open issues (AC2)."""
     step = TRANSITIONS[command]
     _require(ctx, step.capabilities)
-    if step.needs_reason and body.reason is None:
+    # The API refuses a missing reason with a 422 (TransitionCommandRequest); this guards every
+    # other caller.
+    if command in REASON_REQUIRED_COMMANDS and body.reason is None:
         raise PolicyItemInvalidError("Give a reason.", details={"field": "reason"})
     if command in _CHANGES_ACTIVE:
         # Taken before the row lock, in the same order everywhere, so two activations in one
