@@ -204,6 +204,9 @@ async def test_worker_role_has_exactly_the_table_privileges_it_uses(
         "validation_runs": {"SELECT", "INSERT"},
         # The media worker (NRC-3) moves uploads through inspection; the API creates them.
         "media_uploads": {"SELECT", "UPDATE"},
+        # The operator script (NRC-6) appends the audit rows; nothing may change them. The API
+        # role only reads them (tests/test_job_operations.py).
+        "job_operator_actions": {"SELECT", "INSERT"},
     }
     rows = (
         await connection.execute(

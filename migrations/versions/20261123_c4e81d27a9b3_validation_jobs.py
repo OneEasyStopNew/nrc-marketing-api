@@ -11,7 +11,7 @@ already force row-level security with the tenant_isolation policy, which applies
 as to marketing_app, so it sees and writes only the tenant its session binds.
 
 Revision ID: c4e81d27a9b3
-Revises: a1a439290791
+Revises: 4b7d2e9f1a63
 Create Date: 2026-11-23 10:00:00.000000
 """
 
@@ -21,7 +21,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c4e81d27a9b3"
-down_revision: str | None = "a1a439290791"
+down_revision: str | None = "4b7d2e9f1a63"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

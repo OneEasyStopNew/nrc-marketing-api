@@ -104,8 +104,10 @@ Without `AWS_S3_BUCKET` the simulator worker still runs, but finished jobs stop 
 
 The worker connects as `marketing_worker` through `WORKER_DATABASE_URL` and refuses to start
 without it. A job it gives up on while the provider may still have it stays `UNKNOWN` with its
-credits held; `uv run python -m scripts.list_unknown_jobs` lists those (ids only, read-only) for an
-operator to settle.
+credits held; `uv run python -m scripts.list_unknown_jobs` lists those (ids and codes only,
+read-only), and `uv run python -m scripts.job_operations` replays or settles one with an audit row.
+Job states, cancel, replay, settle and the provider limits:
+[docs/runbooks/durable-jobs.md](docs/runbooks/durable-jobs.md).
 
 ### Higgsfield (live)
 

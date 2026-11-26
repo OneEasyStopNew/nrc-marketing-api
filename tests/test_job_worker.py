@@ -22,8 +22,8 @@ from app.models.jobs import ReservationState, SpendState
 from app.services.jobs import (
     JobContent,
     JobContentMissingError,
+    awaiting_review_details,
     job_content,
-    jobs_awaiting_review,
     transition,
 )
 from app.services.providers.base import (
@@ -872,7 +872,7 @@ async def test_completed_output_never_stored_commits_the_credits_past_the_cap(
 async def _awaiting_review(connection: AsyncConnection) -> list[tuple[UUID, UUID]]:
     # Lists across tenants, so it needs a role that reads tenants (the script uses the owner).
     async with app_session(connection) as db:
-        return await jobs_awaiting_review(db)
+        return [(item.tenant_id, item.job_id) for item in await awaiting_review_details(db)]
 
 
 async def test_unbilled_unknown_job_past_the_cap_is_listed_for_review(

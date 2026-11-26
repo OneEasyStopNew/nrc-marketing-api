@@ -551,6 +551,21 @@ async def test_other_tenants_and_the_jobs_endpoint_cannot_read_a_queued_validati
     assert as_job.status_code == 404
 
 
+async def test_the_job_cancel_endpoint_cannot_cancel_a_validation(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> None:
+    # The cancel path (NRC-6) adds a job.run event; a validation job must never get one.
+    _, run_id = await _queued(client, auth, world)
+
+    response = await client.post(
+        f"/v1/marketing/jobs/{run_id}/cancel", headers=auth("creator-a", world.a.tenant_id)
+    )
+    job = await _job(sessions, run_id)
+
+    assert response.status_code == 404
+    assert job.state is ExecutionState.QUEUED
+
+
 async def test_a_validation_job_whose_pinned_policy_is_gone_fails_cleanly(
     client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
 ) -> None:

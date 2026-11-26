@@ -24,6 +24,9 @@ from app.models.enums import ExecutionState, JobStage, enum_column
 
 # jobs.failure_message column size; writers truncate to it.
 FAILURE_MESSAGE_MAX_CHARS = 500
+# job_operator_actions column sizes; the operator script validates input against them.
+OPERATOR_MAX_CHARS = 128
+REASON_MAX_CHARS = 500
 
 
 class ReservationState(StrEnum):
@@ -32,6 +35,13 @@ class ReservationState(StrEnum):
     HELD = "HELD"
     COMMITTED = "COMMITTED"
     RELEASED = "RELEASED"
+
+
+class OperatorAction(StrEnum):
+    # What an operator did to a job that waited for one (app.services.job_operations).
+    REPLAY = "replay"
+    SETTLE_BILLED = "settle_billed"
+    SETTLE_NOT_BILLED = "settle_not_billed"
 
 
 class SpendState(StrEnum):
@@ -69,6 +79,12 @@ class Job(Base):
             use_alter=True,
         ),
         Index("ix_jobs_tenant_id_state", "tenant_id", "state"),
+        # provider_in_flight() runs under a lock every submit waits on: never a full scan.
+        Index(
+            "ix_jobs_provider_in_flight",
+            "provider",
+            postgresql_where=text("state IN ('RUNNING', 'WAITING_PROVIDER', 'CANCEL_REQUESTED')"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -186,3 +202,34 @@ class ProviderSpend(Base):
     # Completed generations: the actual cost when the provider reported one, else the estimate.
     committed_usd_micros: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class JobOperatorAction(Base):
+    """Audit trail of operator replays and settlements. Insert-only: no UPDATE, no DELETE grant.
+
+    Written in the same transaction as the change it records, so a change without its row (or the
+    reverse) cannot exist. The reason is free text from the operator: never log it.
+    """
+
+    __tablename__ = "job_operator_actions"
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id", "job_id"], ["jobs.tenant_id", "jobs.id"]),
+        Index("ix_job_operator_actions_tenant_id_job_id", "tenant_id", "job_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID]
+    job_id: Mapped[UUID]
+    action: Mapped[OperatorAction] = mapped_column(enum_column(OperatorAction))
+    # Who acted: an operator id the script was given, not a login.
+    operator: Mapped[str] = mapped_column(String(OPERATOR_MAX_CHARS))
+    reason: Mapped[str] = mapped_column(String(REASON_MAX_CHARS))
+    job_state_before: Mapped[ExecutionState] = mapped_column(enum_column(ExecutionState))
+    job_state_after: Mapped[ExecutionState] = mapped_column(enum_column(ExecutionState))
+    reservation_state_before: Mapped[ReservationState] = mapped_column(
+        enum_column(ReservationState)
+    )
+    reservation_state_after: Mapped[ReservationState] = mapped_column(enum_column(ReservationState))
+    # The job.run event a replay added; None for a settlement.
+    outbox_event_id: Mapped[UUID | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
