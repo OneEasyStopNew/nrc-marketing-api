@@ -180,19 +180,25 @@ def verify(
     """The answers by rule id, or InvalidJudgeAnswerError naming the first problem."""
     if reply.stop_reason in _TRUNCATED:
         raise InvalidJudgeAnswerError(JudgeFailure.TRUNCATED)
-    raw = reply.raw.strip()
-    # Some models wrap JSON in a code fence; nothing else around it is accepted.
-    fenced = _FENCE.match(raw)
-    try:
-        answer = JudgeAnswer.model_validate_json(fenced["body"] if fenced else raw)
-    except ValidationError:
-        raise InvalidJudgeAnswerError(JudgeFailure.MALFORMED) from None
+    answer = parse_answer(reply.raw)
     ids = [result.rule_id for result in answer.results]
     if len(ids) != len(set(ids)) or set(ids) != set(request.rule_ids):
         raise InvalidJudgeAnswerError(JudgeFailure.WRONG_RULES)
     for result in answer.results:
         _check_answer(result, request.text, context)
     return {result.rule_id: result for result in answer.results}
+
+
+def parse_answer(raw: str) -> JudgeAnswer:
+    """The answer's JSON in the exact shape, or InvalidJudgeAnswerError(MALFORMED). Nothing in it
+    is checked against the request or the context yet (verify does that)."""
+    text = raw.strip()
+    # Some models wrap JSON in a code fence; nothing else around it is accepted.
+    fenced = _FENCE.match(text)
+    try:
+        return JudgeAnswer.model_validate_json(fenced["body"] if fenced else text)
+    except ValidationError:
+        raise InvalidJudgeAnswerError(JudgeFailure.MALFORMED) from None
 
 
 def _check_answer(result: JudgeRuleAnswer, text: str, context: JudgeContext) -> None:
