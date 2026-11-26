@@ -607,7 +607,7 @@ async def test_the_whole_journey_from_upload_to_rollback(stack: Stack) -> None:
     assert await v2.state() == "READY"
     activated = await v2.move("activate", ADMIN, REASON)
     assert activated.json()["lifecycle_state"] == "ACTIVE"
-    assert activated.json()["activated_by"] == APPROVER
+    assert activated.json()["activated_by"] == ADMIN
     demo = Draft(api, {"id": world_a_bundle(stack), "version": 1, "revision": 1})
     assert await demo.state() == "RETIRED"
 
@@ -1199,7 +1199,8 @@ async def test_ac5_another_tenants_admin_cannot_alter_review_approve_or_activate
     for method, suffix, draft, body in alterations(found):
         # Capabilities are checked before the bundle is looked up, so each call comes from the
         # foreign role that holds its capability: only then is the 404 the tenant boundary.
-        approving = suffix == "/transitions" and body["command"] != "submit"
+        # D-16: only approve and reject need policy:approve; activation is the admin's.
+        approving = suffix == "/transitions" and body["command"] in ("approve", "reject")
         await foreign.refused(
             method,
             draft.path + suffix,
@@ -1289,7 +1290,7 @@ async def test_ac6_every_change_of_the_active_bundle_names_who_why_when_and_is_a
         item for item in await v2.audit() if item["details"].get("replaced_by_bundle_id") == v3.id
     ]
     assert [(item["action"], item["actor"], item["reason"]) for item in replaced] == [
-        ("RETIRE", APPROVER, "[SYNTHETIC] v3 replaces v2.")
+        ("RETIRE", ADMIN, "[SYNTHETIC] v3 replaces v2.")
     ]
 
 
