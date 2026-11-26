@@ -380,7 +380,7 @@ def test_a_regulatory_quotation_still_needs_its_source_clause() -> None:
     graph.wording(
         graph.rules[0],
         WordingKind.STUDY_APPROVED_WORDING,
-        StudyWordingSource.APPROVED_PHRASES.value,
+        StudyWordingSource.APPROVED_CLAIMS.value,
     )
     graph.wordings[0] = replace(graph.wordings[0], text="Taking part is always paid.")
 

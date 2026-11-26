@@ -48,6 +48,7 @@ from app.models.enums import (
     ReviewItemKind,
     ReviewState,
     Severity,
+    StudyWordingSource,
     WordingKind,
 )
 from app.schemas.policy_admin import (
@@ -61,6 +62,7 @@ from app.schemas.policy_admin import (
     TransitionRequest,
     WordingCreate,
 )
+from app.schemas.tenancy import StudyFacts
 from app.services import policy_bundles as bundles
 from app.services.policies import get_active_policy
 from tests.conftest import (
@@ -554,6 +556,7 @@ async def test_the_whole_way_to_approval(env: Env) -> None:
             "mandatory": True,
             "applies_to": ["brief", "text", "image"],
             "source": {"source_id": SOURCE_REF, "clause": "DISC-1", "excerpt": None},
+            "study_wording_sources": [],
         }
     ]
     rule = await env.db.get(PolicyRuleRecord, draft.rule, populate_existing=True)
@@ -1118,6 +1121,67 @@ async def approved(env: Env) -> Draft:
     await env.move(draft, Command.SUBMIT)
     await env.move(draft, Command.APPROVE, env.approver)
     return draft
+
+
+async def test_an_approved_study_wording_pointer_reaches_the_active_rules(
+    connection: AsyncConnection, env: Env
+) -> None:
+    # The rule list validation reads carries where the study's approved wording comes from; it
+    # used to be dropped there without an error.
+    draft = await env.draft()
+    pointer = await bundles.add_wording(
+        env.db,
+        env.admin,
+        draft.id,
+        draft.revision,
+        draft.rule,
+        WordingCreate(
+            kind=WordingKind.STUDY_APPROVED_WORDING,
+            text=StudyWordingSource.APPROVED_CLAIMS.value,
+        ),
+        TEST_MAX_ITEMS,
+    )
+    draft.revision += 1
+    await env.review_all(draft)
+    await bundles.review_item(
+        env.db,
+        env.approver,
+        draft.id,
+        draft.revision,
+        ReviewItemKind.WORDING,
+        pointer.id,
+        ReviewDecision(decision="APPROVED"),
+        TEST_MAX_ITEMS,
+    )
+    draft.revision += 1
+    await env.move(draft, Command.SUBMIT)
+    await env.move(draft, Command.APPROVE, env.approver)
+    await mark_ready(connection, env.tenant_id, draft.id)
+    await bind_tenant(env.db, env.tenant_id)
+    await env.move(draft, Command.ACTIVATE, env.admin, because())
+
+    policy = await get_active_policy(env.db, env.admin)
+
+    (rule,) = policy.rules
+    assert (rule.rule_id, rule.study_wording_sources) == (
+        "REC-07",
+        [StudyWordingSource.APPROVED_CLAIMS],
+    )
+
+
+# Validation reads these fields of the study snapshot. They arrive with NRC-2's approval records
+# (#35): until it merges, StudyFacts has neither field. Owner: Firoz; remove the skip when #35
+# is on main.
+_FACTS_FIELDS = {source.value.removeprefix("facts.") for source in StudyWordingSource}
+
+
+@pytest.mark.skipif(
+    not set(StudyFacts.model_fields) >= _FACTS_FIELDS,
+    reason="StudyFacts gains approved_claim_records and required_disclosure_records in #35",
+)
+def test_every_study_wording_pointer_names_a_study_facts_field() -> None:
+    assert all(source.value.startswith("facts.") for source in StudyWordingSource)
+    assert set(StudyFacts.model_fields) >= _FACTS_FIELDS
 
 
 async def mark_ready(conn: AsyncConnection, tenant_id: UUID, bundle_id: UUID) -> None:

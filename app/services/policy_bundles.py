@@ -52,6 +52,7 @@ from app.models.enums import (
     PolicyNodeType,
     ReviewItemKind,
     ReviewState,
+    StudyWordingSource,
     ValidationInputKind,
     WordingKind,
 )
@@ -1064,6 +1065,14 @@ async def _project_rules(db: AsyncSession, bundle: PolicyBundle) -> list[PolicyR
                 applies_to=[ValidationInputKind(kind) for kind in node.input_kinds]
                 or list(ValidationInputKind),
                 source=_source_of(support.get(node.id, []), clause_refs),
+                # The wording itself lives in the study snapshot; the rule carries the pointer.
+                study_wording_sources=sorted(
+                    {
+                        StudyWordingSource(w.text)
+                        for w in mine
+                        if w.kind is WordingKind.STUDY_APPROVED_WORDING
+                    }
+                ),
             )
         )
     return projected

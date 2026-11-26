@@ -946,7 +946,7 @@ async def test_study_approved_wording_is_a_pointer_without_text_or_clause(
     bundle = await new_bundle(api)
     graph = await draft_graph(api, bundle["id"], clause_id)
     wordings = f"/policy-bundles/{bundle['id']}/rules/{graph['rule']}/wordings"
-    pointer = {"kind": "STUDY_APPROVED_WORDING", "text": "study_snapshot.required_disclosures"}
+    pointer = {"kind": "STUDY_APPROVED_WORDING", "text": "facts.required_disclosure_records"}
 
     created = await api.call("POST", wordings, json=pointer, if_match=graph["revision"])
     checks = await api.ok(api.call("GET", f"/policy-bundles/{bundle['id']}/checks"))
@@ -965,6 +965,8 @@ async def test_study_approved_wording_is_a_pointer_without_text_or_clause(
     [
         {"text": "This is a research study."},
         {"text": "study_snapshot.facts"},
+        # The v0.3 document's name: only the bundle import maps it.
+        {"text": "study_snapshot.approved_phrases"},
         {"source_clause_id": SOME_ID},
         {"translation_of_id": SOME_ID},
     ],
@@ -973,7 +975,7 @@ async def test_study_approved_wording_must_be_a_bare_pointer(
     api: Api, changes: dict[str, Any]
 ) -> None:
     bundle = await new_bundle(api)
-    body = {"kind": "STUDY_APPROVED_WORDING", "text": "study_snapshot.approved_phrases"} | changes
+    body = {"kind": "STUDY_APPROVED_WORDING", "text": "facts.approved_claim_records"} | changes
 
     response = await api.call(
         "POST", f"/policy-bundles/{bundle['id']}/rules/{SOME_ID}/wordings", json=body, if_match=1

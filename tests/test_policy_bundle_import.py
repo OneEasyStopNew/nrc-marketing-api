@@ -34,6 +34,7 @@ from app.models.enums import (
 from app.services.policy_checks import load_snapshot, run_checks
 from scripts.import_policy_bundle import (
     BUNDLE_V03_PATH,
+    V03_STUDY_SOURCES,
     content_sha256,
     export_policy_bundle,
     import_policy_bundle,
@@ -208,9 +209,10 @@ async def test_the_graph_agrees_with_the_reference_mapping(
         for edge in ref_edges
         if edge["type"] == "HAS_EXCEPTION" and runtime(edge["from"])
     }
-    # Required post wording: a pointer to the study snapshot, never text from a source.
+    # Required post wording: a pointer to the study snapshot, never text from a source. The
+    # v0.3 names become the StudyFacts fields that hold the approved texts.
     assert set(pointers) == {
-        (edge["from"], edge["to"])
+        (edge["from"], V03_STUDY_SOURCES[edge["to"]].value)
         for edge in ref_edges
         if edge["type"] == "REQUIRES_DISCLOSURE" and runtime(edge["from"])
     }

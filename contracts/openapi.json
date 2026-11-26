@@ -8818,6 +8818,15 @@
           },
           "source": {
             "$ref": "#/components/schemas/SourceReference"
+          },
+          "study_wording_sources": {
+            "items": {
+              "$ref": "#/components/schemas/StudyWordingSource"
+            },
+            "type": "array",
+            "maxItems": 2,
+            "title": "Study Wording Sources",
+            "description": "Where the study's approved wording for this rule comes from, in the study snapshot. The bundle holds only these pointers; validation checks the post against the approved texts they name."
           }
         },
         "type": "object",
@@ -10245,6 +10254,15 @@
         ],
         "title": "StudySnapshotRead"
       },
+      "StudyWordingSource": {
+        "type": "string",
+        "enum": [
+          "facts.required_disclosure_records",
+          "facts.approved_claim_records"
+        ],
+        "title": "StudyWordingSource",
+        "description": "Where a STUDY_APPROVED_WORDING points: the text of such a wording.\n\nA field of the study snapshot's facts (StudyFacts) holding approved texts, each with its\napproval record (NRC-2). The v0.3 bundle names them study_snapshot.required_disclosures and\nstudy_snapshot.approved_phrases; the bundle import maps those names to these."
+      },
       "SupersededRuleRead": {
         "properties": {
           "rule_id": {
@@ -11196,7 +11214,7 @@
             "minLength": 1,
             "pattern": "\\S",
             "title": "Text",
-            "description": "EXACT_WORDING: required wording quoted word for word from a source clause (regulatory or platform text, or wording that is the same for every study). PROHIBITED_PHRASE: one phrase. STUDY_APPROVED_WORDING: where the study's approved wording comes from, one of `study_snapshot.required_disclosures`, `study_snapshot.approved_phrases`; the bundle never holds that wording's text, which comes from the study snapshot."
+            "description": "EXACT_WORDING: required wording quoted word for word from a source clause (regulatory or platform text, or wording that is the same for every study). PROHIBITED_PHRASE: one phrase. STUDY_APPROVED_WORDING: where the study's approved wording comes from, one of `facts.required_disclosure_records`, `facts.approved_claim_records`; the bundle never holds that wording's text, which comes from the study snapshot."
           },
           "source_clause_id": {
             "anyOf": [

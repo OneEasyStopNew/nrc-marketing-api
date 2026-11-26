@@ -153,10 +153,15 @@ class WordingKind(StrEnum):
 
 
 class StudyWordingSource(StrEnum):
-    """Where a STUDY_APPROVED_WORDING points: the text of such a wording (v0.3 `source`)."""
+    """Where a STUDY_APPROVED_WORDING points: the text of such a wording.
 
-    REQUIRED_DISCLOSURES = "study_snapshot.required_disclosures"
-    APPROVED_PHRASES = "study_snapshot.approved_phrases"
+    A field of the study snapshot's facts (StudyFacts) holding approved texts, each with its
+    approval record (NRC-2). The v0.3 bundle names them study_snapshot.required_disclosures and
+    study_snapshot.approved_phrases; the bundle import maps those names to these.
+    """
+
+    REQUIRED_DISCLOSURES = "facts.required_disclosure_records"
+    APPROVED_CLAIMS = "facts.approved_claim_records"
 
 
 class PolicyEdgeType(StrEnum):

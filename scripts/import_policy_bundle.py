@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -85,6 +86,13 @@ _INPUT_KINDS: Final[dict[str, ValidationInputKind]] = {
 # Media validation can't take yet (NRC-9): a rule only for these must not turn into "every input".
 _UNSUPPORTED_INPUTS: Final = frozenset({"video", "video_captions"})
 _SECTION_MAX: Final = 200
+# The v0.3 document's names for the study snapshot fields that hold approved wording, and the
+# StudyFacts fields (with their approval records, NRC-2) they are stored as. The stored document
+# keeps the v0.3 names, so the export gives them back unchanged.
+V03_STUDY_SOURCES: Final[Mapping[str, StudyWordingSource]] = {
+    "study_snapshot.required_disclosures": StudyWordingSource.REQUIRED_DISCLOSURES,
+    "study_snapshot.approved_phrases": StudyWordingSource.APPROVED_CLAIMS,
+}
 # v0.3 is about 200 KB; a document 25 times that is not a policy bundle.
 MAX_DOCUMENT_BYTES: Final = 5 * 1024 * 1024
 
@@ -108,7 +116,7 @@ class _Exception(_Doc):
 
 
 class _PostWording(_Doc):
-    source: StudyWordingSource
+    source: Literal["study_snapshot.required_disclosures", "study_snapshot.approved_phrases"]
 
 
 class _Check(_Doc):
@@ -367,7 +375,7 @@ async def import_policy_bundle(
             policy_rule_id=rule_rows[rule.rule_id],
             language=PolicyLanguage.EN,
             kind=WordingKind.STUDY_APPROVED_WORDING,
-            text=rule.required_post_wording.source.value,
+            text=V03_STUDY_SOURCES[rule.required_post_wording.source].value,
             origin=ProposalOrigin.IMPORT,
             review_state=ReviewState.PROPOSED,
         )
