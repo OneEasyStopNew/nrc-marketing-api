@@ -12,7 +12,7 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.auth.access import Role, TenantContext, capabilities_for
+from app.auth.access import Capability, Role, TenantContext, capabilities_for
 from app.auth.tokens import Principal
 from app.core.errors import (
     NotFoundError,
@@ -708,6 +708,100 @@ async def test_only_an_approver_reviews_an_exception(env: Env, role: Role) -> No
 
     with pytest.raises(PermissionDeniedError, match="cannot do this"):
         await review(env, draft, ctx_for(env.tenant_id, "caller-a", role), exception_id)
+
+
+async def add_except_when(env: Env, draft: Draft, exception_id: UUID) -> UUID:
+    edge = await bundles.add_edge(
+        env.db,
+        env.admin,
+        draft.id,
+        draft.revision,
+        EdgeCreate(
+            edge_type=PolicyEdgeType.EXCEPT_WHEN,
+            from_node_id=draft.rule_node,
+            to_node_id=exception_id,
+            provenance_note="[SYNTHETIC] The clause names this exception.",
+        ),
+        TEST_MAX_ITEMS,
+    )
+    draft.revision += 1
+    return edge.id
+
+
+async def test_only_an_approver_reviews_the_link_that_turns_an_exception_on(env: Env) -> None:
+    # Approving the except_when edge is what makes the exception apply to the rule (D-16).
+    draft = await env.draft()
+    edge_id = await add_except_when(env, draft, await add_exception(env, draft))
+    decide = ReviewDecision(decision="APPROVED")
+
+    with pytest.raises(PermissionDeniedError, match="cannot do this"):
+        await bundles.review_item(
+            env.db,
+            env.admin,
+            draft.id,
+            draft.revision,
+            ReviewItemKind.EDGE,
+            edge_id,
+            decide,
+            TEST_MAX_ITEMS,
+        )
+    await bundles.review_item(
+        env.db,
+        env.approver,
+        draft.id,
+        draft.revision,
+        ReviewItemKind.EDGE,
+        edge_id,
+        decide,
+        TEST_MAX_ITEMS,
+    )
+
+    edge = await env.db.get(PolicyEdge, edge_id, populate_existing=True)
+    assert edge is not None
+    assert (edge.review_state, edge.reviewed_by) == (ReviewState.APPROVED, APPROVER)
+
+
+# Who reviews each kind of item (D-16). Every kind is listed, so a new one fails here first.
+REVIEWERS: list[tuple[PolicyNode | PolicyEdge | PolicyRuleWording, Capability]] = [
+    (PolicyNode(node_type=PolicyNodeType.CLAUSE), Capability.POLICY_MANAGE),
+    (PolicyNode(node_type=PolicyNodeType.RULE), Capability.POLICY_MANAGE),
+    (PolicyNode(node_type=PolicyNodeType.INTERPRETATION), Capability.POLICY_MANAGE),
+    (PolicyNode(node_type=PolicyNodeType.EXAMPLE), Capability.POLICY_MANAGE),
+    (PolicyNode(node_type=PolicyNodeType.EXCEPTION), Capability.POLICY_APPROVE),
+    (PolicyNode(node_type=PolicyNodeType.DISCLOSURE), Capability.POLICY_APPROVE),
+    *(
+        (
+            PolicyEdge(edge_type=edge_type),
+            Capability.POLICY_APPROVE
+            if edge_type is PolicyEdgeType.EXCEPT_WHEN
+            else Capability.POLICY_MANAGE,
+        )
+        for edge_type in PolicyEdgeType
+    ),
+    (PolicyRuleWording(kind=WordingKind.EXACT_WORDING), Capability.POLICY_MANAGE),
+    (PolicyRuleWording(kind=WordingKind.PROHIBITED_PHRASE), Capability.POLICY_MANAGE),
+    (PolicyRuleWording(kind=WordingKind.STUDY_APPROVED_WORDING), Capability.POLICY_APPROVE),
+]
+
+
+def test_every_item_kind_has_its_reviewer() -> None:
+    assert {type(item).__name__ + ":" + str(_kind(item)) for item, _ in REVIEWERS} == {
+        *(f"PolicyNode:{t}" for t in PolicyNodeType),
+        *(f"PolicyEdge:{t}" for t in PolicyEdgeType),
+        *(f"PolicyRuleWording:{k}" for k in WordingKind),
+    }
+    for item, capability in REVIEWERS:
+        assert bundles.review_capability(item) is capability, item
+
+
+def _kind(item: PolicyNode | PolicyEdge | PolicyRuleWording) -> object:
+    match item:
+        case PolicyNode():
+            return item.node_type
+        case PolicyEdge():
+            return item.edge_type
+        case PolicyRuleWording():
+            return item.kind
 
 
 async def test_an_approver_can_send_a_bundle_back_to_draft(env: Env) -> None:

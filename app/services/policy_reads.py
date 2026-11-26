@@ -4,6 +4,7 @@
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Final
 from uuid import UUID
 
 from sqlalchemy import and_, func, select
@@ -141,6 +142,9 @@ async def list_bundles(
     )
 
 
+_REVIEWS_PROPOSALS: Final = frozenset({Capability.POLICY_MANAGE, Capability.POLICY_APPROVE})
+
+
 async def list_rules(
     db: AsyncSession,
     ctx: TenantContext,
@@ -151,9 +155,13 @@ async def list_rules(
     limit: int = 1,
     rule_record_id: UUID | None = None,
 ) -> PolicyRuleList:
-    """Rules with their node and wordings. PROPOSED ones are for policy:manage only (D13)."""
-    if include_proposals and Capability.POLICY_MANAGE not in ctx.capabilities:
-        raise PermissionDeniedError("Only policy managers can see proposed rules.")
+    """Rules with their node and wordings. PROPOSED ones are for those who draft or review them.
+
+    D13 kept proposals from creative readers; the approver reviews proposed wordings and
+    exception rules (D-16), so policy:approve reads them too.
+    """
+    if include_proposals and not ctx.capabilities & _REVIEWS_PROPOSALS:
+        raise PermissionDeniedError("Only policy managers and approvers can see proposed rules.")
     bundle = await get_bundle(db, ctx, bundle_id)
     rules_query = (
         select(PolicyRuleRecord, PolicyNode)

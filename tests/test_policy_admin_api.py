@@ -1059,14 +1059,16 @@ async def test_proposed_rules_are_hidden_unless_a_manager_asks(
 
     hidden = (await api.ok(api.call("GET", listing, APPROVER))).json()
     shown = (await api.ok(api.call("GET", listing, params={"include_proposals": "true"}))).json()
-    refused = await api.call("GET", listing, APPROVER, params={"include_proposals": "true"})
+    # The approver reads what they are asked to approve (D-16).
+    for_approver = await api.ok(
+        api.call("GET", listing, APPROVER, params={"include_proposals": "true"})
+    )
 
     assert hidden == {"items": [], "next_cursor": None}
     assert [r["rule_id"] for r in shown["items"]] == ["REC-07"]
     assert shown["items"][0]["node"]["review_state"] == "PROPOSED"
     assert shown["items"][0]["wordings"][0]["review_state"] == "PROPOSED"
-    assert refused.status_code == 403, refused.text
-    assert "policy managers" in refused.json()["message"]
+    assert for_approver.json() == shown
 
     # Approving the rule's node shows the rule, but its proposed wording stays out.
     decision = {"item_kind": "node", "item_id": graph["rule_node"], "decision": "APPROVED"}

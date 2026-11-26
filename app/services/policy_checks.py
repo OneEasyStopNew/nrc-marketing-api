@@ -98,6 +98,14 @@ def _normalised(text: str) -> str:
     return " ".join(text.split())
 
 
+def _quoted(wording: str) -> re.Pattern[str]:
+    # The wording as whole words: "cure" is not quoted by "secure". A wording that starts or ends
+    # with punctuation needs no boundary on that side ("(see terms)." may end a sentence).
+    start = r"(?<!\w)" if wording[:1].isalnum() or wording[:1] == "_" else ""
+    end = r"(?!\w)" if wording[-1:].isalnum() or wording[-1:] == "_" else ""
+    return re.compile(start + re.escape(wording) + end)
+
+
 class _Graph:
     # Lookups shared by the checks, over approved rows only.
 
@@ -426,9 +434,9 @@ def check_exact_wording(
         # could hold the same words without being this rule's source.
         if wording.source_clause_id is not None:
             candidates = [c for c in candidates if c == wording.source_clause_id]
-        needle = _normalised(wording.text)
+        quoted = _quoted(_normalised(wording.text))
         if not any(
-            needle in _normalised(snapshot.clause_texts.get(clause_id, ""))
+            quoted.search(_normalised(snapshot.clause_texts.get(clause_id, "")))
             for clause_id in candidates
         ):
             issues.append(

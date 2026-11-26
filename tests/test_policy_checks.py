@@ -394,6 +394,24 @@ def test_exact_wording_keeps_its_words_but_not_its_line_breaks() -> None:
     assert graph.issues() == set()
 
 
+@pytest.mark.parametrize("partial", ["esearch study.", "This is a research stud", "is volunt"])
+def test_exact_wording_inside_a_longer_word_is_not_quoted(partial: str) -> None:
+    # "cure" is not in a clause that only says "secure": the words must be whole.
+    graph = Graph()
+    graph.wordings[0] = replace(graph.wordings[0], text=partial)
+
+    assert graph.issues() == {(CheckCode.EXACT_WORDING_NOT_IN_SOURCE, "rule:REC-01")}
+
+
+@pytest.mark.parametrize("whole", ["research study", "[SYNTHETIC] Say:", "is voluntary."])
+def test_exact_wording_of_whole_words_is_quoted(whole: str) -> None:
+    # Punctuation at either end needs no word boundary there.
+    graph = Graph()
+    graph.wordings[0] = replace(graph.wordings[0], text=whole)
+
+    assert graph.issues() == set()
+
+
 def test_exact_wording_is_case_sensitive() -> None:
     graph = Graph()
     graph.wordings[0] = replace(graph.wordings[0], text="this is a research study.")

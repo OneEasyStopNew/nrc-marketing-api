@@ -157,16 +157,22 @@ _REVIEW_MODELS: Final[
     ReviewItemKind.EDGE: PolicyEdge,
     ReviewItemKind.WORDING: PolicyRuleWording,
 }
-# D-16: the policy owner approves exceptions and disclosures (policy:approve); every other item
-# is reviewed by the policy administrator who drafts the bundle (policy:manage). Creating and
-# editing any item stays policy:manage.
+# D-16: the policy owner approves exceptions and disclosures (policy:approve), including the
+# except_when edges that attach an exception to a rule: approving the link is what turns the
+# exception on. Every other item is reviewed by the policy administrator who drafts the bundle
+# (policy:manage). Creating and editing any item stays policy:manage.
 OWNER_REVIEWED_NODES: Final = frozenset({PolicyNodeType.EXCEPTION, PolicyNodeType.DISCLOSURE})
+OWNER_REVIEWED_EDGES: Final = frozenset({PolicyEdgeType.EXCEPT_WHEN})
 
 
 def review_capability(item: PolicyNode | PolicyEdge | PolicyRuleWording) -> Capability:
-    owner_reviews = (isinstance(item, PolicyNode) and item.node_type in OWNER_REVIEWED_NODES) or (
-        isinstance(item, PolicyRuleWording) and item.kind is WordingKind.STUDY_APPROVED_WORDING
-    )
+    match item:
+        case PolicyNode():
+            owner_reviews = item.node_type in OWNER_REVIEWED_NODES
+        case PolicyEdge():
+            owner_reviews = item.edge_type in OWNER_REVIEWED_EDGES
+        case PolicyRuleWording():
+            owner_reviews = item.kind is WordingKind.STUDY_APPROVED_WORDING
     return Capability.POLICY_APPROVE if owner_reviews else Capability.POLICY_MANAGE
 
 

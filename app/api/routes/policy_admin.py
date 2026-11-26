@@ -224,9 +224,12 @@ async def get_policy_bundle(
     "/policy-bundles/{policy_bundle_id}/rule-records",
     summary="A bundle's rules with their node, review state and wordings (editor view)",
     description="Proposed rules and wordings are left out unless include_proposals=true, which "
-    "needs policy:manage.",
+    "needs policy:manage or policy:approve (the approver reviews them).",
     responses={
-        403: {"model": ErrorBody, "description": "include_proposals without policy:manage."},
+        403: {
+            "model": ErrorBody,
+            "description": "include_proposals without policy:manage or policy:approve.",
+        },
         404: _NOT_FOUND,
     },
 )
