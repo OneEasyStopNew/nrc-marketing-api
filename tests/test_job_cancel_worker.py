@@ -19,12 +19,15 @@ from app.models.enums import ExecutionState, JobStage
 from app.models.jobs import ReservationState, SpendState
 from app.services.jobs import awaiting_review_details
 from app.services.providers.base import (
+    HIGGSFIELD_NAME,
     ProviderConfigError,
     ProviderOutcomeUnknownError,
     ProviderUnavailableError,
+    StatusResult,
 )
+from app.services.providers.pinned_models import PINNED_MODELS
 from app.services.providers.simulator import SimulatorScenario
-from app.workers.connector import run_once
+from app.workers.connector import provider_key, run_once
 from tests.conftest import (
     AuthHeaders,
     FakeSink,
@@ -41,7 +44,8 @@ from tests.conftest import (
 )
 from tests.ledger import assert_ledger_consistent
 
-ESTIMATE_MICROS = 94_000
+# Under the $0.09 per-image cap (NRC-10), so jobs reach submit.
+ESTIMATE_MICROS = 84_000
 ACTUAL_MICROS = 81_000
 
 
@@ -56,7 +60,7 @@ async def job_id(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> 
 def _priced() -> ScriptedProvider:
     # A price, so a wrong charge or release would show in provider_spend.
     provider = ScriptedProvider()
-    provider.cost_usd = Decimal("0.094")
+    provider.cost_usd = Decimal("0.084")
     return provider
 
 
@@ -449,4 +453,77 @@ async def test_cancelled_job_whose_provider_is_not_configured_holds_its_credits(
     assert job.failure_code == "CANCELLED_OUTCOME_UNKNOWN"
     assert reservation is ReservationState.HELD
     assert sum(provider.submits.values()) == 1
+    await assert_ledger_consistent(connection, world.a.tenant_id, job_id, spend_before=spend_before)
+
+
+class _ModelProvider(ScriptedProvider):
+    # One model's live provider, registered under higgsfield:<model> as build_providers does
+    # (NRC-10). Nothing is sent to Higgsfield; status checks are counted.
+
+    name = HIGGSFIELD_NAME
+
+    def __init__(self, model: str) -> None:
+        super().__init__()
+        self.model = model
+        # Under the $0.09 per-image cap, so the job reaches submit.
+        self.cost_usd = Decimal("0.084")
+        self.statuses = 0
+
+    async def get_status(self, provider_request_id: str) -> StatusResult:
+        self.statuses += 1
+        return await super().get_status(provider_request_id)
+
+
+@pytest.mark.parametrize(
+    ("scenario", "code", "credits"),
+    [
+        (SimulatorScenario.SUCCESS, "CANCELLED_AFTER_COMPLETION", ReservationState.COMMITTED),
+        (SimulatorScenario.PROVIDER_FAILED, "CANCELLED", ReservationState.RELEASED),
+    ],
+    ids=["completed", "failed"],
+)
+async def test_cancel_polls_only_the_provider_of_the_jobs_own_model(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    sessions: Sessions,
+    connection: AsyncConnection,
+    job_id: UUID,
+    scenario: SimulatorScenario,
+    code: str,
+    credits: ReservationState,
+) -> None:
+    # Providers are registered per model (NRC-10), so a cancel must find the job's own one: a
+    # lookup by provider name alone finds none and leaves the job's credits held.
+    chosen, other = "marketing-studio/image", next(iter(PINNED_MODELS))
+    await connection.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(world.a.tenant_id)}
+    )
+    await connection.execute(
+        text("UPDATE jobs SET provider = :p, model = :m WHERE id = :id"),
+        {"p": HIGGSFIELD_NAME, "m": chosen, "id": job_id},
+    )
+    spend_before = await _spend(connection)
+    used, unused = _ModelProvider(chosen), _ModelProvider(other)
+    providers = {
+        provider_key(HIGGSFIELD_NAME, other): unused,
+        provider_key(HIGGSFIELD_NAME, chosen): used,
+    }
+    sink = FakeSink(provider_name=HIGGSFIELD_NAME)
+    used.pending_polls = 1
+    await run_once(sessions, providers, sink, get_settings())
+    job, _ = await _load(sessions, world, job_id)
+    assert job.state is ExecutionState.WAITING_PROVIDER
+
+    assert (await _cancel(client, auth, world, job_id)).status_code == 202
+    used.scenario = scenario
+    await run_once(sessions, providers, sink, get_settings())
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.CANCELLED, code)
+    assert reservation is credits
+    # Polled once while running and once for the cancel; never resubmitted, never fetched.
+    assert (used.statuses, sum(used.submits.values())) == (2, 1)
+    assert (unused.estimates, sum(unused.submits.values()), unused.statuses) == (0, 0, 0)
+    assert sink.stored == []
     await assert_ledger_consistent(connection, world.a.tenant_id, job_id, spend_before=spend_before)

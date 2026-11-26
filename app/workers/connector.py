@@ -599,10 +599,11 @@ class JobRunHandler:
         if job is None or handler is None:
             raise NoHandlerError
         if job.state is ExecutionState.CANCEL_REQUESTED:
+            # The job's own model's provider, as for any other step: never another model's.
             return await finish_cancel(
                 db,
                 job,
-                step.providers.get(job.provider or ""),
+                _provider_for_job(step.providers, job),
                 settings=step.settings,
                 now=step.now,
                 event_attempts=step.event_attempts,
