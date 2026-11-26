@@ -38,6 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATES = tuple(BundleLifecycleState)
 # Bundle states in which the API and worker roles may still write graph rows.
 OPEN_STATES = (BundleLifecycleState.DRAFT, BundleLifecycleState.REVIEW)
+MEMBER_ROLE = "nrc4_test_app_member"
 FROZEN_STATES = tuple(state for state in STATES if state not in OPEN_STATES)
 APPROVED_ON = datetime(2026, 11, 17, tzinfo=UTC)
 LEASE_FUNCTIONS = {
@@ -504,6 +505,45 @@ async def _insert_bundle(
     return bundle_id
 
 
+async def test_data_step_marks_bundles_active_before_this_revision_as_activated(
+    connection: AsyncConnection, world: World
+) -> None:
+    # Legacy ACTIVE bundles had no activated_at, so a superseded one could never be rolled back
+    # to. The migration's own SQL, in its order, on that data.
+    migration = _migration()
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        await connection.execute(text("DROP INDEX uq_policy_bundles_one_active"))
+        await connection.execute(
+            text("UPDATE policy_bundles SET activated_at = NULL, activated_by = NULL")
+        )
+        older = await _insert_bundle(connection, world.a.tenant_id, 2, "ACTIVE")
+        newest = await _insert_bundle(connection, world.a.tenant_id, 3, "ACTIVE")
+        draft = await _insert_bundle(connection, world.a.tenant_id, 4, "DRAFT", approved_by=None)
+
+        await connection.execute(text(str(migration.BACKFILL_ACTIVATED)))
+        await connection.execute(text(str(migration.RETIRE_SUPERSEDED_ACTIVE)))
+        rows = {
+            row.id: row
+            for row in (
+                await connection.execute(
+                    text(
+                        "SELECT id, lifecycle_state, activated_at, activated_by FROM policy_bundles"
+                        " WHERE id IN (:o, :n, :d)"
+                    ),
+                    {"o": older, "n": newest, "d": draft},
+                )
+            ).all()
+        }
+
+    activated = (APPROVED_ON, "synthetic-fixture")
+    assert (rows[older].lifecycle_state, rows[older].activated_at, rows[older].activated_by) == (
+        "RETIRED",
+        *activated,
+    )
+    assert (rows[newest].activated_at, rows[newest].activated_by) == activated
+    assert (rows[draft].activated_at, rows[draft].activated_by) == (None, None)
+
+
 async def test_data_step_keeps_the_highest_active_version_per_tenant(
     connection: AsyncConnection, world: World
 ) -> None:
@@ -709,6 +749,22 @@ async def test_owner_may_write_graph_rows_of_an_active_bundle(
         result = await connection.execute(text(UPDATES["policy_nodes"]), {"id": graph.node_a})
 
     assert result.rowcount == 1
+
+
+async def test_a_role_that_is_only_a_member_of_the_api_role_is_checked_too(
+    connection: AsyncConnection, world: World
+) -> None:
+    # Deny by default: a personal login granted marketing_app is not the owner, so it cannot
+    # write a frozen bundle's graph either. The role is rolled back with the test.
+    bundle = await _bundle(connection, world.a, 2, BundleLifecycleState.READY)
+    graph = await _graph(connection, world.a.tenant_id, bundle)
+    async with as_tenant_owner(connection, world.a.tenant_id):
+        await connection.execute(text(f"CREATE ROLE {MEMBER_ROLE} NOLOGIN IN ROLE {APP_ROLE}"))
+        await connection.execute(text(f"GRANT {MEMBER_ROLE} TO current_user"))
+    await connection.execute(text(f"SET LOCAL ROLE {MEMBER_ROLE}"))
+
+    async with rejected(connection, "policy graph is frozen"):
+        await _insert_spare_node(connection, graph)
 
 
 async def test_graph_rows_cannot_move_into_a_frozen_bundle(

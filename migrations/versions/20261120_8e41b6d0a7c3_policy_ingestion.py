@@ -11,8 +11,8 @@ Expand-only. What it adds:
   This is what validation already used ("highest ACTIVE version"), so behaviour does not change.
 - policy_rule_wordings (F40: wording per language) backfilled from policy_rules.exact_wording and
   prohibited_phrases, and policy_audit_events (insert-only for the API: SELECT, INSERT grants).
-- policy_graph_frozen(): a trigger that stops the API and worker roles from writing graph rows of
-  a bundle that is not DRAFT or REVIEW. The owner (import and seed scripts) is exempt.
+- policy_graph_frozen(): a trigger that stops every role but the tables' owner (import and seed
+  scripts) from writing graph rows of a bundle that is not DRAFT or REVIEW.
 - policy_sources: upload_id and extraction queue columns. outbox_events.job_id and
   media_uploads.study_id become nullable, each with a CHECK that says who may omit it.
 - lease_policy_sources() and lease_policy_builds(): SECURITY DEFINER, ids only, EXECUTE for the
@@ -73,6 +73,16 @@ REVIEWED_WHEN_DECIDED = (
 JOB_ID_CHECK = "job_id IS NOT NULL OR left(event_type, 14) = 'policy_bundle.'"
 STUDY_CHECK = "purpose <> 'creative_media' OR study_id IS NOT NULL"
 EXTRACTION_CHECK = "extraction_state = 'EXTRACTED' OR upload_id IS NOT NULL"
+
+# Bundles made ACTIVE before this revision never had activated_at set, and rollback only returns
+# to a bundle that was active before. Runs before RETIRE_SUPERSEDED_ACTIVE, so every bundle that
+# is ACTIVE now (including those about to be retired) counts as activated when it was approved.
+# Exported for the tests.
+BACKFILL_ACTIVATED = """
+UPDATE policy_bundles
+SET activated_at = approved_at, activated_by = COALESCE(activated_by, approved_by)
+WHERE lifecycle_state = 'ACTIVE' AND activated_at IS NULL
+"""
 
 # Keeps the highest ACTIVE version per tenant and retires the other ACTIVE bundles. Exported for
 # the tests. The downgrade does not restore the old states: which bundles were ACTIVE is lost.
@@ -136,7 +146,12 @@ DECLARE
     bundle uuid;
     state text;
 BEGIN
-    IF current_user NOT IN ('{APP_ROLE}', '{WORKER_ROLE}') THEN
+    -- Deny by default: only the table's owner (migrations, import and seed scripts) skips the
+    -- check. Every other role is checked, including a login that is only a member of the API or
+    -- worker role.
+    IF current_user = (
+        SELECT pg_get_userbyid(relowner) FROM pg_catalog.pg_class WHERE oid = TG_RELID
+    ) THEN
         IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
         RETURN NEW;
     END IF;
@@ -376,6 +391,7 @@ def _upgrade_bundles() -> None:
     op.create_check_constraint("revision_positive", "policy_bundles", "revision >= 1")
     op.create_check_constraint("approved_states_have_approver", "policy_bundles", APPROVER_CHECK)
     with _owner_sees_all_rows("policy_bundles"):
+        op.execute(BACKFILL_ACTIVATED)
         op.execute(RETIRE_SUPERSEDED_ACTIVE)
     op.create_index(
         "uq_policy_bundles_one_active",
