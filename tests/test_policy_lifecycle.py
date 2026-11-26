@@ -632,7 +632,8 @@ async def test_policy_admins_cannot_approve_or_reject(env: Env) -> None:
         await env.move(draft, Command.REJECT, env.admin, TransitionRequest(reason="[SYNTHETIC]"))
 
 
-async def test_approvers_cannot_submit_or_review_items(env: Env) -> None:
+async def test_approvers_cannot_submit_or_review_a_clause(env: Env) -> None:
+    # Clauses, rules, edges and quoted wording are the administrator's review (D-16).
     draft = await env.draft()
 
     with pytest.raises(PermissionDeniedError, match="cannot do this"):
@@ -648,6 +649,73 @@ async def test_approvers_cannot_submit_or_review_items(env: Env) -> None:
             ReviewDecision(decision="APPROVED"),
             TEST_MAX_ITEMS,
         )
+
+
+async def add_exception(env: Env, draft: Draft) -> UUID:
+    node = await bundles.add_node(
+        env.db,
+        env.admin,
+        draft.id,
+        draft.revision,
+        NodeCreate(
+            node_key="EXC-1",
+            node_type=PolicyNodeType.EXCEPTION,
+            text="[SYNTHETIC] Unless the post only names the study.",
+        ),
+        TEST_MAX_ITEMS,
+    )
+    draft.revision += 1
+    return node.id
+
+
+async def review(env: Env, draft: Draft, ctx: TenantContext, node_id: UUID) -> None:
+    await bundles.review_item(
+        env.db,
+        ctx,
+        draft.id,
+        draft.revision,
+        ReviewItemKind.NODE,
+        node_id,
+        ReviewDecision(decision="APPROVED"),
+        TEST_MAX_ITEMS,
+    )
+    draft.revision += 1
+
+
+# D-16: the policy owner approves exceptions and disclosures; the administrator drafts them.
+async def test_an_approver_reviews_an_exception_and_the_audit_names_the_role(env: Env) -> None:
+    draft = await env.draft()
+    exception_id = await add_exception(env, draft)
+
+    await review(env, draft, env.approver, exception_id)
+
+    node = await env.db.get(PolicyNode, exception_id, populate_existing=True)
+    assert node is not None
+    assert (node.review_state, node.reviewed_by) == (ReviewState.APPROVED, APPROVER)
+    event = await env.db.scalar(
+        select(PolicyAuditEvent)
+        .where(
+            PolicyAuditEvent.policy_bundle_id == draft.id,
+            PolicyAuditEvent.action == PolicyAuditAction.REVIEW,
+        )
+        .order_by(PolicyAuditEvent.created_at.desc(), PolicyAuditEvent.id)
+        .limit(1)
+    )
+    assert event is not None
+    assert (event.actor, event.details["actor_roles"], event.details["item_id"]) == (
+        APPROVER,
+        ["policy_approver"],
+        str(exception_id),
+    )
+
+
+@pytest.mark.parametrize("role", [Role.POLICY_ADMIN, Role.CREATOR, Role.REVIEWER, Role.ADMIN])
+async def test_only_an_approver_reviews_an_exception(env: Env, role: Role) -> None:
+    draft = await env.draft()
+    exception_id = await add_exception(env, draft)
+
+    with pytest.raises(PermissionDeniedError, match="cannot do this"):
+        await review(env, draft, ctx_for(env.tenant_id, "caller-a", role), exception_id)
 
 
 async def test_an_approver_can_send_a_bundle_back_to_draft(env: Env) -> None:

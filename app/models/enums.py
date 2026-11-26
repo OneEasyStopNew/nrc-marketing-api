@@ -139,8 +139,21 @@ class SourceExtractionState(StrEnum):
 
 
 class WordingKind(StrEnum):
+    # Required wording quoted from a source: a regulatory or platform quotation, or wording that
+    # is the same for every study. Checked word for word against its source clause.
     EXACT_WORDING = "EXACT_WORDING"
     PROHIBITED_PHRASE = "PROHIBITED_PHRASE"
+    # Policy bundle v0.3 (decided 26 Nov, option A): the rule needs the study's own approved
+    # wording. The bundle holds only a pointer (StudyWordingSource), never the text or its
+    # approval; the study snapshot (NRC-2) supplies both and validation (NRC-7) checks them.
+    STUDY_APPROVED_WORDING = "STUDY_APPROVED_WORDING"
+
+
+class StudyWordingSource(StrEnum):
+    """Where a STUDY_APPROVED_WORDING points: the text of such a wording (v0.3 `source`)."""
+
+    REQUIRED_DISCLOSURES = "study_snapshot.required_disclosures"
+    APPROVED_PHRASES = "study_snapshot.approved_phrases"
 
 
 class PolicyEdgeType(StrEnum):

@@ -423,6 +423,10 @@ async def add_policy_wording(
 @router.post(
     "/policy-bundles/{policy_bundle_id}/review-decisions",
     summary="Approve or reject one node, edge or wording (draft or in review)",
+    description="Exception and disclosure nodes and STUDY_APPROVED_WORDING wordings are "
+    "reviewed by the policy owner (policy:approve, role policy_approver; policy bundle D-16). "
+    "Every other item is reviewed with policy:manage (role policy_admin). A caller without the "
+    "item's capability gets 403. Creating and editing items always needs policy:manage.",
     responses=_EDIT_ERRORS,
 )
 async def decide_policy_item(

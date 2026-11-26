@@ -2,10 +2,10 @@
 # its lifecycle (NRC-4).
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field, StringConstraints
+from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from app.models.enums import (
     BundleLifecycleState,
@@ -26,6 +26,7 @@ from app.models.enums import (
     ReviewState,
     Severity,
     SourceExtractionState,
+    StudyWordingSource,
     ValidationInputKind,
     WordingKind,
 )
@@ -132,9 +133,33 @@ class EdgeCreate(RequestModel):
 class WordingCreate(RequestModel):
     language: PolicyLanguage = PolicyLanguage.EN
     kind: WordingKind
-    text: Text = Field(description="Exact required wording, or one prohibited phrase.")
+    text: Text = Field(
+        description="EXACT_WORDING: required wording quoted word for word from a source clause "
+        "(regulatory or platform text, or wording that is the same for every study). "
+        "PROHIBITED_PHRASE: one phrase. STUDY_APPROVED_WORDING: where the study's approved "
+        "wording comes from, one of "
+        + ", ".join(f"`{source.value}`" for source in StudyWordingSource)
+        + "; the bundle never holds that wording's text, which comes from the study snapshot."
+    )
     source_clause_id: UUID | None = None
     translation_of_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _study_wording_is_a_pointer(self) -> Self:
+        # A pointer has no text of its own to quote, so it names no clause and translates nothing.
+        if self.kind is not WordingKind.STUDY_APPROVED_WORDING:
+            return self
+        if self.text not in set(StudyWordingSource):
+            raise ValueError(
+                "text must name where the study's approved wording comes from: "
+                + ", ".join(source.value for source in StudyWordingSource)
+            )
+        if self.source_clause_id is not None or self.translation_of_id is not None:
+            raise ValueError(
+                "Study-approved wording points at the study snapshot; it cites no source clause "
+                "and is not a translation."
+            )
+        return self
 
 
 class ReviewDecision(RequestModel):

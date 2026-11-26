@@ -407,7 +407,9 @@ def check_exact_wording(
     snapshot: BundleSnapshot, languages: Collection[PolicyLanguage]
 ) -> list[Issue]:
     # AC7: required wording is the source's own words, never a paraphrase. It must appear in the
-    # clause it cites or, without one, in a source clause that supports its rule.
+    # clause it cites or, without one, in a source clause that supports its rule. Only
+    # EXACT_WORDING is quoted from a source; STUDY_APPROVED_WORDING points at the study's own
+    # approved wording, which is checked against its approval record, never a clause (v0.3).
     graph = _Graph(snapshot)
     rules = {rule.id: rule for rule in graph.rules}
     issues = []

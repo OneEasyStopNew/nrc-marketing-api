@@ -4966,6 +4966,7 @@
           "policy"
         ],
         "summary": "Approve or reject one node, edge or wording (draft or in review)",
+        "description": "Exception and disclosure nodes and STUDY_APPROVED_WORDING wordings are reviewed by the policy owner (policy:approve, role policy_approver; policy bundle D-16). Every other item is reviewed with policy:manage (role policy_admin). A caller without the item's capability gets 403. Creating and editing items always needs policy:manage.",
         "operationId": "decide_policy_item",
         "security": [
           {
@@ -10870,7 +10871,7 @@
             "minLength": 1,
             "pattern": "\\S",
             "title": "Text",
-            "description": "Exact required wording, or one prohibited phrase."
+            "description": "EXACT_WORDING: required wording quoted word for word from a source clause (regulatory or platform text, or wording that is the same for every study). PROHIBITED_PHRASE: one phrase. STUDY_APPROVED_WORDING: where the study's approved wording comes from, one of `study_snapshot.required_disclosures`, `study_snapshot.approved_phrases`; the bundle never holds that wording's text, which comes from the study snapshot."
           },
           "source_clause_id": {
             "anyOf": [
@@ -10909,7 +10910,8 @@
         "type": "string",
         "enum": [
           "EXACT_WORDING",
-          "PROHIBITED_PHRASE"
+          "PROHIBITED_PHRASE",
+          "STUDY_APPROVED_WORDING"
         ],
         "title": "WordingKind"
       }

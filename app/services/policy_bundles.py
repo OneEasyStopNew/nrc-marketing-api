@@ -161,6 +161,19 @@ _REVIEW_MODELS: Final[
     ReviewItemKind.EDGE: PolicyEdge,
     ReviewItemKind.WORDING: PolicyRuleWording,
 }
+# D-16: the policy owner approves exceptions and disclosures (policy:approve); every other item
+# is reviewed by the policy administrator who drafts the bundle (policy:manage). Creating and
+# editing any item stays policy:manage.
+OWNER_REVIEWED_NODES: Final = frozenset({PolicyNodeType.EXCEPTION, PolicyNodeType.DISCLOSURE})
+
+
+def review_capability(item: PolicyNode | PolicyEdge | PolicyRuleWording) -> Capability:
+    owner_reviews = (isinstance(item, PolicyNode) and item.node_type in OWNER_REVIEWED_NODES) or (
+        isinstance(item, PolicyRuleWording) and item.kind is WordingKind.STUDY_APPROVED_WORDING
+    )
+    return Capability.POLICY_APPROVE if owner_reviews else Capability.POLICY_MANAGE
+
+
 # Interpretations stand in for a source clause; their reference names the node instead.
 INTERPRETATION_SOURCE: Final = "interpretation"
 
@@ -787,9 +800,11 @@ async def review_item(
     max_items: int,
 ) -> None:
     """Approve or reject one node, edge or wording while the bundle is a draft or in review."""
-    _require(ctx, frozenset({Capability.POLICY_MANAGE}))
+    # Outsiders are refused before any lookup; the exact capability depends on the item.
+    _require(ctx, frozenset({Capability.POLICY_MANAGE, Capability.POLICY_APPROVE}))
     bundle = await _open(db, ctx, bundle_id, revision, REVIEWABLE)
     item = await _in_bundle(db, _REVIEW_MODELS[kind], bundle, item_id, kind.value.capitalize())
+    _require(ctx, frozenset({review_capability(item)}))
     decision = ReviewState(body.decision)
     if decision is not ReviewState.REJECTED:
         await _room_to_revive(db, bundle, item, max_items)

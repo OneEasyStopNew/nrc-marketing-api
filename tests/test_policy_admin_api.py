@@ -483,10 +483,9 @@ async def test_an_approver_cannot_edit_or_register(api: Api, connection: AsyncCo
         api.call("POST", f"{path}/nodes", APPROVER, json=node_body(), if_match=1),
         api.call("POST", f"{path}/rules", APPROVER, json=RULE_BODY, if_match=1),
         api.call("POST", f"{path}/transitions", APPROVER, json={"command": "submit"}, if_match=1),
-        api.call(
-            "POST", f"{path}/review-decisions", APPROVER, json=WRITE_BODIES["review"], if_match=1
-        ),
     ]
+    # Which items an approver may review depends on the item (D-16): see the review tests in
+    # test_policy_lifecycle.py, which use real items.
     for attempt in attempts:
         response = await attempt
         assert response.status_code == 403, response.text
@@ -914,6 +913,53 @@ async def test_a_node_key_at_the_length_limit_is_accepted(
     )
 
     assert response.status_code == 201, response.text
+
+
+async def test_study_approved_wording_is_a_pointer_without_text_or_clause(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    # v0.3, option A: the bundle names where the study's approved wording comes from; the text and
+    # its approval record live in the study snapshot (NRC-2). It passes the checks with no clause.
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+    graph = await draft_graph(api, bundle["id"], clause_id)
+    wordings = f"/policy-bundles/{bundle['id']}/rules/{graph['rule']}/wordings"
+    pointer = {"kind": "STUDY_APPROVED_WORDING", "text": "study_snapshot.required_disclosures"}
+
+    created = await api.call("POST", wordings, json=pointer, if_match=graph["revision"])
+    checks = await api.ok(api.call("GET", f"/policy-bundles/{bundle['id']}/checks"))
+
+    assert created.status_code == 201, created.text
+    assert (created.json()["kind"], created.json()["source_clause_id"]) == (
+        "STUDY_APPROVED_WORDING",
+        None,
+    )
+    codes = {issue["code"] for issue in checks.json()["issues"]}
+    assert "EXACT_WORDING_NOT_IN_SOURCE" not in codes
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"text": "This is a research study."},
+        {"text": "study_snapshot.facts"},
+        {"source_clause_id": SOME_ID},
+        {"translation_of_id": SOME_ID},
+    ],
+)
+async def test_study_approved_wording_must_be_a_bare_pointer(
+    api: Api, changes: dict[str, Any]
+) -> None:
+    bundle = await new_bundle(api)
+    body = {"kind": "STUDY_APPROVED_WORDING", "text": "study_snapshot.approved_phrases"} | changes
+
+    response = await api.call(
+        "POST", f"/policy-bundles/{bundle['id']}/rules/{SOME_ID}/wordings", json=body, if_match=1
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "VALIDATION_FAILED"
 
 
 # Conditions use the same enums as the import script: a typo is refused, not a rule that never

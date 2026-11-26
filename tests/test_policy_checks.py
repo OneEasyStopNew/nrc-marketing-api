@@ -12,6 +12,7 @@ from app.models.enums import (
     PolicyLanguage,
     PolicyNodeType,
     ReviewState,
+    StudyWordingSource,
     WordingKind,
 )
 from app.services.policy_checks import (
@@ -357,6 +358,31 @@ def test_the_same_requirement_twice_is_a_duplicate_obligation() -> None:
 def test_exact_wording_not_in_the_source_is_reported() -> None:
     graph = Graph()
     graph.wordings[0] = replace(graph.wordings[0], text="This is a clinical research study.")
+
+    assert graph.issues() == {(CheckCode.EXACT_WORDING_NOT_IN_SOURCE, "rule:REC-01")}
+
+
+def test_study_approved_wording_needs_no_source_clause() -> None:
+    # v0.3: a study disclosure is checked against its own approval record, not a source clause.
+    graph = Graph()
+    graph.wordings[0] = replace(
+        graph.wordings[0],
+        kind=WordingKind.STUDY_APPROVED_WORDING,
+        text=StudyWordingSource.REQUIRED_DISCLOSURES.value,
+    )
+
+    assert graph.issues() == set()
+
+
+def test_a_regulatory_quotation_still_needs_its_source_clause() -> None:
+    # Next to a study wording, the rule's quotation is still checked word for word.
+    graph = Graph()
+    graph.wording(
+        graph.rules[0],
+        WordingKind.STUDY_APPROVED_WORDING,
+        StudyWordingSource.APPROVED_PHRASES.value,
+    )
+    graph.wordings[0] = replace(graph.wordings[0], text="Taking part is always paid.")
 
     assert graph.issues() == {(CheckCode.EXACT_WORDING_NOT_IN_SOURCE, "rule:REC-01")}
 
