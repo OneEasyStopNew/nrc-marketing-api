@@ -11,6 +11,7 @@ import os
 import time
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -30,7 +31,7 @@ from jwt.algorithms import RSAAlgorithm
 from PIL import Image
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import Connection, Row, event, select, text
+from sqlalchemy import Connection, Row, event, func, insert, select, text
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncSession,
@@ -57,7 +58,7 @@ from app.models import (
     StudySnapshot,
     Tenant,
 )
-from app.models.enums import Language, RecruitmentStatus
+from app.models.enums import BundleLifecycleState, Language, RecruitmentStatus
 from app.models.jobs import ReservationState
 from app.services.providers.base import (
     FetchedImage,
@@ -68,6 +69,7 @@ from app.services.providers.base import (
     SubmitResult,
 )
 from app.services.providers.simulator import SimulatedImageProvider
+from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
 from scripts.seed_demo import DEMO_POLICY_NAME, SYNTHETIC_FACTS, demo_policy_rules
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,6 +115,7 @@ def app_environment(test_env: IntegrationEnv) -> Iterator[None]:
         # A developer's .env may switch these on; tests always start from production behaviour.
         patch.setenv("DEMO_STUBS", "false")
         patch.setenv("DEV_JWKS_FILE", "")
+        patch.setenv("EMBEDDING_MODE", "off")
         # Local SeaweedFS; these credentials only open that container, not AWS.
         patch.setenv("AWS_S3_BUCKET", BUCKET)
         patch.setenv("AWS_ENDPOINT_URL_S3", ENDPOINT)
@@ -198,6 +201,7 @@ async def seed_tenant(
     members: dict[str, list[str]],
     with_policy: bool,
     display_names: Mapping[str, str] | None = None,
+    with_graph: bool = True,
 ) -> SeededTenant:
     # Tenant with one recruiting and one closed synthetic study; every member gets both.
     tenant_id, study_id, closed_study_id, snapshot_id = uuid4(), uuid4(), uuid4(), uuid4()
@@ -251,8 +255,14 @@ async def seed_tenant(
                 is_synthetic=True,
                 approved_by="synthetic-fixture",
                 approved_at=datetime(2026, 11, 1, tzinfo=UTC),
+                lifecycle_state=BundleLifecycleState.ACTIVE,
             )
         )
+        await db.flush()
+        # With its rulebook graph, like seed_demo and the staging deploy step: without one every
+        # validation needs review (no policy context), so a clean brief could never pass.
+        if with_graph:
+            await import_policy_graph(db, tenant_id, policy_bundle_id, load_synthetic_graph())
     await db.flush()
     return SeededTenant(tenant_id, study_id, closed_study_id, snapshot_id, policy_bundle_id)
 
@@ -317,6 +327,64 @@ async def as_role(conn: AsyncConnection, role: str) -> None:
     await conn.execute(text(f"SET LOCAL ROLE {role}"))
 
 
+async def bind_test_tenant(conn: AsyncConnection, tenant_id: UUID) -> None:
+    # The tenant for the test's own statements, as bind_tenant does for sessions.
+    await conn.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_id)})
+
+
+@asynccontextmanager
+async def as_tenant_owner(conn: AsyncConnection, tenant_id: UUID) -> AsyncIterator[None]:
+    # Owner scripts (seed, policy graph import) write as the owner with the tenant bound; the
+    # test's statements go back to the API role afterwards.
+    await conn.execute(text("RESET ROLE"))
+    await bind_test_tenant(conn, tenant_id)
+    try:
+        yield
+    finally:
+        await conn.execute(text(f"SET LOCAL ROLE {APP_ROLE}"))
+
+
+@asynccontextmanager
+async def owner_session(conn: AsyncConnection, tenant_id: UUID) -> AsyncIterator[AsyncSession]:
+    # What owner scripts (seed, policy graph import) do: the owner role, the tenant bound, one
+    # transaction (a savepoint of the test's).
+    async with as_tenant_owner(conn, tenant_id), _session(conn) as db:
+        await bind_tenant(db, tenant_id)
+        yield db
+        await db.commit()
+
+
+async def count_rows(conn: AsyncConnection, model: type[Any]) -> int:
+    return int(await conn.scalar(select(func.count()).select_from(model)) or 0)
+
+
+async def add_policy_bundle(
+    conn: AsyncConnection,
+    tenant_id: UUID,
+    version: int,
+    state: BundleLifecycleState = BundleLifecycleState.ACTIVE,
+    rules: list[dict[str, object]] | None = None,
+) -> UUID:
+    # A synthetic bundle without a graph (no JSONB rules unless given), written as the owner by
+    # the caller.
+    bundle_id = uuid4()
+    await conn.execute(
+        insert(PolicyBundle).values(
+            id=bundle_id,
+            tenant_id=tenant_id,
+            version=version,
+            name=f"[SYNTHETIC] Policy v{version}",
+            source_ref="synthetic:test-fixture",
+            rules=rules or [],
+            is_synthetic=True,
+            approved_by="synthetic-fixture",
+            approved_at=datetime(2026, 11, 17, tzinfo=UTC),
+            lifecycle_state=state,
+        )
+    )
+    return bundle_id
+
+
 @pytest.fixture
 def sessions(connection: AsyncConnection) -> Sessions:
     # The worker's sessions: marketing_worker on the test's connection.
@@ -330,7 +398,14 @@ def sessions(connection: AsyncConnection) -> Sessions:
 
 
 @pytest.fixture
-async def world(connection: AsyncConnection) -> World:
+def seed_graph() -> bool:
+    # Whether tenant A's bundle gets the synthetic graph. Modules that write their own graph rows
+    # into that bundle override this with False.
+    return True
+
+
+@pytest.fixture
+async def world(connection: AsyncConnection, seed_graph: bool) -> World:
     async with _session(connection) as seed:
         a = await seed_tenant(
             seed,
@@ -338,6 +413,7 @@ async def world(connection: AsyncConnection) -> World:
             members={"creator-a": ["creator"], "reviewer-a": ["reviewer"]},
             with_policy=True,
             display_names={"creator-a": CREATOR_A_NAME},
+            with_graph=seed_graph,
         )
         b = await seed_tenant(
             seed, name="Tenant B", members={"creator-b": ["creator"]}, with_policy=False

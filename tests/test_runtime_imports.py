@@ -4,6 +4,8 @@ import re
 import subprocess
 import sys
 
+import pytest
+
 from tests.conftest import ROOT
 
 # Blocks every dev-only package, then imports each entry point in a fresh interpreter.
@@ -25,7 +27,11 @@ sys.meta_path.insert(0, BlockDevOnly())
 import app.main
 import app.workers.connector
 import app.services.providers.higgsfield
+import app.services.providers.bedrock_embeddings
+import app.services.policy_index
 import app.services.storage
+import scripts.build_policy_index
+import scripts.eval_retrieval
 import scripts.list_unknown_jobs
 import scripts.higgsfield_smoke
 """
@@ -50,9 +56,13 @@ def test_no_test_module_imports_another() -> None:
     assert offenders == []
 
 
-def test_api_process_does_not_load_the_provider_adapter() -> None:
-    # Provider calls run only in the worker; the API never needs the adapter, boto3 or its client.
-    script = "import sys, app.main; print('app.services.providers.higgsfield' in sys.modules)"
+@pytest.mark.parametrize(
+    "module",
+    ["app.services.providers.higgsfield", "app.services.providers.bedrock_embeddings"],
+)
+def test_api_process_does_not_load_the_provider_adapter(module: str) -> None:
+    # Provider calls run only in the worker; the API never needs an adapter or its client.
+    script = f"import sys, app.main; print({module!r} in sys.modules)"
     result = subprocess.run(  # noqa: S603  fixed interpreter and script, no user input
         [sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, check=False
     )

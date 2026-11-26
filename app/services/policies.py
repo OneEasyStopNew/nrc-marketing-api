@@ -1,4 +1,4 @@
-# The tenant's active policy bundle: the highest approved version.
+# The tenant's active policy bundle: the highest version whose lifecycle state is ACTIVE.
 
 from uuid import UUID
 
@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.access import TenantContext
 from app.core.errors import NotFoundError
 from app.models import PolicyBundle
+from app.models.enums import BundleLifecycleState
 from app.schemas.policies import PolicyBundleRead, PolicyRule, PolicySummary
 
 
@@ -19,7 +20,10 @@ async def get_active_policy(db: AsyncSession, ctx: TenantContext) -> PolicyBundl
     """
     bundle = await db.scalar(
         select(PolicyBundle)
-        .where(PolicyBundle.tenant_id == ctx.tenant_id)
+        .where(
+            PolicyBundle.tenant_id == ctx.tenant_id,
+            PolicyBundle.lifecycle_state == BundleLifecycleState.ACTIVE,
+        )
         .order_by(PolicyBundle.version.desc())
         .limit(1)
     )
@@ -48,7 +52,10 @@ async def get_active_policy_summary(db: AsyncSession, tenant_id: UUID) -> Policy
                 PolicyBundle.is_synthetic,
                 func.jsonb_array_length(PolicyBundle.rules).label("rule_count"),
             )
-            .where(PolicyBundle.tenant_id == tenant_id)
+            .where(
+                PolicyBundle.tenant_id == tenant_id,
+                PolicyBundle.lifecycle_state == BundleLifecycleState.ACTIVE,
+            )
             .order_by(PolicyBundle.version.desc())
             .limit(1)
         )

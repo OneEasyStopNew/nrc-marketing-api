@@ -27,7 +27,8 @@ from app.services.providers.higgsfield import (
     missing_live_settings,
 )
 from app.services.providers.pinned_models import PINNED_MODELS, max_brief_chars
-from app.workers.connector import WorkerConfigError, build_providers, provider_key
+from app.workers.common import WorkerConfigError
+from app.workers.connector import build_providers, provider_key
 from tests.conftest import JOBS, AuthHeaders, World, _creative
 
 SOUL = "higgsfield-ai/soul/v2/standard"
