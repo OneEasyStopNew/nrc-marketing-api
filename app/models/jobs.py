@@ -27,6 +27,9 @@ FAILURE_MESSAGE_MAX_CHARS = 500
 # job_operator_actions column sizes; the operator script validates input against them.
 OPERATOR_MAX_CHARS = 128
 REASON_MAX_CHARS = 500
+# Outbox events that announce a change to a domain object and so belong to no job. A prefix up to
+# the first dot: "policy_bundle" alone or "policy_bundleX.y" is not one.
+JOB_ID_UNLESS_DOMAIN_EVENT = "job_id IS NOT NULL OR event_type ~ '^(policy_bundle|study|draft)\\.'"
 
 
 class ReservationState(StrEnum):
@@ -132,11 +135,9 @@ class OutboxEvent(Base):
     __tablename__ = "outbox_events"
     __table_args__ = (
         ForeignKeyConstraint(["tenant_id", "job_id"], ["jobs.tenant_id", "jobs.id"]),
-        # Only policy bundle events (NRC-4) have no job. left() rather than LIKE: no escaping.
-        CheckConstraint(
-            "job_id IS NOT NULL OR left(event_type, 14) = 'policy_bundle.'",
-            name="job_id_unless_policy_bundle",
-        ),
+        # Domain change events have no job: policy bundles (NRC-4), studies and drafts (NRC-2).
+        # Every other event belongs to a job.
+        CheckConstraint(JOB_ID_UNLESS_DOMAIN_EVENT, name="job_id_unless_domain_event"),
         # The lease filters by event type first, so unhandled types are never scanned.
         Index(
             "ix_outbox_events_due",
@@ -148,7 +149,7 @@ class OutboxEvent(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID]
-    # NULL only for policy_bundle.* events (CHECK job_id_unless_policy_bundle).
+    # NULL only for domain change events (CHECK job_id_unless_domain_event).
     job_id: Mapped[UUID | None]
     event_type: Mapped[str] = mapped_column(String(64))
     # Ids only: never prompts, URLs or provider responses.

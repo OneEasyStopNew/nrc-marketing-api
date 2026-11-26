@@ -975,8 +975,11 @@ async def _outbox(connection: AsyncConnection, tenant_id: UUID, event_type: str)
     )
 
 
-@pytest.mark.parametrize("event_type", ["policy_bundle.activated", "policy_bundle.retired"])
-async def test_policy_bundle_events_have_no_job(
+@pytest.mark.parametrize(
+    "event_type",
+    ["policy_bundle.activated", "policy_bundle.retired", "study.changed", "draft.changed"],
+)
+async def test_domain_change_events_have_no_job(
     connection: AsyncConnection, world: World, event_type: str
 ) -> None:
     await bind_test_tenant(connection, world.a.tenant_id)
@@ -987,14 +990,24 @@ async def test_policy_bundle_events_have_no_job(
 
 
 @pytest.mark.parametrize(
-    "event_type", ["job.run", "asset.generated", "policy_bundle", "policy_bundleX"]
+    "event_type",
+    [
+        "job.run",
+        "asset.generated",
+        "policy_bundle",
+        "policy_bundleX.activated",
+        "study",
+        "studies.changed",
+        "x.study.changed",
+        "draft_x.changed",
+    ],
 )
 async def test_other_events_still_need_a_job(
     connection: AsyncConnection, world: World, event_type: str
 ) -> None:
     await bind_test_tenant(connection, world.a.tenant_id)
 
-    async with rejected(connection, "ck_outbox_events_job_id_unless_policy_bundle"):
+    async with rejected(connection, "ck_outbox_events_job_id_unless_domain_event"):
         await _outbox(connection, world.a.tenant_id, event_type)
 
 

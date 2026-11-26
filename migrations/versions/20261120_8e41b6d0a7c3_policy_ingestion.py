@@ -70,7 +70,8 @@ APPROVED_MATCHES_REVIEW_STATE = "approved = (review_state = 'APPROVED')"
 REVIEWED_WHEN_DECIDED = (
     "review_state = 'PROPOSED' OR (reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL)"
 )
-JOB_ID_CHECK = "job_id IS NOT NULL OR left(event_type, 14) = 'policy_bundle.'"
+# Domain change events (policy bundles; studies and drafts, NRC-2) belong to no job.
+JOB_ID_CHECK = "job_id IS NOT NULL OR event_type ~ '^(policy_bundle|study|draft)\\.'"
 STUDY_CHECK = "purpose <> 'creative_media' OR study_id IS NOT NULL"
 EXTRACTION_CHECK = "extraction_state = 'EXTRACTED' OR upload_id IS NOT NULL"
 
@@ -632,7 +633,7 @@ def upgrade() -> None:
     op.alter_column("media_uploads", "study_id", nullable=True)
     op.create_check_constraint("creative_media_has_study", "media_uploads", STUDY_CHECK)
     op.alter_column("outbox_events", "job_id", nullable=True)
-    op.create_check_constraint("job_id_unless_policy_bundle", "outbox_events", JOB_ID_CHECK)
+    op.create_check_constraint("job_id_unless_domain_event", "outbox_events", JOB_ID_CHECK)
 
     for table in ("policy_nodes", "policy_edges"):
         _add_review_columns(table)
@@ -685,7 +686,7 @@ def downgrade() -> None:
     # Local development only. States are not restored: bundles that the single-ACTIVE data step
     # retired stay RETIRED, and drafts get a placeholder approver below so approved_by can be
     # NOT NULL again. Rows that only exist because of this revision (policy-source uploads,
-    # policy_bundle.* outbox events) are deleted so the old NOT NULLs can come back.
+    # outbox events without a job) are deleted so the old NOT NULLs can come back.
     for table in WORKER_GRANTS:
         op.execute(f"REVOKE ALL ON {table} FROM {WORKER_ROLE}")
     for table in APP_READ_ONLY_BEFORE:
@@ -729,7 +730,7 @@ def downgrade() -> None:
         _drop_review_columns(table)
 
     op.drop_constraint(
-        op.f("ck_outbox_events_job_id_unless_policy_bundle"), "outbox_events", "check"
+        op.f("ck_outbox_events_job_id_unless_domain_event"), "outbox_events", "check"
     )
     with _owner_sees_all_rows("outbox_events", "media_uploads"):
         op.execute("DELETE FROM outbox_events WHERE job_id IS NULL")
