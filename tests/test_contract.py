@@ -10,7 +10,7 @@ from app.models.enums import JobStage
 from app.schemas.assets import AssetRead, MediaPage
 from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeRead, CreativeVersionPage
-from app.schemas.jobs import JobAccepted, JobRead
+from app.schemas.jobs import GenerationModelList, JobAccepted, JobRead
 from app.schemas.policies import GenerationEligibility, PolicyBundleRead
 from app.schemas.policy_evidence import PolicyBundleRulesRead, ValidationContextRead
 from app.schemas.tenancy import ContextRead, MeRead
@@ -29,6 +29,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
         CreativeVersionPage,
         ErrorBody,
         GenerationEligibility,
+        GenerationModelList,
         JobAccepted,
         JobRead,
         MediaPage,

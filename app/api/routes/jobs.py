@@ -16,7 +16,7 @@ from app.api.deps import (
 )
 from app.core.errors import FeatureNotAvailableError
 from app.schemas.common import ErrorBody
-from app.schemas.jobs import CreativeJobCreate, JobAccepted, JobRead
+from app.schemas.jobs import CreativeJobCreate, GenerationModelList, JobAccepted, JobRead
 from app.services import jobs
 
 router = APIRouter(tags=["jobs"])
@@ -36,6 +36,11 @@ router = APIRouter(tags=["jobs"])
             "(details.validation_run_id and status), or Idempotency-Key reused.",
         },
         412: {"model": ErrorBody, "description": "Not the current creative version."},
+        422: {
+            "model": ErrorBody,
+            "description": "Invalid fields, or GENERATION_REQUEST_INVALID: details.reason is "
+            "MODEL_NOT_ENABLED, IMAGE_TEXT_REQUIRED or BRIEF_TOO_LONG (with max_brief_chars).",
+        },
         429: {
             "model": ErrorBody,
             "description": "GENERATION_LIMIT_REACHED: active jobs or daily credits (retryable).",
@@ -63,6 +68,16 @@ async def create_creative_job(
     if replayed:
         response.headers["Idempotent-Replayed"] = "true"
     return accepted
+
+
+@router.get(
+    "/generation-models",
+    summary="Image models a job may choose, with the brief room each leaves (F24)",
+)
+async def list_generation_models(ctx: CreativeReader, settings: SettingsDep) -> GenerationModelList:
+    # Tenant membership is still checked (ctx); the list itself is the same for every tenant.
+    del ctx
+    return jobs.list_generation_models(settings)
 
 
 @router.get(

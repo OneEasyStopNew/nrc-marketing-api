@@ -6,14 +6,17 @@ concepts/requests, concepts/idempotency, concepts/errors, concepts/rate-limits a
 The docs publish no per-model page; the model catalog lives in the account console. The
 only text-to-image request schema found is openapi.json "/higgsfield-ai/soul/standard"
 (prompt, num_images, resolution 2K|4K, aspect_ratio enum), while the quickstart example uses
-"higgsfield-ai/soul/v2/standard" with only a prompt. The model path is therefore configuration
-(HIGGSFIELD_MODEL), and the body sent is {"prompt", "aspect_ratio"} plus an optional resolution.
+"higgsfield-ai/soul/v2/standard" with only a prompt. The models a job may use are therefore
+configuration (HIGGSFIELD_MODEL, HIGGSFIELD_MODELS), each with approved settings in PINNED_MODELS
+(app/services/providers/pinned_models.py). The body sent is {"prompt", "aspect_ratio"} plus
+exactly that model's pinned params (F24); only an unpinned model probed by the smoke script's
+estimate gets HIGGSFIELD_RESOLUTION instead, and submit refuses it.
 
 Live run on 9 Nov 2026 with model "higgsfield-ai/soul/v2/standard": aspect_ratio 1:1 was
 accepted, and the status response carries no cost field, so the cost recorded for a job is its
-/estimate price. A free /estimate probe on 10 Nov 2026 gave the accepted aspect ratios and
-resolutions (SUPPORTED_ASPECT_RATIOS, HIGGSFIELD_RESOLUTION). The remaining TODO(NRC-10)
-markers are what a live account must still confirm.
+/estimate price. Free /estimate probes (10, 16 and 17 Nov 2026) gave each pinned model's
+accepted aspect ratios and prompt limit. The remaining TODO(NRC-10) markers are what a live
+account must still confirm.
 """
 
 import json
@@ -23,7 +26,6 @@ import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal
 from urllib.parse import urlsplit
 
@@ -51,6 +53,7 @@ from app.services.providers.base import (
     ImageRequest,
     OutputFetcher,
     ProviderConfigError,
+    ProviderError,
     ProviderJobStatus,
     ProviderOutcomeUnknownError,
     ProviderOutputError,
@@ -61,6 +64,9 @@ from app.services.providers.base import (
     StatusResult,
     SubmitResult,
 )
+from app.services.providers.pinned_models import (
+    PINNED_MODELS,
+)
 
 # Type stubs are a dev dependency only; never import them at runtime.
 if TYPE_CHECKING:
@@ -70,16 +76,7 @@ logger = logging.getLogger(__name__)
 
 # The Secrets Manager secret's JSON entry; the same name as the setting it fills.
 KEY_ENTRY_NAME: Final = "HIGGSFIELD_API_KEY"
-# Aspect ratios each model accepts, by model id, from a free live /estimate probe; any other
-# ratio is a 400. Probe a new HIGGSFIELD_MODEL with the smoke script's estimate before adding it.
-SUPPORTED_ASPECT_RATIOS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
-    {
-        # 10 Nov 2026.
-        "higgsfield-ai/soul/v2/standard": frozenset(
-            {"9:16", "16:9", "4:3", "3:4", "1:1", "2:3", "3:2"}
-        ),
-    }
-)
+
 
 # Protocol facts from the Higgsfield docs, not tunable: header and id formats.
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[\x21-\x7e]{1,255}$")
@@ -177,6 +174,21 @@ class HiggsfieldIdempotencyConflictError(ProviderOutcomeUnknownError):
     code: ClassVar[str] = "PROVIDER_IDEMPOTENCY_CONFLICT"
 
 
+class HiggsfieldEstimateNotPricedError(ProviderError):
+    # A readable estimate with no usd (token-priced models answer with a pricing description).
+    # Asking again gives the same answer, so the job fails at once, unbilled.
+    code: ClassVar[str] = "ESTIMATE_NOT_PRICED"
+
+
+def _has_no_usd(content: bytes) -> bool:
+    # A JSON object without a usd field, as opposed to a body that can't be read at all.
+    try:
+        body = json.loads(content)
+    except ValueError:
+        return False
+    return isinstance(body, dict) and "usd" not in body
+
+
 class HiggsfieldProvider:
     name = HIGGSFIELD_NAME
     is_simulated = False
@@ -192,9 +204,9 @@ class HiggsfieldProvider:
         fetcher: OutputFetcher,
         allowed_output_hosts: frozenset[str],
         max_output_bytes: int,
-        # Live /estimate probe, 10 Nov 2026, higgsfield-ai/soul/v2/standard: aspect_ratio must be
-        # one of SUPPORTED_ASPECT_RATIOS, resolution one of 720p|1080p (else 400 "is not one of"),
-        # width/height are silently ignored. None omits resolution (model default).
+        # Sent only to a model without pinned settings (the smoke script's estimate probe); a
+        # pinned model always sends its own PINNED_MODELS params. Soul 2 takes 720p|1080p (else
+        # 400 "is not one of"); width/height are silently ignored. None omits resolution.
         resolution: str | None = None,
     ) -> None:
         key_id = api_key_id.get_secret_value()
@@ -266,9 +278,9 @@ class HiggsfieldProvider:
         # Refused rather than left to Higgsfield: a model that silently ignores a parameter (as
         # every probed one does with width/height) would bill for an image of the wrong shape.
         # The free estimate stays allowed, since it is how a model's ratios are probed.
-        if self.model not in SUPPORTED_ASPECT_RATIOS:
+        if self.model not in PINNED_MODELS:
             raise ProviderConfigError(
-                f"Model {self.model!r} has no probed aspect ratios in SUPPORTED_ASPECT_RATIOS"
+                f"Model {self.model!r} has no approved settings in PINNED_MODELS"
             )
         response = await self._send(
             "POST",
@@ -295,16 +307,24 @@ class HiggsfieldProvider:
     def _body(self, request: ImageRequest) -> dict[str, str]:
         # Checked here so neither the estimate nor the submit is sent for an unsupported ratio.
         # An unprobed model only estimates (submit refuses it), so Higgsfield validates that.
-        supported = SUPPORTED_ASPECT_RATIOS.get(self.model)
-        if supported is not None and request.aspect_ratio not in supported:
+        pinned = PINNED_MODELS.get(self.model)
+        if pinned is None:
+            # Unpinned models are only ever estimated (the smoke script's probe).
+            body = {"prompt": request.prompt, "aspect_ratio": request.aspect_ratio}
+            if self._resolution is not None:
+                body["resolution"] = self._resolution
+            return body
+        if request.aspect_ratio not in pinned.aspect_ratios:
             raise ProviderRejectedError(
                 f"The model does not accept aspect ratio {request.aspect_ratio!r}"
             )
-        body = {"prompt": request.prompt, "aspect_ratio": request.aspect_ratio}
-        if self._resolution is not None:
-            body["resolution"] = self._resolution
-        # The API takes no width/height; sizing is by aspect_ratio (and resolution).
-        return body
+        if len(request.prompt) > pinned.max_prompt_chars:
+            raise ProviderRejectedError(
+                f"The prompt is longer than the model's {pinned.max_prompt_chars} characters"
+            )
+        # Pinned settings last, so nothing can override them. The API takes no width/height;
+        # sizing is by aspect_ratio (and the pinned resolution).
+        return {"prompt": request.prompt, "aspect_ratio": request.aspect_ratio, **pinned.params}
 
     async def estimate_cost_usd(self, request: ImageRequest) -> Decimal | None:
         # Not a submission: no Idempotency-Key, and nothing billable can happen.
@@ -318,6 +338,11 @@ class HiggsfieldProvider:
         try:
             return _EstimateResponse.model_validate_json(response.content).usd
         except ValidationError:
+            if _has_no_usd(response.content):
+                raise HiggsfieldEstimateNotPricedError(
+                    "Higgsfield quoted no dollar price for this model, so it cannot run under "
+                    "the per-image cost cap"
+                ) from None
             raise ProviderUnavailableError(
                 "Higgsfield returned an unreadable cost estimate"
             ) from None
@@ -477,8 +502,10 @@ def create_provider(
 ) -> HiggsfieldProvider:
     """The live provider, with its own API client and SSRF-safe output fetcher.
 
-    The worker calls this with settings only (connector.build_providers); the smoke script
-    picks the model and resolution. Close it with aclose().
+    The worker calls this once per enabled model (connector.build_providers), and each provider
+    sends that model's pinned settings. The smoke script may also pick an unpinned model and a
+    resolution to probe its estimate. With no model, HIGGSFIELD_MODEL is used. Close it with
+    aclose().
     """
     # Output downloads run under the worker's lease too.
     fetch_timeout = min(
@@ -527,9 +554,13 @@ def missing_live_settings(settings: Settings) -> list[str]:
     ]
     if missing:
         problems.append(f"missing {', '.join(missing)}")
-    elif settings.higgsfield_model not in SUPPORTED_ASPECT_RATIOS:
-        # Submit refuses such a model, so start-up refuses it before any job is estimated.
-        problems.append("HIGGSFIELD_MODEL is not in SUPPORTED_ASPECT_RATIOS (probe it first)")
+        return problems
+    # Submit refuses an unpinned model, so start-up refuses it before any job is estimated.
+    unpinned = [model for model in settings.enabled_image_models if model not in PINNED_MODELS]
+    if unpinned:
+        problems.append(f"not in PINNED_MODELS (probe them first): {', '.join(unpinned)}")
+    if settings.higgsfield_model not in settings.enabled_image_models:
+        problems.append("HIGGSFIELD_MODEL (the default) is not listed in HIGGSFIELD_MODELS")
     return problems
 
 

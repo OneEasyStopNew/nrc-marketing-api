@@ -28,6 +28,7 @@ from app.services.providers.base import (
     StatusResult,
 )
 from app.services.providers.higgsfield import (
+    HiggsfieldEstimateNotPricedError,
     HiggsfieldIdempotencyConflictError,
     HiggsfieldInsufficientBalanceError,
     HiggsfieldProvider,
@@ -112,7 +113,12 @@ async def test_submit_sends_documented_request_and_parses() -> None:
     assert str(sent.url) == f"https://api.higgsfield.ai/{MODEL}"
     assert sent.headers["Authorization"] == f"Key {KEY_ID}:{KEY_SECRET}"
     assert sent.headers["Idempotency-Key"] == "job-key-1"
-    assert json.loads(sent.content) == {"prompt": PROMPT, "aspect_ratio": "4:3"}
+    # The pinned model always sends its approved resolution (PINNED_MODELS).
+    assert json.loads(sent.content) == {
+        "prompt": PROMPT,
+        "aspect_ratio": "4:3",
+        "resolution": "1080p",
+    }
 
 
 async def test_same_key_resend_returns_same_request_id() -> None:
@@ -518,7 +524,12 @@ async def test_estimate_cost_posts_same_body_without_idempotency_key() -> None:
     assert str(sent.url) == f"https://api.higgsfield.ai/estimate/{MODEL}"
     assert "Idempotency-Key" not in sent.headers
     assert sent.headers["Authorization"] == f"Key {KEY_ID}:{KEY_SECRET}"
-    assert json.loads(sent.content) == {"prompt": PROMPT, "aspect_ratio": "4:3"}
+    # The pinned model always sends its approved resolution (PINNED_MODELS).
+    assert json.loads(sent.content) == {
+        "prompt": PROMPT,
+        "aspect_ratio": "4:3",
+        "resolution": "1080p",
+    }
 
 
 async def test_unsupported_aspect_ratio_fails_before_any_request() -> None:
@@ -548,7 +559,7 @@ async def test_unprobed_model_refuses_to_submit_but_may_estimate() -> None:
         return httpx.Response(200, json={"usd": "0.094"})
 
     provider = make(handler, model=UNPROBED_MODEL)
-    with pytest.raises(ProviderConfigError, match="SUPPORTED_ASPECT_RATIOS"):
+    with pytest.raises(ProviderConfigError, match="PINNED_MODELS"):
         await provider.submit(request())
     assert seen == []
 
@@ -562,7 +573,6 @@ async def test_unprobed_model_refuses_to_submit_but_may_estimate() -> None:
 @pytest.mark.parametrize(
     "handler",
     [
-        fixed(200, json={}),
         fixed(200, json={"usd": 0.094}),
         fixed(200, json={"usd": "abc"}),
         fixed(200, json={"usd": "NaN"}),
@@ -571,11 +581,24 @@ async def test_unprobed_model_refuses_to_submit_but_may_estimate() -> None:
         fixed(500, json={"detail": "x"}),
         raising(httpx.ReadTimeout("boom")),
     ],
-    ids=["missing", "number", "garbage", "nan", "negative", "bad-json", "http-500", "read-timeout"],
+    ids=["number", "garbage", "nan", "negative", "bad-json", "http-500", "read-timeout"],
 )
 async def test_estimate_failures_are_unavailable(handler: Handler) -> None:
     with pytest.raises(ProviderUnavailableError):
         await make(handler).estimate_cost_usd(request())
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{}, {"type": "description", "pricing_description": "Per 1M tokens: ..."}],
+    ids=["empty", "pricing-description"],
+)
+async def test_an_estimate_without_a_dollar_price_is_not_retryable(body: dict[str, str]) -> None:
+    # A readable answer with no usd field gives the same answer when asked again.
+    with pytest.raises(HiggsfieldEstimateNotPricedError, match="no dollar price") as raised:
+        await make(fixed(200, json=body)).estimate_cost_usd(request())
+
+    assert raised.value.retryable is False
 
 
 async def test_estimate_classifies_like_status() -> None:

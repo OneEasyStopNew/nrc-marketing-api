@@ -114,9 +114,10 @@ class Settings(RetrievalSettings):
     # Upper bounds on spend limits stop a typo (an extra zero) from lifting the cap entirely.
     generation_daily_credit_ceiling_per_tenant: int = Field(default=20, ge=0, le=1000)
     generation_credits_per_image: int = Field(default=1, ge=1, le=100)
-    # A job whose provider estimate is above this fails before anything is submitted.
-    # One dollar is ten times the default; a still image costing more is a misconfiguration.
-    generation_max_cost_usd_per_image: Decimal = Field(default=Decimal("0.10"), ge=0, le=1)
+    # A job whose provider estimate is above this fails before anything is submitted. $0.09 is
+    # the agreed image budget per generation (17 Nov 2026; images only, video has none yet). One
+    # dollar bounds a typo; a still image costing more is a misconfiguration.
+    generation_max_cost_usd_per_image: Decimal = Field(default=Decimal("0.09"), ge=0, le=1)
     # Cap on provider spend across all tenants (reserved estimates plus committed costs), kept per
     # provider in provider_spend. A job that would pass it fails BUDGET_EXHAUSTED before submit.
     # 250 times the default: room to grow, but a typo cannot remove the cap.
@@ -154,8 +155,13 @@ class Settings(RetrievalSettings):
     # Retry delay for an event whose job has no handler (e.g. a kind deployed before its worker).
     worker_no_handler_retry_seconds: float = Field(default=60, gt=0, le=3600)
     higgsfield_base_url: str = "https://api.higgsfield.ai"
+    # The default image model, used when a job names none.
     higgsfield_model: str | None = None
-    # Sent with every Higgsfield request; a smoke-script candidate may name its own instead.
+    # Models a job may choose, each with approved settings in PINNED_MODELS. Empty means only
+    # HIGGSFIELD_MODEL.
+    higgsfield_models: Annotated[tuple[str, ...], NoDecode] = ()
+    # Sent only to models without pinned settings (the smoke script's estimate probes); a pinned
+    # model always sends its own resolution.
     higgsfield_resolution: Literal["720p", "1080p"] = "1080p"
     # "<key-id>:<key-secret>", the Higgsfield SDK's format. Parsed by
     # app.services.providers.higgsfield.higgsfield_credentials.
@@ -222,6 +228,7 @@ class Settings(RetrievalSettings):
         "cognito_client_ids",
         "cors_origins",
         "higgsfield_output_hosts",
+        "higgsfield_models",
         "upload_image_types",
         mode="before",
     )
@@ -284,6 +291,13 @@ class Settings(RetrievalSettings):
                 "set APP_ENV=local (or demo) for development"
             )
         return self
+
+    @property
+    def enabled_image_models(self) -> tuple[str, ...]:
+        # The models jobs may use, default first when it is listed.
+        if self.higgsfield_models:
+            return self.higgsfield_models
+        return (self.higgsfield_model,) if self.higgsfield_model else ()
 
     @property
     def cognito_issuer(self) -> str:

@@ -152,6 +152,12 @@ class GenerationLimitError(AppError):
     retryable = True
 
 
+class GenerationRequestError(AppError):
+    # details.reason is MODEL_NOT_ENABLED, IMAGE_TEXT_REQUIRED or BRIEF_TOO_LONG.
+    code = "GENERATION_REQUEST_INVALID"
+    default_message = "This generation request cannot be accepted."
+
+
 class VersionRequiredError(AppError):
     code = "PRECONDITION_REQUIRED"
     default_message = 'Send If-Match with the version you edited, e.g. If-Match: "3".'

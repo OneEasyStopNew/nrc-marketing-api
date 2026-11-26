@@ -69,6 +69,8 @@ class FakeHiggsfield:
         self.submit_answers: list[Answer] = []
         self.submit_keys: list[str] = []
         self.accepted: dict[str, str] = {}
+        self.estimate_body: dict[str, Any] = {"usd": ESTIMATE_USD}
+        self.estimates = 0
         self.status_body: Callable[[str], dict[str, Any]] = lambda request_id: {
             "status": "in_progress",
             "request_id": request_id,
@@ -84,7 +86,8 @@ class FakeHiggsfield:
         assert request.headers["Authorization"] == "Key kid-test:ksecret-test"
         path = request.url.path
         if request.method == "POST" and path == f"/estimate/{MODEL}":
-            return httpx.Response(200, json={"usd": ESTIMATE_USD})
+            self.estimates += 1
+            return httpx.Response(200, json=self.estimate_body)
         if request.method == "POST" and path == f"/{MODEL}":
             self.submit_keys.append(request.headers["Idempotency-Key"])
             if self.submit_answers:
@@ -228,6 +231,24 @@ async def test_submit_outcome_by_status(
     if outcome is FAIL_NOW:
         assert f"provider refused job={job_id}" in caplog.text
         assert f"code={code}" in caplog.text
+
+
+async def test_an_unpriced_estimate_fails_the_job_at_once(
+    sessions: Sessions, job_id: UUID, world: World, connection: AsyncConnection
+) -> None:
+    # A token-priced model answers with a pricing description, not a price. Asking again gives
+    # the same answer, so the job fails on its first attempt instead of retrying to its deadline.
+    fake = FakeHiggsfield()
+    fake.estimate_body = {"type": "description", "pricing_description": "Per 1M tokens: ..."}
+
+    await run(sessions, higgsfield(fake))
+    await _requeue(connection, world)
+    await run(sessions, higgsfield(fake))
+
+    job, reservation = await _load(sessions, world, job_id)
+    assert (job.state, job.failure_code) == (ExecutionState.FAILED, "ESTIMATE_NOT_PRICED")
+    assert reservation is ReservationState.RELEASED
+    assert (fake.estimates, fake.submit_keys) == (1, [])
 
 
 async def test_transient_submit_errors_retry_with_the_same_key(
