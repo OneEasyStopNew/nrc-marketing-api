@@ -4,12 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The staging deploy runs these same checks first.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # github.workflow is the caller's name when called, so a deploy's checks never cancel CI's.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -126,3 +129,28 @@ jobs:
         run: |
           uv export --locked --no-dev --no-emit-project --format requirements-txt -o requirements-audit.txt
           uvx pip-audit@2.10.0 -r requirements-audit.txt --require-hashes --disable-pip
+
+  chart:
+    name: Helm chart lints and renders
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v4.3.2
+
+      - name: Lint and render with the staging values
+        run: |
+          chart=deploy/helm/nrc-marketing-api
+          helm lint "$chart" -f "$chart/values-staging.yaml" --set image.tag=ci --strict
+          helm template nrc-marketing-api "$chart" -f "$chart/values-staging.yaml" \
+            --set image.tag=ci > "$RUNNER_TEMP/staging.yaml"
+          # The render must fail without an image tag, so a deploy can't ship ":latest".
+          if helm template x "$chart" -f "$chart/values-staging.yaml" >/dev/null 2>&1; then
+            echo "chart rendered without image.tag" >&2
+            exit 1
+          fi

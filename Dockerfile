@@ -10,7 +10,8 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY app ./app
-# One-off jobs, as the database owner: `python -m scripts.seed_demo` and `scripts.grant_access`.
+# One-off jobs, as the database owner: `python -m scripts.seed_demo`, `scripts.grant_access`
+# and `scripts.ensure_db_roles` (the deploy's migration job).
 COPY scripts ./scripts
 
 FROM python:3.14-slim@sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e757d7ec6f3966 AS runtime

@@ -9,9 +9,10 @@
 tests
 contracts
 docker
-# Only the one-off database jobs run from the image (seed, grant access). Dev tokens, the paid
-# Higgsfield smoke test and local-storage helpers stay out.
+# Only the one-off database jobs run from the image (seed, grant access, the deploy's role
+# setup). Dev tokens, the paid Higgsfield smoke test and local-storage helpers stay out.
 scripts/*
 !scripts/__init__.py
 !scripts/seed_demo.py
 !scripts/grant_access.py
+!scripts/ensure_db_roles.py

@@ -1,0 +1,97 @@
+name: Deploy staging
+
+# Manual for now: Actions > Deploy staging > Run workflow, from main. Runs the full CI first,
+# builds one image tagged with the commit, pushes it to ECR and upgrades the Helm release. The
+# release's pre-upgrade job creates the DB login roles and migrates before any new pod starts;
+# --rollback-on-failure puts the previous pods back if the rollout fails (the schema stays, so
+# migrations must be backward compatible).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Build, push and deploy
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Repository variables and the approval rule live on the GitHub "staging" environment.
+    environment: staging
+    permissions:
+      contents: read
+      # OIDC to AWS: no long-lived keys in GitHub.
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      CLUSTER: nrc-stg
+      NAMESPACE: nrc-marketing
+      RELEASE: nrc-marketing-api
+      CHART: deploy/helm/nrc-marketing-api
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - name: Only main deploys
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Deploy staging from main only (got $GITHUB_REF)" >&2
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@45666896f5d8e0f10ae255413f3a4cdd03bdc8f5 # v6.3.1
+        with:
+          # from Prabhu: the GitHub OIDC deploy role for this repository.
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: nrc-marketing-api-${{ github.run_id }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@7290e214a610b32bc0eef81748948b6d466a8783 # v2.2.0
+
+      - name: Build and push the image (tag = commit, never overwritten)
+        env:
+          REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          image="$REPOSITORY:$IMAGE_TAG"
+          if aws ecr describe-images --repository-name "${REPOSITORY#*/}" \
+              --image-ids imageTag="$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "$image already exists; deploying it as is"
+          else
+            docker build --pull -t "$image" .
+            docker push "$image"
+          fi
+
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v4.3.2
+
+      - name: Connect to the cluster
+        run: aws eks update-kubeconfig --name "$CLUSTER" --region "$AWS_REGION"
+
+      - name: Upgrade the release
+        env:
+          REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          helm upgrade --install "$RELEASE" "$CHART" \
+            --namespace "$NAMESPACE" \
+            -f "$CHART/values-staging.yaml" \
+            --set image.repository="$REPOSITORY" \
+            --set image.tag="$IMAGE_TAG" \
+            --rollback-on-failure --wait --timeout 15m
+
+      - name: Show what is running
+        if: always()
+        run: |
+          kubectl -n "$NAMESPACE" get deploy,pods,jobs -l app.kubernetes.io/instance="$RELEASE" || true
+          helm -n "$NAMESPACE" history "$RELEASE" --max 5 || true

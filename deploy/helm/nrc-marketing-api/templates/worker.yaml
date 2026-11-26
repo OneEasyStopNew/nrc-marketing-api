@@ -1,0 +1,53 @@
+{{- $selector := include "nrc.selector" (dict "root" . "component" "worker") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels:
+    {{- include "nrc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- $selector | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nrc.labels" . | nindent 8 }}
+        {{- $selector | nindent 8 }}
+      annotations:
+        checksum/env: {{ toYaml .Values.env | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Values.worker.serviceAccount.name }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ include "nrc.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Leases outbox events from the database; no HTTP port, so no probes. A crash restarts
+          # the container and an expired lease is picked up again.
+          command: ["python", "-m", "app.workers.connector"]
+          envFrom:
+            {{- include "nrc.envFrom" (dict "root" . "secrets" .Values.secrets.worker) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 512Mi}

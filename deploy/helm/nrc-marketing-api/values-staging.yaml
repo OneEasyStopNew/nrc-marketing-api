@@ -1,0 +1,48 @@
+# Staging (AWS account 694702802041, us-east-1, EKS nrc-stg, namespace nrc-marketing).
+# Values marked "from Prabhu" come from the infra repo and are still to be confirmed.
+
+image:
+  # from Prabhu: which of the nrc-stg/* ECR repositories is the backend's.
+  repository: 694702802041.dkr.ecr.us-east-1.amazonaws.com/nrc-stg/marketing-api
+
+env:
+  APP_ENV: staging
+  LOG_LEVEL: INFO
+  ENABLE_DOCS: "false"
+  PYTHONDONTWRITEBYTECODE: "1"
+  COGNITO_REGION: us-east-1
+  COGNITO_USER_POOL_ID: us-east-1_ozdBHK9iu
+  # from Prabhu: the web app client id(s), comma separated.
+  COGNITO_CLIENT_IDS: replace-with-staging-app-client-id
+  REQUIRED_SCOPE: marketing/api
+  CORS_ORIGINS: https://dh15flv1jiy9v.cloudfront.net
+  WEB_APP_URL: https://dh15flv1jiy9v.cloudfront.net
+  AWS_REGION: us-east-1
+  AWS_S3_BUCKET: nrc-stg-media-694702802041
+  GENERATION_MODE: live
+  HIGGSFIELD_SECRET_ID: nrc/stg/higgsfield
+  # Meta stays unconfigured (connect answers 501) until the Meta app exists.
+
+# from Prabhu: the Secret names, once External Secrets (or ops) create them. Keys per Secret are
+# listed in docs/deploy.md.
+secrets:
+  api: [nrc-marketing-api-env]
+  worker: [nrc-marketing-api-env, nrc-marketing-worker-env]
+  migrations: [nrc-marketing-migrations-env]
+
+api:
+  replicas: 2
+  # from Prabhu: the private subnets the internal ALB lives in.
+  forwardedAllowIps: "10.0.0.0/16"
+  serviceAccount:
+    name: nrc-marketing-api
+  targetGroupBinding:
+    # from Prabhu: true plus the ARN if the ALB target group is in Terraform; false if an Ingress
+    # creates the ALB instead.
+    enabled: true
+    targetGroupARN: arn:aws:elasticloadbalancing:us-east-1:694702802041:targetgroup/replace-me/0000000000000000
+
+worker:
+  replicas: 1
+  serviceAccount:
+    name: nrc-marketing-worker

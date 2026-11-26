@@ -1,0 +1,70 @@
+{{- if .Values.migrations.enabled }}
+# Runs before every install and upgrade, before any new pod: first the two login roles, then
+# `alembic upgrade head`. If it fails the release stops and the running pods stay as they are.
+# Migrations must stay backward compatible with the previous release (expand first, remove
+# later), because a failed rollout rolls the pods back but never the schema.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-migrations
+  labels:
+    {{- include "nrc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.migrations.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "nrc.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.migrations.serviceAccount.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: db-roles
+          image: {{ include "nrc.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - scripts.ensure_db_roles
+            {{- if .Values.migrations.setRolePasswords }}
+            - --set-passwords
+            {{- end }}
+          env:
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+          {{- /* Hook: the chart's ConfigMap does not exist yet on a first install. */}}
+          envFrom:
+            {{- include "nrc.envFrom" (dict "root" . "secrets" .Values.secrets.migrations "skipConfig" true) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      containers:
+        - name: alembic
+          image: {{ include "nrc.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+          envFrom:
+            {{- include "nrc.envFrom" (dict "root" . "secrets" .Values.secrets.migrations "skipConfig" true) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+{{- end }}

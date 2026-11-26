@@ -1,0 +1,102 @@
+# Defaults for every environment. Environment files (values-staging.yaml) override these.
+# Nothing secret goes in a values file: secrets reach pods from existing Kubernetes Secrets.
+
+image:
+  # ECR repository URL, e.g. <account>.dkr.ecr.us-east-1.amazonaws.com/nrc-stg/marketing-api
+  repository: ""
+  # Immutable tag: the git commit SHA. The deploy workflow sets it; empty fails the render.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Non-secret settings, shared by the API and the worker (app/core/config.py names, upper case).
+env:
+  APP_ENV: staging
+  LOG_LEVEL: INFO
+  ENABLE_DOCS: "false"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+# Existing Secrets each workload reads with envFrom. Created outside the chart (External Secrets
+# or by ops from Secrets Manager); docs/deploy.md lists the keys each one needs.
+secrets:
+  api: []
+  worker: []
+  migrations: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+api:
+  replicas: 2
+  serviceAccount:
+    create: true
+    name: nrc-marketing-api
+    # EKS Pod Identity associations are made in Terraform against this name; IRSA would use
+    # eks.amazonaws.com/role-arn here instead.
+    annotations: {}
+  # The internal ALB's subnets, so uvicorn trusts X-Forwarded-* only from the load balancer.
+  forwardedAllowIps: ""
+  resources:
+    requests: {cpu: 250m, memory: 384Mi}
+    limits: {memory: 768Mi}
+  # Seconds the pod keeps serving after it is marked terminating, so the ALB stops sending to it
+  # first. uvicorn then drains for up to 20 s (Dockerfile); the grace period covers both.
+  preStopSleepSeconds: 15
+  terminationGracePeriodSeconds: 45
+  pdb:
+    enabled: true
+    minAvailable: 1
+  hpa:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  service:
+    port: 8000
+  # The ALB is managed in Terraform; the AWS Load Balancer Controller registers pod IPs into its
+  # target group through a TargetGroupBinding.
+  targetGroupBinding:
+    enabled: false
+    targetGroupARN: ""
+  nodeSelector: {}
+  tolerations: []
+
+worker:
+  # One worker is enough for the demo load; leases make more replicas safe.
+  replicas: 1
+  serviceAccount:
+    create: true
+    name: nrc-marketing-worker
+    annotations: {}
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 1Gi}
+  # The worker finishes or releases its current lease on SIGTERM; give it more than one lease.
+  terminationGracePeriodSeconds: 90
+  nodeSelector: {}
+  tolerations: []
+
+migrations:
+  enabled: true
+  serviceAccount:
+    create: true
+    name: nrc-marketing-migrations
+    annotations: {}
+  # Also reset the two login roles' passwords from the secret, so a rotated secret applies.
+  setRolePasswords: true
+  activeDeadlineSeconds: 600
+  # Keep a finished job for a day so its logs can be read.
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 512Mi}
