@@ -26,7 +26,9 @@ from app.services.jobs import RUN_EVENT, transition
 from app.services.policy_context import AuroraPolicyContextProvider
 from app.services.providers import text_judge
 from app.services.providers.base import ProviderConfigError, ProviderRejectedError
+from app.services.providers.bedrock_embeddings import BedrockEmbeddingProvider
 from app.services.providers.bedrock_judge import BedrockTextJudge
+from app.services.providers.embeddings import SimulatedEmbeddingProvider
 from app.services.providers.text_judge import (
     NOVA_LITE_MODEL_ID,
     SIMULATED_JUDGE_MODEL_ID,
@@ -812,6 +814,41 @@ def test_a_judge_config_error_stops_the_worker_at_start(monkeypatch: pytest.Monk
 
     with pytest.raises(WorkerConfigError, match="judge is not configured"):
         connector.prepare_validation(get_settings())
+
+
+def _embedder_of(settings: Settings) -> object:
+    handler = ValidationJobHandler(judge=SimulatedTextJudge())
+    _, provider = handler._dependencies(settings)
+    return provider._embedder  # type: ignore[attr-defined]  # not part of the Protocol
+
+
+def test_the_worker_searches_policy_by_vector_only_when_embeddings_are_on() -> None:
+    off = get_settings().model_copy(update={"embedding_mode": "off"})
+    simulated = get_settings().model_copy(update={"embedding_mode": "simulator"})
+    live = get_settings().model_copy(
+        update={
+            "embedding_mode": "live",
+            "bedrock_embedding_model_id": "amazon.titan-embed-text-v2:0",
+        }
+    )
+
+    assert _embedder_of(off) is None
+    assert isinstance(_embedder_of(simulated), SimulatedEmbeddingProvider)
+    embedder = _embedder_of(live)
+    assert isinstance(embedder, BedrockEmbeddingProvider)
+    assert embedder.model_id == "amazon.titan-embed-text-v2:0"
+
+
+def test_live_embeddings_without_a_model_stop_the_worker_at_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(connector, "VALIDATION_JOB_HANDLER", ValidationJobHandler())
+    settings = get_settings().model_copy(
+        update={"embedding_mode": "live", "bedrock_embedding_model_id": None}
+    )
+
+    with pytest.raises(WorkerConfigError, match="Live embeddings are not configured"):
+        connector.prepare_validation(settings)
 
 
 @pytest.mark.parametrize("mode", ["off", "simulator"])

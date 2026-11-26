@@ -65,6 +65,7 @@ from app.services.providers.base import (
     StatusResult,
     SubmitResult,
 )
+from app.services.providers.embeddings import embedding_provider_from_settings
 from app.services.providers.higgsfield import (
     ProviderSecretError,
     create_provider,
@@ -633,7 +634,11 @@ class ValidationJobHandler:
         # Built here only when prepare wasn't called with these settings (tests calling run_once).
         if self._built is None or self._built[0] is not settings:
             judge = self._judge if self._judge is not None else text_judge_from_settings(settings)
-            provider = self._context_provider or AuroraPolicyContextProvider(settings)
+            # With an embedder (EMBEDDING_MODE simulator or live) statements are also searched by
+            # vector; the API never has one.
+            provider = self._context_provider or AuroraPolicyContextProvider(
+                settings, embedding_provider_from_settings(settings)
+            )
             self._built = (settings, judge, provider)
         return self._built[1], self._built[2]
 

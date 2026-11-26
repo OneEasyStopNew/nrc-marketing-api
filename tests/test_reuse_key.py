@@ -103,6 +103,13 @@ CHANGES: dict[str, Callable[[], str]] = {
     "retrieval max_statements": lambda: _key(
         settings=_settings(policy_retrieval_max_statements=10)
     ),
+    # The worker also searches by vector when it has an embedder.
+    "embedding mode": lambda: _key(settings=_settings(embedding_mode="live")),
+    "embedding model": lambda: _key(
+        settings=_settings(
+            embedding_mode="live", bedrock_embedding_model_id="amazon.titan-embed-text-v2:0"
+        )
+    ),
 }
 
 
@@ -137,7 +144,13 @@ def test_every_part_of_the_key_has_a_test_above(monkeypatch: pytest.MonkeyPatch)
     _key()
 
     [parts] = seen
-    tested = {name.split()[0] for name in CHANGES} | {"evaluation", "prompt", "judge", "retrieval"}
+    tested = {name.split()[0] for name in CHANGES} | {
+        "evaluation",
+        "prompt",
+        "judge",
+        "retrieval",
+        "embedding",
+    }
     assert set(parts) <= tested
     assert set(parts["retrieval"]) == {
         name.split()[1] for name in CHANGES if name.startswith("retrieval ")
@@ -146,15 +159,10 @@ def test_every_part_of_the_key_has_a_test_above(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.parametrize(
     "unrelated",
-    [
-        {"embedding_mode": "live", "bedrock_embedding_model_id": "amazon.titan-embed-text-v2:0"},
-        {"validation_model_timeout_seconds": 10},
-        {"bedrock_max_retries": 0},
-    ],
+    [{"validation_model_timeout_seconds": 10}, {"bedrock_max_retries": 0}],
 )
 def test_settings_that_cannot_change_the_result_leave_the_key_alone(
     unrelated: dict[str, object],
 ) -> None:
-    # The worker searches without an embedder, so the embedding settings can't change a result;
-    # in the key they would only stop reuse between processes with different settings.
+    # Timeouts and client retries change whether a call succeeds, never what a stored result is.
     assert _key(settings=_settings(**unrelated)) == _key()
