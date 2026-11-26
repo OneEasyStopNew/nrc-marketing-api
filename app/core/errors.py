@@ -103,6 +103,18 @@ class ExportNotReadyError(ConflictError):
     default_message = "Generate an image for the current version before exporting."
 
 
+class AccountNotOfferedError(ConflictError):
+    # details: channel and provider_account_id of the first selection the Meta login did not list.
+    code = "ACCOUNT_NOT_OFFERED"
+    default_message = "That account was not offered by this Meta login."
+
+
+class ConnectSessionClosedError(ConflictError):
+    # details: status of the session (COMPLETED, FAILED or WAITING_FOR_META) or "expired".
+    code = "CONNECT_SESSION_CLOSED"
+    default_message = "This Meta login can no longer bind accounts; start a new one."
+
+
 class JobNotCancellableError(ConflictError):
     # details.state: the job's final state (SUCCEEDED or FAILED).
     code = "JOB_NOT_CANCELLABLE"

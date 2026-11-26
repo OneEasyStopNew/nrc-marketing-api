@@ -1,0 +1,343 @@
+{
+  "_note": "NRC-13 sample responses for the accounts screen. All data is synthetic. Validated against the API schemas by tests/test_contract.py. Flow: POST /integrations/meta/connect -> send the browser to authorization_url -> Meta -> GET /webhooks/meta/oauth/callback (this API) -> 303 to <web>/accounts?meta_connection=<id>&meta_connect=select_accounts (or reconnected, or failed&reason=...) -> GET the connection -> user ticks accounts -> POST .../accounts. Tokens never reach the browser.",
+  "meta_connect_started": {
+    "request": "POST /v1/marketing/integrations/meta/connect  (X-Tenant-Id: 7b0e6a52-...)  {\"return_path\": \"/accounts\"}",
+    "status": 201,
+    "schema": "MetaConnectStarted",
+    "body": {
+      "connection_id": "c3f1a9e2-4b7d-4e6a-8c5d-1f2e3a4b5c60",
+      "authorization_url": "https://www.facebook.com/v26.0/dialog/oauth?client_id=1234567890&redirect_uri=https%3A%2F%2Fapi.example.org%2Fwebhooks%2Fmeta%2Foauth%2Fcallback&state=7b0e6a52....<secret>&scope=business_management%2Cpages_show_list%2Cpages_read_engagement%2Cpages_manage_posts%2Cinstagram_basic%2Cinstagram_content_publish&response_type=code&auth_type=rerequest",
+      "expires_at": "2026-11-25T09:30:00Z"
+    }
+  },
+  "meta_connection_awaiting_selection": {
+    "request": "GET /v1/marketing/integrations/meta/connections/c3f1a9e2-4b7d-4e6a-8c5d-1f2e3a4b5c60  (only the admin who started it)",
+    "status": 200,
+    "schema": "MetaConnectionRead",
+    "body": {
+      "connection_id": "c3f1a9e2-4b7d-4e6a-8c5d-1f2e3a4b5c60",
+      "status": "AWAITING_SELECTION",
+      "error_code": null,
+      "expires_at": "2026-11-25T09:30:00Z",
+      "candidates": [
+        {
+          "channel": "facebook",
+          "provider_account_id": "104857600123456",
+          "name": "Synthetic Research Clinic",
+          "handle": null,
+          "page_id": "104857600123456",
+          "can_publish": true,
+          "missing_permissions": [],
+          "already_connected": false
+        },
+        {
+          "channel": "instagram",
+          "provider_account_id": "17841400123456789",
+          "name": "Synthetic Clinic",
+          "handle": "synthetic.clinic",
+          "page_id": "104857600123456",
+          "can_publish": true,
+          "missing_permissions": [],
+          "already_connected": false
+        },
+        {
+          "channel": "facebook",
+          "provider_account_id": "104857600654321",
+          "name": "Synthetic Second Page",
+          "handle": null,
+          "page_id": "104857600654321",
+          "can_publish": false,
+          "missing_permissions": [
+            "page_task:CREATE_CONTENT"
+          ],
+          "already_connected": false
+        }
+      ]
+    }
+  },
+  "meta_connection_failed": {
+    "request": "GET /v1/marketing/integrations/meta/connections/c3f1a9e2-4b7d-4e6a-8c5d-1f2e3a4b5c60  after the user cancelled on Meta",
+    "status": 200,
+    "schema": "MetaConnectionRead",
+    "body": {
+      "connection_id": "c3f1a9e2-4b7d-4e6a-8c5d-1f2e3a4b5c60",
+      "status": "FAILED",
+      "error_code": "login_cancelled",
+      "expires_at": "2026-11-25T09:30:00Z",
+      "candidates": []
+    }
+  },
+  "meta_accounts_bound": {
+    "request": "POST /v1/marketing/integrations/meta/connections/c3f1a9e2-4b7d-4e6a-8c5d-1f2e3a4b5c60/accounts  {\"accounts\": [{\"channel\": \"facebook\", \"provider_account_id\": \"104857600123456\"}, {\"channel\": \"instagram\", \"provider_account_id\": \"17841400123456789\"}]}",
+    "status": 200,
+    "schema": "ChannelAccountList",
+    "body": {
+      "items": [
+        {
+          "id": "d4a2b8c1-5e6f-4a7b-9c8d-2e3f4a5b6c71",
+          "channel": "facebook",
+          "provider_account_id": "104857600123456",
+          "name": "Synthetic Research Clinic",
+          "handle": null,
+          "state": "TEST_ONLY",
+          "state_reason": "The Meta app is in development mode: only accounts with a role on the app can publish.",
+          "can_publish": true,
+          "permissions": [
+            "pages_manage_posts",
+            "pages_read_engagement",
+            "pages_show_list"
+          ],
+          "missing_permissions": [],
+          "connected_by": "11111111-2222-3333-4444-555555555555",
+          "connected_at": "2026-11-25T09:30:00Z",
+          "expires_at": null,
+          "last_checked_at": "2026-11-25T09:30:00Z",
+          "disconnected_at": null,
+          "capabilities": {
+            "version": "meta-v26.0-2026-11-25",
+            "text_only": true,
+            "requires_media": false,
+            "image": true,
+            "video": false,
+            "formats": [
+              "feed_image"
+            ],
+            "image_mime_types": [
+              "image/jpeg",
+              "image/png"
+            ],
+            "max_image_bytes": null,
+            "min_aspect_ratio": null,
+            "max_aspect_ratio": null,
+            "caption_max_chars": null,
+            "schedule": true,
+            "delete": false
+          }
+        },
+        {
+          "id": "e5b3c9d2-6f7a-4b8c-8d9e-3f4a5b6c7d82",
+          "channel": "instagram",
+          "provider_account_id": "17841400123456789",
+          "name": "Synthetic Clinic",
+          "handle": "synthetic.clinic",
+          "state": "TEST_ONLY",
+          "state_reason": "The Meta app is in development mode: only accounts with a role on the app can publish.",
+          "can_publish": true,
+          "permissions": [
+            "instagram_basic",
+            "instagram_content_publish"
+          ],
+          "missing_permissions": [],
+          "connected_by": "11111111-2222-3333-4444-555555555555",
+          "connected_at": "2026-11-25T09:30:00Z",
+          "expires_at": null,
+          "last_checked_at": "2026-11-25T09:30:00Z",
+          "disconnected_at": null,
+          "capabilities": {
+            "version": "meta-v26.0-2026-11-25",
+            "text_only": false,
+            "requires_media": true,
+            "image": true,
+            "video": false,
+            "formats": [],
+            "image_mime_types": [
+              "image/jpeg"
+            ],
+            "max_image_bytes": 8388608,
+            "min_aspect_ratio": "4:5",
+            "max_aspect_ratio": "1.91:1",
+            "caption_max_chars": 2200,
+            "schedule": false,
+            "delete": false
+          }
+        }
+      ]
+    }
+  },
+  "channel_accounts": {
+    "request": "GET /v1/marketing/channel-accounts  (X-Tenant-Id: 7b0e6a52-...)  any role",
+    "status": 200,
+    "schema": "ChannelAccountPage",
+    "body": {
+      "items": [
+        {
+          "id": "d4a2b8c1-5e6f-4a7b-9c8d-2e3f4a5b6c71",
+          "channel": "facebook",
+          "provider_account_id": "104857600123456",
+          "name": "Synthetic Research Clinic",
+          "handle": null,
+          "state": "TEST_ONLY",
+          "state_reason": "The Meta app is in development mode: only accounts with a role on the app can publish.",
+          "can_publish": true,
+          "permissions": [
+            "pages_manage_posts",
+            "pages_read_engagement",
+            "pages_show_list"
+          ],
+          "missing_permissions": [],
+          "connected_by": "11111111-2222-3333-4444-555555555555",
+          "connected_at": "2026-11-25T09:30:00Z",
+          "expires_at": null,
+          "last_checked_at": "2026-11-25T09:30:00Z",
+          "disconnected_at": null,
+          "capabilities": {
+            "version": "meta-v26.0-2026-11-25",
+            "text_only": true,
+            "requires_media": false,
+            "image": true,
+            "video": false,
+            "formats": [
+              "feed_image"
+            ],
+            "image_mime_types": [
+              "image/jpeg",
+              "image/png"
+            ],
+            "max_image_bytes": null,
+            "min_aspect_ratio": null,
+            "max_aspect_ratio": null,
+            "caption_max_chars": null,
+            "schedule": true,
+            "delete": false
+          }
+        },
+        {
+          "id": "e5b3c9d2-6f7a-4b8c-8d9e-3f4a5b6c7d82",
+          "channel": "instagram",
+          "provider_account_id": "17841400123456789",
+          "name": "Synthetic Clinic",
+          "handle": "synthetic.clinic",
+          "state": "PERMISSION_MISSING",
+          "state_reason": "Meta did not grant: instagram_content_publish. Reconnect and allow them; a Page admin must give you the Create content task.",
+          "can_publish": false,
+          "permissions": [
+            "instagram_basic"
+          ],
+          "missing_permissions": [
+            "instagram_content_publish"
+          ],
+          "connected_by": "11111111-2222-3333-4444-555555555555",
+          "connected_at": "2026-11-25T09:30:00Z",
+          "expires_at": null,
+          "last_checked_at": "2026-11-25T09:30:00Z",
+          "disconnected_at": null,
+          "capabilities": {
+            "version": "meta-v26.0-2026-11-25",
+            "text_only": false,
+            "requires_media": true,
+            "image": true,
+            "video": false,
+            "formats": [],
+            "image_mime_types": [
+              "image/jpeg"
+            ],
+            "max_image_bytes": 8388608,
+            "min_aspect_ratio": "4:5",
+            "max_aspect_ratio": "1.91:1",
+            "caption_max_chars": 2200,
+            "schedule": false,
+            "delete": false
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  "channel_account_disconnected": {
+    "request": "POST /v1/marketing/channel-accounts/d4a2b8c1-5e6f-4a7b-9c8d-2e3f4a5b6c71/disconnect",
+    "status": 200,
+    "schema": "ChannelAccountRead",
+    "body": {
+      "id": "d4a2b8c1-5e6f-4a7b-9c8d-2e3f4a5b6c71",
+      "channel": "facebook",
+      "provider_account_id": "104857600123456",
+      "name": "Synthetic Research Clinic",
+      "handle": null,
+      "state": "DISCONNECTED",
+      "state_reason": "Disconnected in Marketing. Connect it again to publish.",
+      "can_publish": false,
+      "permissions": [
+        "pages_manage_posts",
+        "pages_read_engagement",
+        "pages_show_list"
+      ],
+      "missing_permissions": [],
+      "connected_by": "11111111-2222-3333-4444-555555555555",
+      "connected_at": "2026-11-25T09:30:00Z",
+      "expires_at": null,
+      "last_checked_at": "2026-11-25T09:30:00Z",
+      "disconnected_at": "2026-11-25T11:00:00Z",
+      "capabilities": {
+        "version": "meta-v26.0-2026-11-25",
+        "text_only": true,
+        "requires_media": false,
+        "image": true,
+        "video": false,
+        "formats": [
+          "feed_image"
+        ],
+        "image_mime_types": [
+          "image/jpeg",
+          "image/png"
+        ],
+        "max_image_bytes": null,
+        "min_aspect_ratio": null,
+        "max_aspect_ratio": null,
+        "caption_max_chars": null,
+        "schedule": true,
+        "delete": false
+      }
+    }
+  },
+  "channel_account_reconnect_started": {
+    "request": "POST /v1/marketing/channel-accounts/e5b3c9d2-6f7a-4b8c-8d9e-3f4a5b6c7d82/reconnect  {\"return_path\": \"/accounts\"}  then the callback lands with meta_connect=reconnected",
+    "status": 201,
+    "schema": "MetaConnectStarted",
+    "body": {
+      "connection_id": "c3f1a9e2-4b7d-4e6a-8c5d-1f2e3a4b5c60",
+      "authorization_url": "https://www.facebook.com/v26.0/dialog/oauth?client_id=1234567890&redirect_uri=https%3A%2F%2Fapi.example.org%2Fwebhooks%2Fmeta%2Foauth%2Fcallback&state=7b0e6a52....<secret>&scope=business_management%2Cpages_show_list%2Cpages_read_engagement%2Cpages_manage_posts%2Cinstagram_basic%2Cinstagram_content_publish&response_type=code&auth_type=rerequest",
+      "expires_at": "2026-11-25T09:30:00Z"
+    }
+  },
+  "error_409_account_not_offered": {
+    "request": "POST /v1/marketing/integrations/meta/connections/c3f1a9e2-4b7d-4e6a-8c5d-1f2e3a4b5c60/accounts with an account the login did not list",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "ACCOUNT_NOT_OFFERED",
+      "message": "That account was not offered by this Meta login.",
+      "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e31",
+      "details": {
+        "channel": "facebook",
+        "account": "999"
+      },
+      "retryable": false
+    }
+  },
+  "error_409_connect_session_closed": {
+    "request": "POST /v1/marketing/integrations/meta/connections/c3f1a9e2-4b7d-4e6a-8c5d-1f2e3a4b5c60/accounts a second time",
+    "status": 409,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "CONNECT_SESSION_CLOSED",
+      "message": "This Meta login can no longer bind accounts; start a new one.",
+      "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e32",
+      "details": {
+        "status": "COMPLETED"
+      },
+      "retryable": false
+    }
+  },
+  "error_501_meta_not_configured": {
+    "request": "POST /v1/marketing/integrations/meta/connect where the Meta app is not set up yet",
+    "status": 501,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "NOT_IMPLEMENTED",
+      "message": "Connecting Meta accounts is not configured here yet.",
+      "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e33",
+      "details": null,
+      "retryable": false
+    }
+  }
+}

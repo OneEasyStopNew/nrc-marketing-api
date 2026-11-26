@@ -11,14 +11,26 @@ from fastapi.routing import APIRoute
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from app.api.errors import COMMON_ERROR_RESPONSES, register_exception_handlers
-from app.api.routes import assets, creatives, demo_files, health, jobs, me, policies, workflows
+from app.api.routes import (
+    assets,
+    channel_accounts,
+    creatives,
+    demo_files,
+    health,
+    jobs,
+    me,
+    policies,
+    workflows,
+)
 from app.auth.tokens import JwksClient, LocalJwks, SigningKeyProvider
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.request_context import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.db.session import create_engine, create_sessionmaker
+from app.services.channel_accounts import meta_config
 from app.services.demo_stubs import DemoStubs
 from app.services.media import configure_pillow
+from app.services.meta_graph import HttpMetaGraph
 from app.services.storage import ObjectStorage
 
 API_PREFIX = "/v1/marketing"
@@ -48,6 +60,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.signing_keys = signing_keys
             # Without a bucket the asset endpoint answers 503; nothing else needs storage.
             app.state.storage = ObjectStorage(settings) if settings.aws_s3_bucket else None
+            # Without every Meta setting, connecting accounts answers 501; listing still works.
+            app.state.meta_config = meta_config(settings)
+            app.state.meta_graph = (
+                HttpMetaGraph(
+                    http,
+                    graph_base_url=str(settings.meta_graph_base_url),
+                    version=settings.meta_graph_version,
+                    app_id=settings.meta_app_id,
+                    app_secret=settings.meta_app_secret,
+                )
+                if settings.meta_app_id and settings.meta_app_secret
+                else None
+            )
             yield
     finally:
         await engine.dispose()
@@ -78,9 +103,11 @@ def create_app() -> FastAPI:
         workflows.router,
         jobs.router,
         assets.router,
+        channel_accounts.router,
     ):
         app.include_router(router, prefix=API_PREFIX, responses=COMMON_ERROR_RESPONSES)
     app.include_router(health.router)
+    app.include_router(channel_accounts.callback_router)
     app.include_router(demo_files.router)
 
     # The last middleware added runs first: CORS stays outermost so error responses carry it.

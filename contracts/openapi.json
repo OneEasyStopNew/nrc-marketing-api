@@ -2548,10 +2548,787 @@
           }
         }
       }
+    },
+    "/v1/marketing/channel-accounts": {
+      "get": {
+        "tags": [
+          "channel-accounts"
+        ],
+        "summary": "Connected Facebook Pages and Instagram accounts",
+        "description": "Includes disconnected accounts (state DISCONNECTED) so history stays readable.",
+        "operationId": "list_channel_accounts",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the last page.",
+              "title": "Cursor"
+            },
+            "description": "next_cursor from the last page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelAccountPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/integrations/meta/connect": {
+      "post": {
+        "tags": [
+          "channel-accounts"
+        ],
+        "summary": "Start a Meta login to connect accounts",
+        "description": "Send the browser to authorization_url. Meta returns it to this API, which redirects to return_path with ?meta_connection=<id>&meta_connect=select_accounts (or failed). Then read the connection and bind the accounts the user picks.",
+        "operationId": "start_meta_connect",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetaConnectStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaConnectStarted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Meta is not configured here.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/integrations/meta/connections/{connection_id}": {
+      "get": {
+        "tags": [
+          "channel-accounts"
+        ],
+        "summary": "Accounts a finished Meta login can bind",
+        "description": "Only the user who started the login can read it.",
+        "operationId": "get_meta_connection",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaConnectionRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/v1/marketing/integrations/meta/connections/{connection_id}/accounts": {
+      "post": {
+        "tags": [
+          "channel-accounts"
+        ],
+        "summary": "Bind the accounts the user picked",
+        "description": "Nothing is bound without this explicit choice. Each account must be one the login listed. A login binds once; start another to add more.",
+        "operationId": "bind_meta_accounts",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetaBindRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelAccountList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Login closed, or account not offered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Meta did not answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Meta is not configured here.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/channel-accounts/{account_id}/reconnect": {
+      "post": {
+        "tags": [
+          "channel-accounts"
+        ],
+        "summary": "Start a Meta login that refreshes one account",
+        "description": "Same browser flow as connect; the callback refreshes this account directly and redirects with meta_connect=reconnected (or failed).",
+        "operationId": "reconnect_channel_account",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetaConnectStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaConnectStarted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "501": {
+            "description": "Meta is not configured here.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/channel-accounts/{account_id}/check": {
+      "post": {
+        "tags": [
+          "channel-accounts"
+        ],
+        "summary": "Ask Meta for the account's current access and permissions",
+        "operationId": "check_channel_account",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelAccountRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "description": "Meta did not answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Meta is not configured here.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/channel-accounts/{account_id}/disconnect": {
+      "post": {
+        "tags": [
+          "channel-accounts"
+        ],
+        "summary": "Stop publishing to an account and forget its token",
+        "description": "The account stays listed as DISCONNECTED. Posts already live are not removed.",
+        "operationId": "disconnect_channel_account",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelAccountRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AccountChannel": {
+        "type": "string",
+        "enum": [
+          "facebook",
+          "instagram"
+        ],
+        "title": "AccountChannel"
+      },
+      "AccountSelection": {
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/AccountChannel"
+          },
+          "provider_account_id": {
+            "type": "string",
+            "pattern": "^[0-9]{1,64}$",
+            "title": "Provider Account Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "channel",
+          "provider_account_id"
+        ],
+        "title": "AccountSelection"
+      },
+      "AccountState": {
+        "type": "string",
+        "enum": [
+          "CONNECTED",
+          "TEST_ONLY",
+          "PENDING_APP_REVIEW",
+          "PERMISSION_MISSING",
+          "EXPIRED",
+          "REVOKED",
+          "DISCONNECTED"
+        ],
+        "title": "AccountState"
+      },
       "Applicability": {
         "type": "string",
         "enum": [
@@ -2878,6 +3655,305 @@
         ],
         "title": "Channel"
       },
+      "ChannelAccountList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelAccountRead"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ChannelAccountList"
+      },
+      "ChannelAccountPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelAccountRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor",
+            "description": "Pass as cursor for the next page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ChannelAccountPage"
+      },
+      "ChannelAccountRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/AccountChannel"
+          },
+          "provider_account_id": {
+            "type": "string",
+            "title": "Provider Account Id",
+            "description": "Page id (Facebook) or Instagram user id."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handle",
+            "description": "Instagram username; null for Facebook Pages."
+          },
+          "state": {
+            "$ref": "#/components/schemas/AccountState"
+          },
+          "state_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Reason",
+            "description": "What to do next, for states other than ready."
+          },
+          "can_publish": {
+            "type": "boolean",
+            "title": "Can Publish",
+            "description": "True only in CONNECTED, or TEST_ONLY for test accounts."
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions",
+            "description": "Meta permissions granted for this account."
+          },
+          "missing_permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Permissions"
+          },
+          "connected_by": {
+            "type": "string",
+            "title": "Connected By"
+          },
+          "connected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Connected At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At",
+            "description": "When the token stops working, if Meta says."
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "disconnected_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disconnected At"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/ChannelCapabilities"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "channel",
+          "provider_account_id",
+          "name",
+          "handle",
+          "state",
+          "state_reason",
+          "can_publish",
+          "permissions",
+          "missing_permissions",
+          "connected_by",
+          "connected_at",
+          "expires_at",
+          "last_checked_at",
+          "disconnected_at",
+          "capabilities"
+        ],
+        "title": "ChannelAccountRead"
+      },
+      "ChannelCapabilities": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "description": "Capability matrix version; publication manifests keep it."
+          },
+          "text_only": {
+            "type": "boolean",
+            "title": "Text Only",
+            "description": "A post with no media is allowed (Facebook Pages only)."
+          },
+          "requires_media": {
+            "type": "boolean",
+            "title": "Requires Media"
+          },
+          "image": {
+            "type": "boolean",
+            "title": "Image"
+          },
+          "video": {
+            "type": "boolean",
+            "title": "Video",
+            "description": "Video publishing is not supported yet on any channel."
+          },
+          "formats": {
+            "items": {
+              "$ref": "#/components/schemas/PostFormat"
+            },
+            "type": "array",
+            "title": "Formats",
+            "description": "Post formats this app can publish here now."
+          },
+          "image_mime_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Image Mime Types"
+          },
+          "max_image_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Image Bytes"
+          },
+          "min_aspect_ratio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Aspect Ratio",
+            "description": "Narrowest width:height, e.g. 4:5."
+          },
+          "max_aspect_ratio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Aspect Ratio",
+            "description": "Widest width:height, e.g. 1.91:1."
+          },
+          "caption_max_chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caption Max Chars"
+          },
+          "schedule": {
+            "type": "boolean",
+            "title": "Schedule",
+            "description": "The provider can hold a post until a set time."
+          },
+          "delete": {
+            "type": "boolean",
+            "title": "Delete",
+            "description": "This app can remove a published post here."
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "text_only",
+          "requires_media",
+          "image",
+          "video",
+          "formats",
+          "image_mime_types",
+          "max_image_bytes",
+          "min_aspect_ratio",
+          "max_aspect_ratio",
+          "caption_max_chars",
+          "schedule",
+          "delete"
+        ],
+        "title": "ChannelCapabilities",
+        "description": "What this account can publish now. Checked again at dispatch; not a promise."
+      },
       "CheckType": {
         "type": "string",
         "enum": [
@@ -2886,6 +3962,74 @@
         ],
         "title": "CheckType",
         "description": "What makes the final decision for a rule: code alone, or the model after a phrase check."
+      },
+      "ConnectCandidate": {
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/AccountChannel"
+          },
+          "provider_account_id": {
+            "type": "string",
+            "title": "Provider Account Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handle"
+          },
+          "page_id": {
+            "type": "string",
+            "title": "Page Id"
+          },
+          "can_publish": {
+            "type": "boolean",
+            "title": "Can Publish",
+            "description": "False when a Page task or permission is missing."
+          },
+          "missing_permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Permissions"
+          },
+          "already_connected": {
+            "type": "boolean",
+            "title": "Already Connected"
+          }
+        },
+        "type": "object",
+        "required": [
+          "channel",
+          "provider_account_id",
+          "name",
+          "handle",
+          "page_id",
+          "can_publish",
+          "missing_permissions",
+          "already_connected"
+        ],
+        "title": "ConnectCandidate"
+      },
+      "ConnectStatus": {
+        "type": "string",
+        "enum": [
+          "WAITING_FOR_META",
+          "AWAITING_SELECTION",
+          "COMPLETED",
+          "FAILED"
+        ],
+        "title": "ConnectStatus"
       },
       "ContextEvidenceRead": {
         "properties": {
@@ -4342,6 +5486,111 @@
           "next_cursor"
         ],
         "title": "MediaPage"
+      },
+      "MetaBindRequest": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AccountSelection"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Accounts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "accounts"
+        ],
+        "title": "MetaBindRequest"
+      },
+      "MetaConnectStart": {
+        "properties": {
+          "return_path": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^(/[A-Za-z0-9_-]+)*/?$",
+            "title": "Return Path",
+            "description": "Web app path to land on after Meta, e.g. /accounts. Paths only, no hosts.",
+            "default": "/accounts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "MetaConnectStart"
+      },
+      "MetaConnectStarted": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "authorization_url": {
+            "type": "string",
+            "title": "Authorization Url",
+            "description": "Send the browser here (top-level navigation)."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "authorization_url",
+          "expires_at"
+        ],
+        "title": "MetaConnectStarted"
+      },
+      "MetaConnectionRead": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConnectStatus"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code",
+            "description": "Set when status is FAILED: login_cancelled, state_expired, meta_error or no_pages."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "status",
+          "error_code",
+          "expires_at",
+          "candidates"
+        ],
+        "title": "MetaConnectionRead"
       },
       "MissingContextCode": {
         "type": "string",

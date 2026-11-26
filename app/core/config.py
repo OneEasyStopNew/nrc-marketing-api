@@ -190,6 +190,28 @@ class Settings(RetrievalSettings):
     # The S3 standard caps presigned links at 15 minutes.
     asset_url_ttl_seconds: int = Field(default=900, ge=60, le=900)
 
+    # Meta (Facebook Pages and Instagram professional accounts, NRC-13). Connecting accounts
+    # answers 501 until the app id, secret, callback URL, web URL and token key are all set.
+    meta_app_id: str | None = Field(default=None, pattern=r"^[0-9]{5,32}$")
+    meta_app_secret: SecretStr | None = None
+    # Pinned Graph API version; bump it only after checking Meta's changelog.
+    meta_graph_version: str = Field(default="v26.0", pattern=r"^v[0-9]{2}\.[0-9]$")
+    meta_graph_base_url: HttpUrl = HttpUrl("https://graph.facebook.com")
+    meta_login_base_url: HttpUrl = HttpUrl("https://www.facebook.com")
+    # Where Meta sends the browser back: this API's /webhooks/meta/oauth/callback, as registered
+    # in the Meta app's "Valid OAuth Redirect URIs". https only outside local.
+    meta_oauth_redirect_uri: HttpUrl | None = None
+    # development: only people with a role on the Meta app can connect and publish (TEST_ONLY).
+    # in_review: permissions are submitted for App Review, publishing stays blocked.
+    # live: Advanced Access granted.
+    meta_app_mode: Literal["development", "in_review", "live"] = "development"
+    meta_connect_ttl_seconds: int = Field(default=600, ge=60, le=1800)
+    # The web app's address; after the callback the browser lands on its accounts page.
+    web_app_url: HttpUrl | None = None
+    # 32-byte AES key, base64, prefixed with a key id: "<key-id>:<base64>". Encrypts provider
+    # tokens at rest. Staging and production read it from Secrets Manager into the env.
+    token_encryption_key: SecretStr | None = None
+
     # Client uploads (NRC-3). Final limits come from the product owner; these are the defaults.
     # Presigned upload URLs share the 15-minute S3 cap above.
     upload_url_ttl_seconds: int = Field(default=600, ge=60, le=900)
@@ -245,10 +267,19 @@ class Settings(RetrievalSettings):
             )
         return types
 
-    @field_validator("dev_jwks_file", mode="before")
+    @field_validator(
+        "dev_jwks_file",
+        "meta_app_id",
+        "meta_app_secret",
+        "meta_oauth_redirect_uri",
+        "web_app_url",
+        "token_encryption_key",
+        mode="before",
+    )
     @classmethod
     def _blank_means_unset(cls, value: object) -> object:
-        # `DEV_JWKS_FILE=` (as in .env.example) means "use Cognito", not the current directory.
+        # `DEV_JWKS_FILE=` (as in .env.example) means "use Cognito", not the current directory;
+        # an empty Meta value means "Meta not configured", not an invalid one.
         if isinstance(value, str) and not value.strip():
             return None
         return value

@@ -8,6 +8,13 @@ from pydantic import BaseModel
 
 from app.models.enums import JobStage
 from app.schemas.assets import AssetRead, MediaPage
+from app.schemas.channel_accounts import (
+    ChannelAccountList,
+    ChannelAccountPage,
+    ChannelAccountRead,
+    MetaConnectionRead,
+    MetaConnectStarted,
+)
 from app.schemas.common import ErrorBody
 from app.schemas.creatives import CreativeRead, CreativeVersionPage
 from app.schemas.jobs import JobAccepted, JobRead
@@ -24,6 +31,9 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     model.__name__: model
     for model in (
         AssetRead,
+        ChannelAccountList,
+        ChannelAccountPage,
+        ChannelAccountRead,
         ContextRead,
         CreativeRead,
         CreativeVersionPage,
@@ -33,6 +43,8 @@ SCHEMAS: dict[str, type[BaseModel]] = {
         JobRead,
         MediaPage,
         MeRead,
+        MetaConnectStarted,
+        MetaConnectionRead,
         PolicyBundleRead,
         PolicyBundleRulesRead,
         UploadLimits,
