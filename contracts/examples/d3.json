@@ -91,5 +91,33 @@
       "download_url": "https://storage.example/generated-images/2026/11/sample.png?X-Amz-Signature=placeholder",
       "download_url_expires_at": "2026-11-09T10:15:07Z"
     }
+  },
+  "error_429_active_jobs": {
+    "request": "POST /v1/marketing/creative-jobs while the tenant already has the maximum number of generations running",
+    "status": 429,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "GENERATION_LIMIT_REACHED",
+      "message": "Too many image generations are running. Try again when one finishes.",
+      "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e30",
+      "details": {
+        "reason": "ACTIVE_JOB_LIMIT"
+      },
+      "retryable": true
+    }
+  },
+  "error_429_credit_ceiling": {
+    "request": "POST /v1/marketing/creative-jobs after the tenant used its daily generation credits",
+    "status": 429,
+    "schema": "ErrorBody",
+    "body": {
+      "code": "GENERATION_LIMIT_REACHED",
+      "message": "The daily image generation allowance is used up.",
+      "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e31",
+      "details": {
+        "reason": "CREDIT_CEILING"
+      },
+      "retryable": true
+    }
   }
 }

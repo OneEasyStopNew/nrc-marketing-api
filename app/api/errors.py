@@ -58,8 +58,9 @@ COMMON_ERROR_RESPONSES: Final[dict[int | str, dict[str, Any]]] = {
 }
 
 
-def _status_for(error: AppError) -> int:
-    for cls in type(error).__mro__:
+def status_for(error_type: type[AppError]) -> int:
+    # The closest mapped base class decides; contract tests use this to check the examples.
+    for cls in error_type.__mro__:
         status = STATUS_BY_ERROR.get(cls)
         if status is not None:
             return status
@@ -86,7 +87,7 @@ def _error_response(
 
 
 async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
-    status = _status_for(exc)
+    status = status_for(type(exc))
     headers = {"WWW-Authenticate": "Bearer"} if status == HTTPStatus.UNAUTHORIZED else None
     return _error_response(
         status, exc.code, exc.message, details=exc.details, retryable=exc.retryable, headers=headers
