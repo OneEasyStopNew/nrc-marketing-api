@@ -20,8 +20,9 @@ LEASE_MAX_SECONDS = 600
 SUPPORTED_UPLOAD_IMAGE_TYPES: Final[frozenset[str]] = frozenset(IMAGE_EXTENSIONS)
 
 
-class Settings(BaseSettings):
-    # Typed configuration. Required values have no default, so a missing one fails at startup.
+class EmbeddingSettings(BaseSettings):
+    # What policy embeddings need, on its own so owner scripts (seed, index build) can load it
+    # without the API's settings (Cognito, DATABASE_URL). Settings inherits every field here.
 
     # .env.local (git-ignored, local only) overrides .env; it holds provider keys such as
     # HIGGSFIELD_API_KEY.
@@ -31,6 +32,55 @@ class Settings(BaseSettings):
 
     # Defaults to the strictest value: a deployment that forgets it gets no dev shortcuts.
     app_env: AppEnv = "production"
+    aws_region: str = "us-east-1"
+    # Policy embeddings (NRC-5). "off" builds and uses no vectors (retrieval is lexical only), so
+    # staging and production start unchanged until Bedrock access exists. "live" never falls back
+    # to the simulator and refuses to start without BEDROCK_EMBEDDING_MODEL_ID. The simulator's
+    # vectors carry no meaning: local and demo only.
+    embedding_mode: Literal["off", "simulator", "live"] = "off"
+    # One of the pinned models in app.services.providers.bedrock_embeddings.PINNED_MODELS.
+    bedrock_embedding_model_id: str | None = None
+    # Bedrock client: connect and read timeout per request, and botocore's retries after the
+    # first attempt (standard mode). The region is AWS_REGION; access comes from the IAM role.
+    bedrock_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    bedrock_max_retries: int = Field(default=3, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def _simulated_embeddings_only_outside_production(self) -> Self:
+        if self.embedding_mode == "simulator" and self.app_env not in NON_PRODUCTION_ENVS:
+            raise ValueError(
+                f"EMBEDDING_MODE=simulator cannot be used when APP_ENV={self.app_env!r}; "
+                "set APP_ENV=local (or demo) for development"
+            )
+        return self
+
+
+class RetrievalSettings(EmbeddingSettings):
+    # What policy retrieval needs (its bounds plus the embedding settings), on its own so the
+    # retrieval evaluation script runs without the API's settings. Settings inherits it.
+
+    # Policy retrieval (NRC-5): bounds on the graph walk from the selected rules: hops per rule,
+    # and evidence nodes plus exception entries per manifest. Hitting either is recorded in the
+    # context manifest (TRAVERSAL_TRUNCATED), never silently dropped.
+    policy_retrieval_max_hops: int = Field(default=3, ge=1, le=10)
+    policy_retrieval_max_nodes: int = Field(default=200, ge=10, le=2000)
+    # Search: matches kept per statement (per search, and after fusing them), and statements
+    # searched per request (more are recorded as STATEMENTS_TRUNCATED, not silently dropped).
+    policy_retrieval_top_k: int = Field(default=5, ge=1, le=50)
+    policy_retrieval_max_statements: int = Field(default=50, ge=1, le=200)
+    # Limit on each database statement (Postgres statement_timeout) while building the policy
+    # context inside a validation request; a run that hits it is stored as NEEDS_REVIEW (never
+    # PASS) with a coverage gap. Per statement, so a build's worst case is a few times this.
+    # Must be below DB_TIMEOUT_SECONDS (checked in Settings).
+    # At least 1 ms: statement_timeout is in whole milliseconds and 0 would mean no limit.
+    policy_context_timeout_seconds: float = Field(default=5, ge=0.001, le=30)
+
+
+class Settings(RetrievalSettings):
+    # Typed configuration. Required values have no default, so a missing one fails at startup.
+    # app_env, aws_region, the embedding settings and the retrieval bounds come from
+    # RetrievalSettings.
+
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     enable_docs: bool = False
     max_request_body_bytes: int = Field(default=1_048_576, ge=1024)
@@ -108,8 +158,8 @@ class Settings(BaseSettings):
     # Higgsfield's documented minimum retention.
     provider_output_retention_fallback_seconds: int = Field(default=604_800, ge=3600, le=1_209_600)
 
-    # Media storage (NRC-3). The bucket comes only from configuration, never from code.
-    aws_region: str = "us-east-1"
+    # Media storage (NRC-3). The bucket comes only from configuration, never from code. The
+    # region (AWS_REGION) is in EmbeddingSettings.
     aws_s3_bucket: str | None = None
     # Local SeaweedFS only; never set on servers, where the IAM role gives access.
     aws_endpoint_url_s3: str | None = None
@@ -191,11 +241,23 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
+    def _context_timeout_below_db_timeout(self) -> Self:
+        # Postgres's statement_timeout must fire first: asyncpg's own timeout (DB_TIMEOUT_SECONDS)
+        # raises outside SQLAlchemy and would fail the request instead of recording NEEDS_REVIEW.
+        if self.policy_context_timeout_seconds >= self.db_timeout_seconds:
+            raise ValueError(
+                "POLICY_CONTEXT_TIMEOUT_SECONDS must be below DB_TIMEOUT_SECONDS "
+                f"({self.policy_context_timeout_seconds} >= {self.db_timeout_seconds})"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _shortcuts_only_outside_production(self) -> Self:
         if self.app_env in NON_PRODUCTION_ENVS:
             return self
         enabled = [
             name
+            # EMBEDDING_MODE=simulator is refused by EmbeddingSettings' own validator.
             for name, on in (
                 ("DEMO_STUBS", self.demo_stubs),
                 ("DEV_JWKS_FILE", self.dev_jwks_file),
