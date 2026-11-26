@@ -12,16 +12,9 @@ from app.auth.tokens import Principal
 from app.core.errors import PermissionDeniedError
 from app.db.session import bind_tenant
 from app.models import Membership, MembershipStudy, Study, StudySnapshot, Tenant
-from app.models.enums import FORMAT_SPECS, Language
-from app.schemas.tenancy import (
-    ContextRead,
-    MeRead,
-    PostFormatOption,
-    StudyFacts,
-    StudySnapshotRead,
-    TenantMembershipRead,
-)
-from app.services import policies
+from app.models.enums import CallToAction, Language
+from app.schemas.tenancy import ContextRead, MeRead, TenantMembershipRead
+from app.services import policies, studies
 
 
 async def get_me(db: AsyncSession, principal: Principal) -> MeRead:
@@ -114,8 +107,8 @@ async def get_context(db: AsyncSession, ctx: TenantContext) -> ContextRead:
         .ext(distinct_on(StudySnapshot.study_id))
         .order_by(StudySnapshot.study_id, StudySnapshot.version.desc())
     )
-    studies = sorted(
-        (_snapshot_read(snapshot, title, ref) for snapshot, title, ref in rows),
+    snapshots = sorted(
+        (studies.snapshot_read(snapshot, title, ref) for snapshot, title, ref in rows),
         key=lambda study: study.study_title,
     )
     return ContextRead(
@@ -123,34 +116,9 @@ async def get_context(db: AsyncSession, ctx: TenantContext) -> ContextRead:
         tenant_name=tenant_name,
         roles=sorted(ctx.roles),
         capabilities=sorted(ctx.capabilities),
-        studies=studies,
+        studies=snapshots,
         languages=list(Language),
-        post_formats=[
-            PostFormatOption(
-                channel=spec.channel,
-                post_format=post_format,
-                aspect_ratio=spec.aspect_ratio,
-                width_px=spec.width_px,
-                height_px=spec.height_px,
-            )
-            for post_format, spec in FORMAT_SPECS.items()
-        ],
+        post_formats=studies.post_format_options(),
+        call_to_actions=list(CallToAction),
         active_policy=await policies.get_active_policy_summary(db, ctx.tenant_id),
-    )
-
-
-def _snapshot_read(snapshot: StudySnapshot, title: str, ref: str | None) -> StudySnapshotRead:
-    return StudySnapshotRead(
-        study_id=snapshot.study_id,
-        study_title=title,
-        study_external_ref=ref,
-        snapshot_id=snapshot.id,
-        version=snapshot.version,
-        recruitment_status=snapshot.recruitment_status,
-        language=snapshot.language,
-        facts=StudyFacts.model_validate(snapshot.facts),
-        source_ref=snapshot.source_ref,
-        approved_by=snapshot.approved_by,
-        approved_at=snapshot.approved_at,
-        is_synthetic=snapshot.is_synthetic,
     )

@@ -11,7 +11,17 @@ from fastapi.routing import APIRoute
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from app.api.errors import COMMON_ERROR_RESPONSES, register_exception_handlers
-from app.api.routes import assets, creatives, demo_files, health, jobs, me, policies, workflows
+from app.api.routes import (
+    assets,
+    creatives,
+    demo_files,
+    health,
+    jobs,
+    me,
+    policies,
+    studies,
+    workflows,
+)
 from app.auth.tokens import JwksClient, LocalJwks, SigningKeyProvider
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -73,6 +83,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     for router in (
         me.router,
+        studies.router,
         creatives.router,
         policies.router,
         workflows.router,

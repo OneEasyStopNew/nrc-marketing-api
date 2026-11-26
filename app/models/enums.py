@@ -31,6 +31,26 @@ class Channel(StrEnum):
 
 class PostFormat(StrEnum):
     FEED_IMAGE = "feed_image"
+    # Drafts and generation only; publishing Stories comes with NRC-32.
+    STORY_IMAGE = "story_image"
+
+
+class CallToAction(StrEnum):
+    # The link button of a post. Fixed values, so they map straight to Meta's CTA types later.
+    LEARN_MORE = "learn_more"
+    SIGN_UP = "sign_up"
+    APPLY_NOW = "apply_now"
+    CONTACT_US = "contact_us"
+
+
+class BriefField(StrEnum):
+    # Brief fields beyond the prompt, caption and image text; named in brief_issues and formats.
+    HEADLINE = "headline"
+    CALL_TO_ACTION = "call_to_action"
+    DESTINATION_URL = "destination_url"
+    SITE = "site"
+    AUDIENCE = "audience"
+    VISUAL_INSTRUCTIONS = "visual_instructions"
 
 
 class ExecutionState(StrEnum):
@@ -222,10 +242,30 @@ class FormatSpec:
     aspect_ratio: str
     width_px: int
     height_px: int
+    # A post with a link fills all of these, or none. Checked for readiness, never on save,
+    # because drafts autosave while the user is still filling them in.
+    link_fields: frozenset[BriefField]
 
 
 FORMAT_SPECS: Final[Mapping[PostFormat, FormatSpec]] = MappingProxyType(
-    {PostFormat.FEED_IMAGE: FormatSpec(Channel.FACEBOOK, "1:1", 1080, 1080)}
+    {
+        # The feed shows the headline as the link headline under the image.
+        PostFormat.FEED_IMAGE: FormatSpec(
+            Channel.FACEBOOK,
+            "1:1",
+            1080,
+            1080,
+            frozenset({BriefField.DESTINATION_URL, BriefField.CALL_TO_ACTION, BriefField.HEADLINE}),
+        ),
+        # A Story link has a button but no headline.
+        PostFormat.STORY_IMAGE: FormatSpec(
+            Channel.FACEBOOK,
+            "9:16",
+            1080,
+            1920,
+            frozenset({BriefField.DESTINATION_URL, BriefField.CALL_TO_ACTION}),
+        ),
+    }
 )
 
 

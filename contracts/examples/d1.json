@@ -43,6 +43,8 @@
             "sites": ["Synthetic Demo Site"],
             "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
             "required_disclosures": ["This is a research study. Taking part is voluntary."],
+            "approved_claim_records": [{"key": "claim-1", "text": "The study is testing an investigational treatment for blood pressure.", "language": "en", "version": 1, "text_sha256": "9d11219d3db0a3abd2d02491808e1f5dd95fdfb3ad6f32f427b7dd9fd096c468", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
+            "required_disclosure_records": [{"key": "disclosure-1", "text": "This is a research study. Taking part is voluntary.", "language": "en", "version": 1, "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
             "compensation_statement": null,
             "contact_url": "https://example.org/synthetic-demo-study"
           },
@@ -54,9 +56,120 @@
       ],
       "languages": ["en"],
       "post_formats": [
-        {"channel": "facebook", "post_format": "feed_image", "aspect_ratio": "1:1", "width_px": 1080, "height_px": 1080}
+        {"channel": "facebook", "post_format": "feed_image", "aspect_ratio": "1:1", "width_px": 1080, "height_px": 1080, "link_fields": ["headline", "call_to_action", "destination_url"]},
+        {"channel": "facebook", "post_format": "story_image", "aspect_ratio": "9:16", "width_px": 1080, "height_px": 1920, "link_fields": ["call_to_action", "destination_url"]}
       ],
+      "call_to_actions": ["learn_more", "sign_up", "apply_now", "contact_us"],
       "active_policy": {"policy_bundle_id": "a1d4c7e2-8b3f-4e6a-9c5d-2f7b1e8a4c06", "version": 1, "name": "[SYNTHETIC] Demo recruitment advertising rules", "is_synthetic": true, "rule_count": 9}
+    }
+  },
+  "studies": {
+    "request": "GET /v1/marketing/studies?limit=50",
+    "status": 200,
+    "schema": "StudyPage",
+    "body": {
+      "items": [
+        {
+          "study_id": "d7b3e1f4-2a6c-4d8e-b1f3-5c9a2e7d4b10",
+          "title": "[SYNTHETIC] Asthma study (awaiting approval)",
+          "external_ref": null,
+          "availability": "no_approved_snapshot",
+          "latest_snapshot": null
+        },
+        {
+          "study_id": "c3a1f9d2-5b7e-4f10-8d2a-6e9b4c7a2b02",
+          "title": "[SYNTHETIC] Demo study",
+          "external_ref": null,
+          "availability": "recruiting",
+          "latest_snapshot": {
+            "study_id": "c3a1f9d2-5b7e-4f10-8d2a-6e9b4c7a2b02",
+            "study_title": "[SYNTHETIC] Demo study",
+            "study_external_ref": null,
+            "snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
+            "version": 1,
+            "recruitment_status": "recruiting",
+            "language": "en",
+            "facts": {
+              "condition": "high blood pressure",
+              "eligibility_summary": "Adults aged 18 to 75 who have been told they have high blood pressure.",
+              "min_age": 18,
+              "max_age": 75,
+              "sites": ["Synthetic Demo Site"],
+              "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
+              "required_disclosures": ["This is a research study. Taking part is voluntary."],
+              "approved_claim_records": [{"key": "claim-1", "text": "The study is testing an investigational treatment for blood pressure.", "language": "en", "version": 1, "text_sha256": "9d11219d3db0a3abd2d02491808e1f5dd95fdfb3ad6f32f427b7dd9fd096c468", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
+              "required_disclosure_records": [{"key": "disclosure-1", "text": "This is a research study. Taking part is voluntary.", "language": "en", "version": 1, "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
+              "compensation_statement": null,
+              "contact_url": "https://example.org/synthetic-demo-study"
+            },
+            "source_ref": "synthetic:demo-seed-v1",
+            "approved_by": "synthetic-fixture",
+            "approved_at": "2026-11-04T09:00:00Z",
+            "is_synthetic": true
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  "study_snapshots": {
+    "request": "GET /v1/marketing/studies/c3a1f9d2-.../snapshots?limit=20",
+    "status": 200,
+    "schema": "StudySnapshotPage",
+    "body": {
+      "items": [
+        {
+            "study_id": "c3a1f9d2-5b7e-4f10-8d2a-6e9b4c7a2b02",
+            "study_title": "[SYNTHETIC] Demo study",
+            "study_external_ref": null,
+            "snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
+            "version": 1,
+            "recruitment_status": "recruiting",
+            "language": "en",
+            "facts": {
+              "condition": "high blood pressure",
+              "eligibility_summary": "Adults aged 18 to 75 who have been told they have high blood pressure.",
+              "min_age": 18,
+              "max_age": 75,
+              "sites": ["Synthetic Demo Site"],
+              "approved_claims": ["The study is testing an investigational treatment for blood pressure."],
+              "required_disclosures": ["This is a research study. Taking part is voluntary."],
+              "approved_claim_records": [{"key": "claim-1", "text": "The study is testing an investigational treatment for blood pressure.", "language": "en", "version": 1, "text_sha256": "9d11219d3db0a3abd2d02491808e1f5dd95fdfb3ad6f32f427b7dd9fd096c468", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
+              "required_disclosure_records": [{"key": "disclosure-1", "text": "This is a research study. Taking part is voluntary.", "language": "en", "version": 1, "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395", "approved_by": "synthetic-fixture", "approved_at": "2026-11-01T00:00:00Z"}],
+              "compensation_statement": null,
+              "contact_url": "https://example.org/synthetic-demo-study"
+            },
+            "source_ref": "synthetic:demo-seed-v1",
+            "approved_by": "synthetic-fixture",
+            "approved_at": "2026-11-04T09:00:00Z",
+            "is_synthetic": true
+          }
+      ],
+      "next_cursor": null
+    }
+  },
+  "capabilities": {
+    "request": "GET /v1/marketing/capabilities  (X-Tenant-Id: 7b0e6a52-...)",
+    "status": 200,
+    "schema": "PlatformCapabilities",
+    "body": {
+      "languages": ["en"],
+      "post_formats": [
+        {"channel": "facebook", "post_format": "feed_image", "aspect_ratio": "1:1", "width_px": 1080, "height_px": 1080, "link_fields": ["headline", "call_to_action", "destination_url"]},
+        {"channel": "facebook", "post_format": "story_image", "aspect_ratio": "9:16", "width_px": 1080, "height_px": 1920, "link_fields": ["call_to_action", "destination_url"]}
+      ],
+      "call_to_actions": ["learn_more", "sign_up", "apply_now", "contact_us"],
+      "text_limits": {
+        "prompt_max_chars": 4000,
+        "caption_max_chars": 2200,
+        "image_text_max_chars": 300,
+        "image_text_max_lines": 6,
+        "headline_max_chars": 150,
+        "audience_max_chars": 500,
+        "visual_instructions_max_chars": 2000,
+        "destination_url_max_chars": 2048,
+        "generation_text_max_chars": 1448
+      }
     }
   },
   "policy_active": {
@@ -91,7 +204,7 @@
     "body": {"creative_id": "9f4b2c1e-7d6a-4e8b-a3c5-1d2e3f4a5b04", "creative_version": 1, "eligible": false, "reason": "NOT_VALIDATED", "message": "Validate the brief for this version before generating.", "policy_bundle_version": 1, "validation_run_id": null}
   },
   "creative_created": {
-    "request": "POST /v1/marketing/creatives  (Idempotency-Key: 2f6c9e1a8b7d4c3e)",
+    "request": "POST /v1/marketing/creatives  (Idempotency-Key: 2f6c9e1a8b7d4c3e)  CTA and site picked, link and headline not typed yet, so brief_issues lists them",
     "status": 201,
     "headers": {"ETag": "\"1\"", "Location": "/v1/marketing/creatives/9f4b2c1e-7d6a-4e8b-a3c5-1d2e3f4a5b04"},
     "schema": "CreativeRead",
@@ -102,6 +215,13 @@
       "original_prompt": "Invite adults with high blood pressure to learn about our study. Guaranteed results!",
       "current_prompt": "Invite adults with high blood pressure to learn about our study. Guaranteed results!",
       "caption": "Learn about a blood pressure research study near you.",
+      "image_text": "High blood pressure?\nSee if you qualify",
+      "headline": null,
+      "call_to_action": "learn_more",
+      "destination_url": null,
+      "site": "Synthetic Demo Site",
+      "audience": "Adults 18 to 75 told they have high blood pressure",
+      "visual_instructions": "Warm, natural light. A middle-aged adult reading at home. No medical equipment.",
       "language": "en",
       "channel": "facebook",
       "post_format": "feed_image",
@@ -111,11 +231,12 @@
       "created_by": "3c8f1a2b-4d5e-4f60-8a7b-9c0d1e2f3a05",
       "created_at": "2026-11-04T10:15:00Z",
       "updated_at": "2026-11-04T10:15:00Z",
-      "validation_runs": []
+      "validation_runs": [],
+      "brief_issues": [{"field": "headline", "code": "REQUIRED_WITH_LINK"}, {"field": "destination_url", "code": "REQUIRED_WITH_LINK"}]
     }
   },
   "creative_edited": {
-    "request": "PATCH /v1/marketing/creatives/9f4b2c1e-...  (If-Match: \"1\")  {\"current_prompt\": \"...\"}",
+    "request": "PATCH /v1/marketing/creatives/9f4b2c1e-...  (If-Match: \"1\")  {\"current_prompt\": \"...\", \"headline\": \"...\", \"destination_url\": \"https://...\"}",
     "status": 200,
     "headers": {"ETag": "\"2\""},
     "schema": "CreativeRead",
@@ -126,6 +247,13 @@
       "original_prompt": "Invite adults with high blood pressure to learn about our study. Guaranteed results!",
       "current_prompt": "Invite adults with high blood pressure to learn about our research study.",
       "caption": "Learn about a blood pressure research study near you.",
+      "image_text": "High blood pressure?\nSee if you qualify",
+      "headline": "See if you qualify for a blood pressure study",
+      "call_to_action": "learn_more",
+      "destination_url": "https://example.org/synthetic-demo-study",
+      "site": "Synthetic Demo Site",
+      "audience": "Adults 18 to 75 told they have high blood pressure",
+      "visual_instructions": "Warm, natural light. A middle-aged adult reading at home. No medical equipment.",
       "language": "en",
       "channel": "facebook",
       "post_format": "feed_image",
@@ -135,7 +263,8 @@
       "created_by": "3c8f1a2b-4d5e-4f60-8a7b-9c0d1e2f3a05",
       "created_at": "2026-11-04T10:15:00Z",
       "updated_at": "2026-11-04T10:20:00Z",
-      "validation_runs": []
+      "validation_runs": [],
+      "brief_issues": []
     }
   },
   "creative_versions": {
@@ -148,6 +277,13 @@
           "version": 2,
           "current_prompt": "Invite adults with high blood pressure to learn about our research study.",
           "caption": "Learn about a blood pressure research study near you.",
+          "image_text": "High blood pressure?\nSee if you qualify",
+          "headline": "See if you qualify for a blood pressure study",
+          "call_to_action": "learn_more",
+          "destination_url": "https://example.org/synthetic-demo-study",
+          "site": "Synthetic Demo Site",
+          "audience": "Adults 18 to 75 told they have high blood pressure",
+          "visual_instructions": "Warm, natural light. A middle-aged adult reading at home. No medical equipment.",
           "study_snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
           "language": "en",
           "channel": "facebook",
@@ -160,6 +296,13 @@
           "version": 1,
           "current_prompt": "Invite adults with high blood pressure to learn about our study. Guaranteed results!",
           "caption": "Learn about a blood pressure research study near you.",
+          "image_text": "High blood pressure?\nSee if you qualify",
+          "headline": null,
+          "call_to_action": "learn_more",
+          "destination_url": null,
+          "site": "Synthetic Demo Site",
+          "audience": "Adults 18 to 75 told they have high blood pressure",
+          "visual_instructions": "Warm, natural light. A middle-aged adult reading at home. No medical equipment.",
           "study_snapshot_id": "e5d2a8c4-1f3b-4a6d-9c7e-8b2f5d1a3c03",
           "language": "en",
           "channel": "facebook",
@@ -226,6 +369,12 @@
     "status": 422,
     "schema": "ErrorBody",
     "body": {"code": "VALIDATION_FAILED", "message": "The request has invalid fields.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e16", "details": {"fields": [{"loc": ["body", "language"], "msg": "Input should be 'en'", "type": "enum"}]}, "retryable": false}
+  },
+  "error_422_site": {
+    "request": "PATCH /creatives/{id} with \"site\": \"Another Clinic\", which is not one of the pinned snapshot's sites",
+    "status": 422,
+    "schema": "ErrorBody",
+    "body": {"code": "VALIDATION_FAILED", "message": "The request has invalid fields.", "request_id": "5f0c2b8e-6a1d-4b3c-9e7f-0a1b2c3d4e1a", "details": {"fields": [{"loc": ["body", "site"], "msg": "must be one of the study's approved sites", "type": "site_not_approved"}]}, "retryable": false}
   },
   "error_428_if_match": {
     "request": "PATCH /creatives/{id} without If-Match",

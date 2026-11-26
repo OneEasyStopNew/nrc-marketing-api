@@ -13,6 +13,7 @@ from app.schemas.creatives import CreativeRead, CreativeVersionPage
 from app.schemas.jobs import JobAccepted, JobRead
 from app.schemas.policies import GenerationEligibility, PolicyBundleRead
 from app.schemas.policy_evidence import PolicyBundleRulesRead, ValidationContextRead
+from app.schemas.studies import PlatformCapabilities, StudyPage, StudySnapshotPage
 from app.schemas.tenancy import ContextRead, MeRead
 from app.schemas.uploads import UploadLimits, UploadPage, UploadRead
 from scripts.export_openapi import CONTRACT_PATH, render
@@ -33,8 +34,11 @@ SCHEMAS: dict[str, type[BaseModel]] = {
         JobRead,
         MediaPage,
         MeRead,
+        PlatformCapabilities,
         PolicyBundleRead,
         PolicyBundleRulesRead,
+        StudyPage,
+        StudySnapshotPage,
         UploadLimits,
         UploadPage,
         UploadRead,

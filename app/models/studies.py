@@ -3,7 +3,16 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, String, UniqueConstraint, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,7 +22,17 @@ from app.models.enums import Language, RecruitmentStatus, enum_column
 
 class Study(Base):
     __tablename__ = "studies"
-    __table_args__ = (UniqueConstraint("tenant_id", "id"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        # The source system's study id: the import finds the study by it, so one per tenant.
+        Index(
+            "uq_studies_tenant_id_external_ref",
+            "tenant_id",
+            "external_ref",
+            unique=True,
+            postgresql_where=text("external_ref IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"))

@@ -131,6 +131,390 @@
         }
       }
     },
+    "/v1/marketing/studies": {
+      "get": {
+        "tags": [
+          "studies"
+        ],
+        "summary": "Studies the caller may use, by title",
+        "description": "Each study says whether it accepts new drafts (availability) and carries its latest approved snapshot. Closed studies are listed so their drafts stay reachable.",
+        "operationId": "list_studies",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the last page.",
+              "title": "Cursor"
+            },
+            "description": "next_cursor from the last page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/studies/{study_id}": {
+      "get": {
+        "tags": [
+          "studies"
+        ],
+        "summary": "One study and its latest snapshot",
+        "operationId": "get_study",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Study Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Study not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/studies/{study_id}/snapshots": {
+      "get": {
+        "tags": [
+          "studies"
+        ],
+        "summary": "Approved snapshots of a study, newest first",
+        "description": "Snapshots never change. A draft keeps the snapshot it was created with, so a newer snapshot does not change existing drafts, validation runs or jobs.",
+        "operationId": "list_study_snapshots",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Study Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the last page.",
+              "title": "Cursor"
+            },
+            "description": "next_cursor from the last page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudySnapshotPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Study not found or not permitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/marketing/capabilities": {
+      "get": {
+        "tags": [
+          "studies"
+        ],
+        "summary": "Languages, post formats and text limits for drafts",
+        "operationId": "get_capabilities",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Tenant to act in. Access is checked against your current membership.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Tenant to act in. Access is checked against your current membership."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformCapabilities"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member of the tenant, or role not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields; see details.fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/marketing/creatives": {
       "post": {
         "tags": [
@@ -2561,6 +2945,57 @@
         ],
         "title": "Applicability"
       },
+      "ApprovedWording": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,49}$",
+            "title": "Key",
+            "description": "Stays the same for this wording across snapshots."
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version",
+            "description": "Goes up each time the text under this key changes."
+          },
+          "text_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Text Sha256",
+            "description": "See wording_sha256."
+          },
+          "approved_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Approved By"
+          },
+          "approved_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Approved At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "text",
+          "language",
+          "version",
+          "text_sha256",
+          "approved_by",
+          "approved_at"
+        ],
+        "title": "ApprovedWording",
+        "description": "One approved claim or required disclosure, with the approval it carries."
+      },
       "AssetOrigin": {
         "type": "string",
         "enum": [
@@ -2730,6 +3165,41 @@
         "title": "AuthorizationStatus",
         "description": "Whether media authorization is on record. None of these means it was verified."
       },
+      "BriefField": {
+        "type": "string",
+        "enum": [
+          "headline",
+          "call_to_action",
+          "destination_url",
+          "site",
+          "audience",
+          "visual_instructions"
+        ],
+        "title": "BriefField"
+      },
+      "BriefIssue": {
+        "properties": {
+          "field": {
+            "$ref": "#/components/schemas/BriefField"
+          },
+          "code": {
+            "$ref": "#/components/schemas/BriefIssueCode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "code"
+        ],
+        "title": "BriefIssue"
+      },
+      "BriefIssueCode": {
+        "type": "string",
+        "enum": [
+          "REQUIRED_WITH_LINK"
+        ],
+        "title": "BriefIssueCode"
+      },
       "BundleLifecycleState": {
         "type": "string",
         "enum": [
@@ -2856,6 +3326,16 @@
           "exceptions"
         ],
         "title": "BundleRuleRead"
+      },
+      "CallToAction": {
+        "type": "string",
+        "enum": [
+          "learn_more",
+          "sign_up",
+          "apply_now",
+          "contact_us"
+        ],
+        "title": "CallToAction"
       },
       "Capability": {
         "type": "string",
@@ -3066,6 +3546,13 @@
             "type": "array",
             "title": "Post Formats"
           },
+          "call_to_actions": {
+            "items": {
+              "$ref": "#/components/schemas/CallToAction"
+            },
+            "type": "array",
+            "title": "Call To Actions"
+          },
           "active_policy": {
             "anyOf": [
               {
@@ -3087,6 +3574,7 @@
           "studies",
           "languages",
           "post_formats",
+          "call_to_actions",
           "active_policy"
         ],
         "title": "ContextRead"
@@ -3209,6 +3697,21 @@
             ],
             "title": "Caption"
           },
+          "image_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1,
+                "description": "Exact text to render in the image, one line per line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Text",
+            "description": "Leave out for an image without text."
+          },
           "language": {
             "$ref": "#/components/schemas/Language"
           },
@@ -3217,6 +3720,83 @@
           },
           "post_format": {
             "$ref": "#/components/schemas/PostFormat"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 150,
+                "description": "Link headline under the image, one line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "call_to_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallToAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Url",
+            "description": "https only."
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "description": "One of the study snapshot's sites, exactly."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site",
+            "description": "One of the study snapshot's sites, exactly; leave out when not tied to one site."
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "description": "Who the post is for, one line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "visual_instructions": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Instructions"
           }
         },
         "additionalProperties": false,
@@ -3257,6 +3837,73 @@
       },
       "CreativeRead": {
         "properties": {
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline",
+            "description": "Link headline under the image, not on it."
+          },
+          "call_to_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallToAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Url"
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "visual_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Instructions",
+            "description": "Stored with the brief; image generation uses the prompt and image text only."
+          },
           "id": {
             "type": "string",
             "format": "uuid",
@@ -3291,6 +3938,18 @@
               }
             ],
             "title": "Caption"
+          },
+          "image_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Text",
+            "description": "Null when the image has no text."
           },
           "language": {
             "$ref": "#/components/schemas/Language"
@@ -3343,16 +4002,31 @@
             },
             "type": "array",
             "title": "Validation Runs"
+          },
+          "brief_issues": {
+            "items": {
+              "$ref": "#/components/schemas/BriefIssue"
+            },
+            "type": "array",
+            "title": "Brief Issues",
+            "description": "What the current version still needs before it can be approved. Saving works regardless; empty when the brief is complete."
           }
         },
         "type": "object",
         "required": [
+          "headline",
+          "call_to_action",
+          "destination_url",
+          "site",
+          "audience",
+          "visual_instructions",
           "id",
           "study_id",
           "version",
           "original_prompt",
           "current_prompt",
           "caption",
+          "image_text",
           "language",
           "channel",
           "post_format",
@@ -3391,12 +4065,103 @@
               }
             ],
             "title": "Caption"
+          },
+          "image_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1,
+                "description": "Exact text to render in the image, one line per line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Text"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 150,
+                "description": "Link headline under the image, one line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "call_to_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallToAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Url",
+            "description": "https only."
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "description": "One of the study snapshot's sites, exactly."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site",
+            "description": "One of the study snapshot's sites, exactly; leave out when not tied to one site."
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "description": "Who the post is for, one line."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "visual_instructions": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Instructions"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "CreativeUpdate",
-        "description": "Fields to change. Omitted fields keep their value; send caption: null to clear it."
+        "description": "Fields to change. Omitted fields keep their value; send any field but current_prompt as\nnull to clear it."
       },
       "CreativeVersionPage": {
         "properties": {
@@ -3429,6 +4194,73 @@
       },
       "CreativeVersionRead": {
         "properties": {
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline",
+            "description": "Link headline under the image, not on it."
+          },
+          "call_to_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallToAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Url"
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "visual_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Instructions",
+            "description": "Stored with the brief; image generation uses the prompt and image text only."
+          },
           "version": {
             "type": "integer",
             "title": "Version"
@@ -3447,6 +4279,17 @@
               }
             ],
             "title": "Caption"
+          },
+          "image_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Text"
           },
           "study_snapshot_id": {
             "type": "string",
@@ -3486,9 +4329,16 @@
         },
         "type": "object",
         "required": [
+          "headline",
+          "call_to_action",
+          "destination_url",
+          "site",
+          "audience",
+          "visual_instructions",
           "version",
           "current_prompt",
           "caption",
+          "image_text",
           "study_snapshot_id",
           "language",
           "channel",
@@ -4402,6 +5252,42 @@
         "title": "Outcome",
         "description": "Overall result. PASS is not approval and does not make content ready to publish."
       },
+      "PlatformCapabilities": {
+        "properties": {
+          "languages": {
+            "items": {
+              "$ref": "#/components/schemas/Language"
+            },
+            "type": "array",
+            "title": "Languages"
+          },
+          "post_formats": {
+            "items": {
+              "$ref": "#/components/schemas/PostFormatOption"
+            },
+            "type": "array",
+            "title": "Post Formats"
+          },
+          "call_to_actions": {
+            "items": {
+              "$ref": "#/components/schemas/CallToAction"
+            },
+            "type": "array",
+            "title": "Call To Actions"
+          },
+          "text_limits": {
+            "$ref": "#/components/schemas/TextLimits"
+          }
+        },
+        "type": "object",
+        "required": [
+          "languages",
+          "post_formats",
+          "call_to_actions",
+          "text_limits"
+        ],
+        "title": "PlatformCapabilities"
+      },
       "PolicyBundleRead": {
         "properties": {
           "policy_bundle_id": {
@@ -4622,7 +5508,8 @@
       "PostFormat": {
         "type": "string",
         "enum": [
-          "feed_image"
+          "feed_image",
+          "story_image"
         ],
         "title": "PostFormat"
       },
@@ -4645,6 +5532,14 @@
           "height_px": {
             "type": "integer",
             "title": "Height Px"
+          },
+          "link_fields": {
+            "items": {
+              "$ref": "#/components/schemas/BriefField"
+            },
+            "type": "array",
+            "title": "Link Fields",
+            "description": "A post with a link fills all of these, or none. Not enforced on save; missing ones show in the creative's brief_issues."
           }
         },
         "type": "object",
@@ -4653,7 +5548,8 @@
           "post_format",
           "aspect_ratio",
           "width_px",
-          "height_px"
+          "height_px",
+          "link_fields"
         ],
         "title": "PostFormatOption"
       },
@@ -4973,6 +5869,15 @@
         ],
         "title": "SourceReference"
       },
+      "StudyAvailability": {
+        "type": "string",
+        "enum": [
+          "recruiting",
+          "closed",
+          "no_approved_snapshot"
+        ],
+        "title": "StudyAvailability"
+      },
       "StudyFacts": {
         "properties": {
           "condition": {
@@ -5030,6 +5935,20 @@
             "type": "array",
             "title": "Required Disclosures"
           },
+          "approved_claim_records": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovedWording"
+            },
+            "type": "array",
+            "title": "Approved Claim Records"
+          },
+          "required_disclosure_records": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovedWording"
+            },
+            "type": "array",
+            "title": "Required Disclosure Records"
+          },
           "compensation_statement": {
             "anyOf": [
               {
@@ -5059,10 +5978,119 @@
           "eligibility_summary",
           "sites",
           "approved_claims",
-          "required_disclosures"
+          "required_disclosures",
+          "approved_claim_records",
+          "required_disclosure_records"
         ],
         "title": "StudyFacts",
-        "description": "Approved, marketing-safe facts. Validation and generation may only rely on these."
+        "description": "Approved, marketing-safe facts. Validation and generation may only rely on these.\n\napproved_claims and required_disclosures are the plain texts; the *_records lists hold the\nsame texts, in the same order, each with its approval (key, version, hash, who and when)."
+      },
+      "StudyPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StudyRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor",
+            "description": "Pass as cursor for the next page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "StudyPage"
+      },
+      "StudyRead": {
+        "properties": {
+          "study_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Study Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "external_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Ref"
+          },
+          "availability": {
+            "$ref": "#/components/schemas/StudyAvailability",
+            "description": "Only recruiting studies accept new drafts. Existing drafts of closed studies stay readable."
+          },
+          "latest_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudySnapshotRead"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until an approved snapshot is imported."
+          }
+        },
+        "type": "object",
+        "required": [
+          "study_id",
+          "title",
+          "external_ref",
+          "availability",
+          "latest_snapshot"
+        ],
+        "title": "StudyRead"
+      },
+      "StudySnapshotPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StudySnapshotRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor",
+            "description": "Pass as cursor for the next (older) page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "StudySnapshotPage"
       },
       "StudySnapshotRead": {
         "properties": {
@@ -5192,6 +6220,60 @@
           "capabilities"
         ],
         "title": "TenantMembershipRead"
+      },
+      "TextLimits": {
+        "properties": {
+          "prompt_max_chars": {
+            "type": "integer",
+            "title": "Prompt Max Chars"
+          },
+          "caption_max_chars": {
+            "type": "integer",
+            "title": "Caption Max Chars"
+          },
+          "image_text_max_chars": {
+            "type": "integer",
+            "title": "Image Text Max Chars"
+          },
+          "image_text_max_lines": {
+            "type": "integer",
+            "title": "Image Text Max Lines"
+          },
+          "headline_max_chars": {
+            "type": "integer",
+            "title": "Headline Max Chars"
+          },
+          "audience_max_chars": {
+            "type": "integer",
+            "title": "Audience Max Chars"
+          },
+          "visual_instructions_max_chars": {
+            "type": "integer",
+            "title": "Visual Instructions Max Chars"
+          },
+          "destination_url_max_chars": {
+            "type": "integer",
+            "title": "Destination Url Max Chars"
+          },
+          "generation_text_max_chars": {
+            "type": "integer",
+            "title": "Generation Text Max Chars",
+            "description": "Prompt plus image text together. Checked when generation starts, not on save, because drafts that are only validated never generate."
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt_max_chars",
+          "caption_max_chars",
+          "image_text_max_chars",
+          "image_text_max_lines",
+          "headline_max_chars",
+          "audience_max_chars",
+          "visual_instructions_max_chars",
+          "destination_url_max_chars",
+          "generation_text_max_chars"
+        ],
+        "title": "TextLimits"
       },
       "TextSpan": {
         "properties": {
