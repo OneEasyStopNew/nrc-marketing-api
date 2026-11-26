@@ -25,7 +25,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -258,6 +258,10 @@ class PolicyRuleRecord(Base):
     prohibited_phrases: Mapped[list[str]] = mapped_column(
         ARRAY(String(200)), server_default=_EMPTY_ARRAY
     )
+    # The rule's own record in an imported policy deliverable (layer, stage, outcome_policy,
+    # approval, applicability, relations), kept as imported: editing the rule does not change it.
+    # NULL for rules written in the editor.
+    contract: Mapped[dict[str, object] | None] = mapped_column(JSONB)
 
 
 class PolicyEdge(_ReviewColumns, Base):

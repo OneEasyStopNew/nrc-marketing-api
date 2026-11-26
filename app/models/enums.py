@@ -66,6 +66,9 @@ class Gate(StrEnum):
     STUDY_FACTS = "study_facts"
     POLICY = "policy"
     MEDIA = "media"
+    # Policy bundle v0.3: rules checked by a human reviewer, and channel publish readiness.
+    REVIEWER_GATE = "reviewer_gate"
+    CHANNEL_READINESS = "channel_readiness"
 
 
 class Severity(StrEnum):
@@ -252,6 +255,8 @@ class CheckType(StrEnum):
 
     DETERMINISTIC = "deterministic"
     SEMANTIC = "semantic"
+    # Policy bundle v0.3: a person attests it (e.g. IRB approval of the exact version); no model.
+    MANUAL_ATTESTATION = "manual_attestation"
 
 
 class IndexBuildState(StrEnum):

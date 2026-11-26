@@ -39,6 +39,11 @@ class PolicyBundle(Base):
             " OR (approved_by IS NOT NULL AND approved_at IS NOT NULL)",
             name="approved_states_have_approver",
         ),
+        CheckConstraint(
+            "(contract_document IS NULL) = (contract_sha256 IS NULL)"
+            " AND (contract_sha256 IS NULL OR contract_sha256 ~ '^[0-9a-f]{64}$')",
+            name="contract_has_checksum",
+        ),
         # At most one ACTIVE bundle per tenant: activation retires the previous one first.
         Index(
             "uq_policy_bundles_one_active",
@@ -80,3 +85,8 @@ class PolicyBundle(Base):
     attempts: Mapped[int] = mapped_column(server_default=text("0"))
     failed_attempts: Mapped[int] = mapped_column(server_default=text("0"))
     last_error_code: Mapped[str | None] = mapped_column(String(64))
+    # A bundle imported from a policy deliverable (scripts.import_policy_bundle): the document as
+    # imported, and its verified content_sha256. Fields runtime does not read yet (outcome policy,
+    # channel readiness, decisions) live only here. NULL for bundles built in the editor.
+    contract_document: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    contract_sha256: Mapped[str | None] = mapped_column(String(64))

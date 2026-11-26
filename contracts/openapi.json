@@ -5655,7 +5655,8 @@
         "type": "string",
         "enum": [
           "deterministic",
-          "semantic"
+          "semantic",
+          "manual_attestation"
         ],
         "title": "CheckType",
         "description": "What makes the final decision for a rule: code alone, or the model after a phrase check."
@@ -6592,7 +6593,9 @@
           "completeness",
           "study_facts",
           "policy",
-          "media"
+          "media",
+          "reviewer_gate",
+          "channel_readiness"
         ],
         "title": "Gate"
       },
