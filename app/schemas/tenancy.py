@@ -6,7 +6,14 @@ from uuid import UUID
 from pydantic import Field
 
 from app.auth.access import Capability, Role
-from app.models.enums import Channel, Language, PostFormat, RecruitmentStatus
+from app.models.enums import (
+    BriefField,
+    CallToAction,
+    Channel,
+    Language,
+    PostFormat,
+    RecruitmentStatus,
+)
 from app.schemas.common import ApiModel
 from app.schemas.policies import PolicySummary
 
@@ -59,6 +66,10 @@ class PostFormatOption(ApiModel):
     aspect_ratio: str
     width_px: int
     height_px: int
+    link_fields: list[BriefField] = Field(
+        description="A post with a link fills all of these, or none. Not enforced on save; "
+        "missing ones show in the creative's brief_issues."
+    )
 
 
 class ContextRead(ApiModel):
@@ -69,4 +80,5 @@ class ContextRead(ApiModel):
     studies: list[StudySnapshotRead]
     languages: list[Language]
     post_formats: list[PostFormatOption]
+    call_to_actions: list[CallToAction]
     active_policy: PolicySummary | None = Field(description="Null until a policy is loaded.")

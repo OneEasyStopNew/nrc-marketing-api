@@ -7,7 +7,7 @@ from sqlalchemy import DateTime, ForeignKeyConstraint, String, Text, UniqueConst
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import Channel, Language, PostFormat, enum_column
+from app.models.enums import CallToAction, Channel, Language, PostFormat, enum_column
 
 
 class Creative(Base):
@@ -48,6 +48,16 @@ class CreativeVersion(Base):
     version: Mapped[int]
     prompt: Mapped[str] = mapped_column(Text)
     caption: Mapped[str | None] = mapped_column(Text)
+    # Exact text to render in the image, one line per line. Null means no text in the image.
+    image_text: Mapped[str | None] = mapped_column(Text)
+    # Brief fields (NRC-2); null when not filled in. headline is the link headline under the image.
+    headline: Mapped[str | None] = mapped_column(Text)
+    call_to_action: Mapped[CallToAction | None] = mapped_column(enum_column(CallToAction))
+    destination_url: Mapped[str | None] = mapped_column(Text)
+    # One of the pinned snapshot's sites, exactly.
+    site: Mapped[str | None] = mapped_column(Text)
+    audience: Mapped[str | None] = mapped_column(Text)
+    visual_instructions: Mapped[str | None] = mapped_column(Text)
     study_snapshot_id: Mapped[UUID]
     language: Mapped[Language] = mapped_column(enum_column(Language))
     channel: Mapped[Channel] = mapped_column(enum_column(Channel))

@@ -441,3 +441,141 @@ async def test_asset_id_never_shows_another_tenants_image(
 
     assert my_view.json()["asset_id"] is None
     assert their_view.json()["asset_id"] == their_asset
+
+
+# Text in the image and the story format (NRC-2)
+
+
+async def test_image_text_is_versioned_and_can_be_cleared(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    created = await client.post(
+        CREATIVES,
+        headers=auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": uuid4().hex}),
+        json=_draft(world.a.study_id, image_text="High blood pressure?\nSee if you qualify"),
+    )
+    url = f"{CREATIVES}/{created.json()['id']}"
+
+    cleared = await client.patch(
+        url,
+        headers=auth("creator-a", world.a.tenant_id, **{"If-Match": '"1"'}),
+        json={"image_text": None},
+    )
+    history = await client.get(f"{url}/versions", headers=auth("creator-a", world.a.tenant_id))
+
+    assert created.status_code == 201
+    assert created.json()["image_text"] == "High blood pressure?\nSee if you qualify"
+    assert cleared.status_code == 200
+    assert cleared.json()["image_text"] is None
+    assert cleared.json()["current_prompt"] == created.json()["current_prompt"]
+    assert [item["image_text"] for item in history.json()["items"]] == [
+        None,
+        "High blood pressure?\nSee if you qualify",
+    ]
+
+
+async def test_draft_without_image_text_has_none(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    created = await _create(client, auth, world)
+
+    assert created["image_text"] is None
+
+
+async def test_editing_other_fields_keeps_image_text(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    created = await client.post(
+        CREATIVES,
+        headers=auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": uuid4().hex}),
+        json=_draft(world.a.study_id, image_text="See if you qualify"),
+    )
+
+    edited = await client.patch(
+        f"{CREATIVES}/{created.json()['id']}",
+        headers=auth("creator-a", world.a.tenant_id, **{"If-Match": '"1"'}),
+        json={"caption": "A new caption."},
+    )
+
+    assert edited.status_code == 200
+    assert edited.json()["image_text"] == "See if you qualify"
+
+
+async def test_image_text_line_endings_and_trailing_spaces_are_normalized(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    response = await client.post(
+        CREATIVES,
+        headers=auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": uuid4().hex}),
+        json=_draft(world.a.study_id, image_text="Line one  \r\nLine two\n"),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["image_text"] == "Line one\nLine two"
+
+
+@pytest.mark.parametrize(
+    "image_text",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="blank"),
+        pytest.param("One\n\nTwo", id="blank-line-inside"),
+        pytest.param("\n".join(["Line"] * 7), id="seven-lines"),
+        pytest.param("x" * 301, id="too-long"),
+    ],
+)
+async def test_invalid_image_text_returns_a_field_error(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders, image_text: str
+) -> None:
+    response = await client.post(
+        CREATIVES,
+        headers=auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": uuid4().hex}),
+        json=_draft(world.a.study_id, image_text=image_text),
+    )
+
+    assert response.status_code == 422
+    fields = response.json()["details"]["fields"]
+    assert "image_text" in fields[0]["loc"]
+
+
+async def test_image_text_at_the_limits_is_accepted(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    six_lines = "\n".join(["Line"] * 6)
+    longest = "x" * 300
+
+    responses = [
+        await client.post(
+            CREATIVES,
+            headers=auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": uuid4().hex}),
+            json=_draft(world.a.study_id, image_text=text),
+        )
+        for text in (six_lines, longest)
+    ]
+
+    assert [r.status_code for r in responses] == [201, 201]
+
+
+async def test_story_format_is_offered_and_accepted(
+    client: httpx.AsyncClient, world: World, auth: AuthHeaders
+) -> None:
+    context = await client.get(
+        "/v1/marketing/context", headers=auth("creator-a", world.a.tenant_id)
+    )
+    created = await client.post(
+        CREATIVES,
+        headers=auth("creator-a", world.a.tenant_id, **{"Idempotency-Key": uuid4().hex}),
+        json=_draft(world.a.study_id, post_format="story_image"),
+    )
+
+    story = next(f for f in context.json()["post_formats"] if f["post_format"] == "story_image")
+    assert story == {
+        "channel": "facebook",
+        "post_format": "story_image",
+        "aspect_ratio": "9:16",
+        "width_px": 1080,
+        "height_px": 1920,
+        "link_fields": ["call_to_action", "destination_url"],
+    }
+    assert created.status_code == 201
+    assert created.json()["post_format"] == "story_image"
