@@ -10,7 +10,15 @@ from typing import Any
 
 import boto3
 import pytest
-from botocore.exceptions import ConnectTimeoutError, NoCredentialsError, ReadTimeoutError
+from botocore.exceptions import (
+    ConnectTimeoutError,
+    CredentialRetrievalError,
+    NoCredentialsError,
+    ReadTimeoutError,
+    SSOTokenLoadError,
+    TokenRetrievalError,
+    UnauthorizedSSOTokenError,
+)
 from botocore.stub import Stubber
 
 from app.services.providers.base import (
@@ -207,6 +215,25 @@ async def test_timeouts_are_unavailable(error: Exception) -> None:
 async def test_missing_credentials_are_a_config_error() -> None:
     with pytest.raises(ProviderConfigError, match="credentials or region missing"):
         await _judge_with(_Client(error=NoCredentialsError())).judge(_request())
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TokenRetrievalError(provider="sso", error_msg="Token has expired and refresh failed"),
+        SSOTokenLoadError(error_msg="no cached token"),
+        UnauthorizedSSOTokenError(),
+        CredentialRetrievalError(provider="container-role", error_msg="refused"),
+    ],
+)
+async def test_expired_or_unloadable_credentials_are_a_config_error_not_retried(
+    error: Exception,
+) -> None:
+    # Retrying won't renew a sign-in: the job must fail at once, not wait out its attempts.
+    with pytest.raises(ProviderConfigError, match="credentials missing or expired") as raised:
+        await _judge_with(_Client(error=error)).judge(_request())
+
+    assert raised.value.retryable is False
 
 
 async def test_a_response_without_message_content_is_an_output_error() -> None:

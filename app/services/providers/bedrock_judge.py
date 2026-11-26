@@ -20,9 +20,12 @@ from botocore.config import Config
 from botocore.exceptions import (
     BotoCoreError,
     ClientError,
+    CredentialRetrievalError,
     NoCredentialsError,
     NoRegionError,
     PartialCredentialsError,
+    SSOError,
+    TokenRetrievalError,
 )
 
 from app.core.config import Settings
@@ -146,6 +149,11 @@ class BedrockTextJudge:
         except NoCredentialsError, PartialCredentialsError, NoRegionError:
             raise ProviderConfigError(
                 f"Bedrock judge model {self.model_id}: AWS credentials or region missing"
+            ) from None
+        except SSOError, TokenRetrievalError, CredentialRetrievalError:
+            # An expired sign-in or a role that can't be assumed: retrying won't renew it.
+            raise ProviderConfigError(
+                f"Bedrock judge model {self.model_id}: AWS credentials missing or expired"
             ) from None
         except BotoCoreError:
             # Timeouts and connection failures; the client's retries are already spent.
