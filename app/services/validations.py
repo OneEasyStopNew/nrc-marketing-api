@@ -83,9 +83,11 @@ QUERY_CANCELED_SQLSTATE: Final = "57014"
 # Recorded when the policy context couldn't be gathered; the rule checks still ran. The reason
 # in brackets is a code (e.g. GRAPH_MISSING): CoverageGap has no code field.
 CONTEXT_UNAVAILABLE_GAP: Final = (
-    "Policy evidence was not gathered for this run ({reason}); the result comes from the rule "
-    "checks only."
+    "Policy evidence was not gathered for this run ({reason}), so its mandatory rules can't be "
+    "assessed."
 )
+# Saved on each mandatory rule (that didn't fail) of a run without policy context.
+CONTEXT_UNAVAILABLE_RULE: Final = "No policy context was gathered for this rule."
 # Job kinds for validation: internal, never accepted by POST /creative-jobs (JobKind is that
 # route's contract). Plain strings, like jobs.kind.
 JOB_KIND_BY_INPUT: Final = MappingProxyType(

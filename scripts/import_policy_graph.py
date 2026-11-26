@@ -21,7 +21,14 @@ from pathlib import Path
 from typing import Annotated, Final
 from uuid import UUID, uuid4
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+)
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import aliased
@@ -38,12 +45,15 @@ from app.models import (
     PolicySourceClause,
 )
 from app.models.enums import (
+    Channel,
     CheckType,
     Gate,
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
+    PostFormat,
     Severity,
+    ValidationInputKind,
 )
 from app.models.policy_graph import RULE_ID_PATTERN
 from app.schemas.tenancy import StudyFacts
@@ -103,10 +113,13 @@ class NodeImport(_ImportModel):
     clause_ref: str | None = None
     # A node proposed but not approved never takes part in retrieval.
     approved: bool = False
-    input_kinds: list[_Tag] = Field(default_factory=list)
-    channels: list[_Tag] = Field(default_factory=list)
-    post_formats: list[_Tag] = Field(default_factory=list)
-    languages: list[_Tag] = Field(default_factory=list)
+    # Conditions the API has a value for are typed with its enum: a typo ("feed-image",
+    # "Facebook") is rejected here instead of importing a rule that never applies to any post.
+    input_kinds: list[ValidationInputKind] = Field(default_factory=list)
+    channels: list[Channel] = Field(default_factory=list)
+    post_formats: list[PostFormat] = Field(default_factory=list)
+    languages: list[PolicyLanguage] = Field(default_factory=list)
+    # No enum for these yet, so they stay free text.
     audiences: list[_Tag] = Field(default_factory=list)
     jurisdictions: list[_Tag] = Field(default_factory=list)
     study_ids: list[UUID] = Field(default_factory=list)
@@ -425,7 +438,13 @@ async def import_policy_graph(
     )
     if existing:
         # A bundle's graph is written once; a different file must not look like a no-op.
-        if await _stored_fingerprint(db, tenant_id, bundle_id) != _fingerprint(graph):
+        try:
+            stored: _Fingerprint | None = await _stored_fingerprint(db, tenant_id, bundle_id)
+        except ValidationError:
+            # The stored graph holds a value this file can't (e.g. a condition outside today's
+            # enums, imported before they were enforced), so the two can't be the same.
+            stored = None
+        if stored != _fingerprint(graph):
             raise PolicyGraphImportError(
                 f"Policy bundle {bundle_id} already has a different graph; it is never rewritten."
             )

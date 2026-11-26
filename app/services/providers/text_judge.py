@@ -8,7 +8,7 @@ building the prompt and verifying the answer come in later steps.
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -66,7 +66,14 @@ class JudgeFinding(_AnswerModel):
 
 class JudgeRuleAnswer(_AnswerModel):
     rule_id: str = Field(min_length=1, max_length=40)
-    result: RuleResultValue
+    # The four the prompt offers. NEEDS_REVIEW is a reviewer's state, so the model may not use it
+    # (an answer with it is malformed).
+    result: Literal[
+        RuleResultValue.PASS,
+        RuleResultValue.FAIL,
+        RuleResultValue.NOT_APPLICABLE,
+        RuleResultValue.UNABLE_TO_ASSESS,
+    ]
     explanation: str = Field(min_length=1, max_length=1000)
     exception_node_key: str | None = None
     evidence_node_keys: list[str] = Field(default_factory=list, max_length=20)

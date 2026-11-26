@@ -105,6 +105,12 @@ def test_answer_in_a_code_fence_is_accepted() -> None:
         ("not json", "end_turn", JudgeFailure.MALFORMED),
         (f"Here you go: {_answer()}", "end_turn", JudgeFailure.MALFORMED),
         ('{"results": []}', "end_turn", JudgeFailure.MALFORMED),
+        # NEEDS_REVIEW is a reviewer's state, not an answer the model may give.
+        (
+            _answer().replace('"result":"PASS"', '"result":"NEEDS_REVIEW"', 1),
+            "end_turn",
+            JudgeFailure.MALFORMED,
+        ),
         (_answer(), "max_tokens", JudgeFailure.TRUNCATED),
     ],
 )

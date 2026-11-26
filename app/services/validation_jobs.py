@@ -81,8 +81,13 @@ async def run(
     )
     judged = validations.Judged()
     if stored is None:
-        # Same rule as in the request: without its policy context a run can't pass.
-        evaluation = rules.without_pass(rules.evaluate_text(kind, text, policy, target.facts))
+        # No policy context at all: every mandatory rule is UNABLE_TO_ASSESS (FAIL stays FAIL), so
+        # the saved run can't pass (policy bundle contract, "Retrieval gaps").
+        evaluation = rules.apply_missing_policy_context(
+            rules.evaluate_text(kind, text, policy, target.facts),
+            rules.applicable_rules(policy, kind),
+            validations.CONTEXT_UNAVAILABLE_RULE,
+        )
     else:
         selected = await validations.graph_rules(db, job.tenant_id, stored.manifest, policy)
         open_rules = rules.rules_for_model(text, selected, target.facts)
@@ -94,7 +99,14 @@ async def run(
             if isinstance(outcome, float):
                 return outcome
             review, judged = outcome
-        evaluation = rules.evaluate_graph_rules(text, selected, target.facts, review)
+        # What the context couldn't settle is part of the saved result: a mandatory rule with a
+        # missing source, unresolved applicability or a cut-short walk can't pass, even when its
+        # code check or the model passed it.
+        evaluation = rules.apply_policy_context(
+            rules.evaluate_graph_rules(text, selected, target.facts, review),
+            {rule.rule_id: rule for rule in selected},
+            stored.manifest,
+        )
     db.add(
         validations.new_run(
             run_id=job.id,

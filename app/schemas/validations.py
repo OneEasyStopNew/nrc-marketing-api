@@ -22,6 +22,9 @@ class RuleResultValue(StrEnum):
     FAIL = "FAIL"
     NOT_APPLICABLE = "NOT_APPLICABLE"
     UNABLE_TO_ASSESS = "UNABLE_TO_ASSESS"
+    # A person must decide (e.g. two rule versions conflict). Unlike UNABLE_TO_ASSESS, a reviewer
+    # may resolve it (NRC-12).
+    NEEDS_REVIEW = "NEEDS_REVIEW"
 
 
 class ValidationCreate(RequestModel):

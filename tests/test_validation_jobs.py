@@ -20,7 +20,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ValidationJobError
 from app.main import create_app
 from app.models import Job, ValidationRun
-from app.models.enums import ExecutionState, JudgeFailure, ModelCheckFailure
+from app.models.enums import ExecutionState, JudgeFailure, ModelCheckFailure, PolicyLanguage
 from app.services import rules, validations
 from app.services.jobs import RUN_EVENT
 from app.services.providers import text_judge
@@ -414,7 +414,7 @@ def _spanish_only_graph() -> PolicyGraphImport:
     return base.model_copy(
         update={
             "nodes": [
-                node.model_copy(update={"languages": ["es"]})
+                node.model_copy(update={"languages": [PolicyLanguage.ES]})
                 if node.node_key in rule_nodes
                 else node
                 for node in base.nodes

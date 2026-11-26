@@ -465,3 +465,29 @@ def test_only_open_semantic_rules_go_to_the_model() -> None:
     )
 
     assert [rule.rule_id for rule in sent] == ["R-OPEN"]
+
+
+def test_results_from_the_policy_context_only_ever_get_stricter() -> None:
+    # A conflict (NEEDS_REVIEW) can't soften a rule already unassessed, and FAIL never changes:
+    # a reviewer may resolve NEEDS_REVIEW, never UNABLE_TO_ASSESS or FAIL.
+    policy = _policy()
+    checked = rules.applicable_rules(policy, BRIEF)
+    evaluation = rules.evaluate_text(BRIEF, "Guaranteed results!", policy, FACTS)
+    unassessed = rules.with_results(
+        evaluation, checked, {"REC-01": (RuleResultValue.UNABLE_TO_ASSESS, "gap")}, []
+    )
+
+    changed = rules.with_results(
+        unassessed,
+        checked,
+        {
+            "REC-01": (RuleResultValue.NEEDS_REVIEW, "conflict"),
+            "REC-04": (RuleResultValue.UNABLE_TO_ASSESS, "gap"),
+        },
+        [],
+    )
+
+    results = {result.rule_id: result.result for result in changed.rule_results}
+    assert results["REC-01"] is RuleResultValue.UNABLE_TO_ASSESS
+    assert results["REC-04"] is RuleResultValue.FAIL
+    assert changed.outcome is Outcome.FAIL
