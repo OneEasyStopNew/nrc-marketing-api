@@ -1,12 +1,17 @@
-# Newest-first pages over a timestamp that can tie, shared by GET /media and GET /assets/uploads.
+# Pages for list endpoints: newest first over a timestamp that can tie (GET /media,
+# GET /assets/uploads), or in a fixed order after a cursor row (policy clauses, nodes, edges,
+# rules).
 
 from collections.abc import Callable, Sequence
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Row, Select
+from sqlalchemy import ColumnElement, Row, Select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
+
+from app.core.errors import NotFoundError
 
 
 async def newest_first_page[*Ts](
@@ -36,3 +41,32 @@ async def newest_first_page[*Ts](
     boundary = sort_key(page[-1])[0]
     older = await db.scalar(query.with_only_columns(row_id).where(created_at < boundary).limit(1))
     return page, boundary if older is not None else None
+
+
+async def page_after[*Ts](
+    db: AsyncSession,
+    query: Select[*Ts],
+    *,
+    order: Sequence[ColumnElement[Any] | InstrumentedAttribute[Any]],
+    row_id: InstrumentedAttribute[UUID],
+    id_of: Callable[[Row[*Ts]], UUID],
+    after: UUID | None,
+    limit: int,
+) -> tuple[Sequence[Row[*Ts]], UUID | None]:
+    """One page of `query` in `order`, after the row whose id is `after`, and the next cursor.
+
+    `order` ends with a unique column (the id), so rows never tie and none is skipped or repeated.
+    The cursor is the last row's id; its sort values are read back from `query`, so a cursor
+    from another list or tenant names no row there (404).
+    """
+    query = query.order_by(*order)
+    if after is not None:
+        anchor = (
+            await db.execute(query.with_only_columns(*order).where(row_id == after))
+        ).one_or_none()
+        if anchor is None:
+            raise NotFoundError("The cursor names no item in this list.")
+        query = query.where(tuple_(*order) > tuple_(*anchor))
+    rows = (await db.execute(query.limit(limit + 1))).all()
+    page = rows[:limit]
+    return page, id_of(page[-1]) if len(rows) > limit else None

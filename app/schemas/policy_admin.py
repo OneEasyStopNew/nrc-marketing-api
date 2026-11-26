@@ -257,6 +257,8 @@ class PolicySourceCreate(RequestModel):
 
 # ---- Responses
 
+NEXT_PAGE: Final = "Pass as after for the next page; null on the last page."
+
 
 class PolicySourceRead(ApiModel):
     id: UUID
@@ -293,6 +295,7 @@ class PolicyClauseRead(ApiModel):
 
 class PolicyClauseList(ApiModel):
     items: list[PolicyClauseRead]
+    next_cursor: UUID | None = Field(description=NEXT_PAGE)
 
 
 class PolicyBundleDetail(ApiModel):
@@ -385,14 +388,17 @@ class PolicyRuleRead(ApiModel):
 
 class PolicyRuleList(ApiModel):
     items: list[PolicyRuleRead]
+    next_cursor: UUID | None = Field(description=NEXT_PAGE)
 
 
 class PolicyNodeList(ApiModel):
     items: list[PolicyNodeRead]
+    next_cursor: UUID | None = Field(description=NEXT_PAGE)
 
 
 class PolicyEdgeList(ApiModel):
     items: list[PolicyEdgeRead]
+    next_cursor: UUID | None = Field(description=NEXT_PAGE)
 
 
 class PolicyIssueRead(ApiModel):

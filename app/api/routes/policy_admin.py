@@ -61,6 +61,14 @@ _Limit = Annotated[int, Query(ge=1, le=50)]
 _Before = Annotated[
     AwareDatetime | None, Query(description="next_cursor from the last page (older rows).")
 ]
+# Lists of a bundle's or source's items, in a fixed order. A source can hold up to
+# POLICY_EXTRACTION_MAX_CLAUSES clauses, so nothing is listed whole.
+_ItemLimit = Annotated[int, Query(ge=1, le=500)]
+_DEFAULT_ITEM_LIMIT: Final = 100
+_After = Annotated[
+    UUID | None,
+    Query(description="next_cursor from the last page. A cursor from another list is a 404."),
+]
 
 
 def _edited(response: Response, revision: int) -> None:
@@ -126,10 +134,18 @@ async def get_policy_source(source_id: UUID, ctx: PolicyReader, db: DbSession) -
     responses={404: _NOT_FOUND},
 )
 async def list_policy_source_clauses(
-    source_id: UUID, ctx: PolicyReader, db: DbSession
+    source_id: UUID,
+    ctx: PolicyReader,
+    db: DbSession,
+    after: _After = None,
+    limit: _ItemLimit = _DEFAULT_ITEM_LIMIT,
 ) -> PolicyClauseList:
-    clauses = await policy_sources.list_source_clauses(db, ctx, source_id)
-    return PolicyClauseList(items=[PolicyClauseRead.model_validate(c) for c in clauses])
+    clauses, next_cursor = await policy_sources.list_source_clauses(
+        db, ctx, source_id, after=after, limit=limit
+    )
+    return PolicyClauseList(
+        items=[PolicyClauseRead.model_validate(c) for c in clauses], next_cursor=next_cursor
+    )
 
 
 # ---- Bundles
@@ -219,11 +235,12 @@ async def list_policy_bundle_rules(
     ctx: PolicyReader,
     db: DbSession,
     include_proposals: Annotated[bool, Query()] = False,
+    after: _After = None,
+    limit: _ItemLimit = _DEFAULT_ITEM_LIMIT,
 ) -> PolicyRuleList:
-    rules = await policy_reads.list_rules(
-        db, ctx, policy_bundle_id, include_proposals=include_proposals
+    return await policy_reads.list_rules(
+        db, ctx, policy_bundle_id, include_proposals=include_proposals, after=after, limit=limit
     )
-    return PolicyRuleList(items=rules)
 
 
 @router.get(
@@ -232,9 +249,13 @@ async def list_policy_bundle_rules(
     responses={404: _NOT_FOUND},
 )
 async def list_policy_bundle_nodes(
-    policy_bundle_id: UUID, ctx: PolicyReader, db: DbSession
+    policy_bundle_id: UUID,
+    ctx: PolicyReader,
+    db: DbSession,
+    after: _After = None,
+    limit: _ItemLimit = _DEFAULT_ITEM_LIMIT,
 ) -> PolicyNodeList:
-    return PolicyNodeList(items=await policy_reads.list_nodes(db, ctx, policy_bundle_id))
+    return await policy_reads.list_nodes(db, ctx, policy_bundle_id, after=after, limit=limit)
 
 
 @router.get(
@@ -243,9 +264,13 @@ async def list_policy_bundle_nodes(
     responses={404: _NOT_FOUND},
 )
 async def list_policy_bundle_edges(
-    policy_bundle_id: UUID, ctx: PolicyReader, db: DbSession
+    policy_bundle_id: UUID,
+    ctx: PolicyReader,
+    db: DbSession,
+    after: _After = None,
+    limit: _ItemLimit = _DEFAULT_ITEM_LIMIT,
 ) -> PolicyEdgeList:
-    return PolicyEdgeList(items=await policy_reads.list_edges(db, ctx, policy_bundle_id))
+    return await policy_reads.list_edges(db, ctx, policy_bundle_id, after=after, limit=limit)
 
 
 @router.get(

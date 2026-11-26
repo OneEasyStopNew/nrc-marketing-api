@@ -290,7 +290,9 @@ async def test_get_source_hides_other_tenants(
         with pytest.raises(NotFoundError, match="Policy source not found"):
             await get_source(b_db, ctx_for(world.a.tenant_id), source.id)
         with pytest.raises(NotFoundError, match="Policy source not found"):
-            await list_source_clauses(b_db, ctx_for(world.a.tenant_id), source.id)
+            await list_source_clauses(
+                b_db, ctx_for(world.a.tenant_id), source.id, after=None, limit=10
+            )
 
 
 async def test_clauses_are_listed_by_page_then_reading_order(
@@ -314,9 +316,19 @@ async def test_clauses_are_listed_by_page_then_reading_order(
                 )
             )
 
-    clauses = await list_source_clauses(db, ctx_for(world.a.tenant_id), source.id)
+    ctx = ctx_for(world.a.tenant_id)
+    whole, end = await list_source_clauses(db, ctx, source.id, after=None, limit=10)
+    first, cursor = await list_source_clauses(db, ctx, source.id, after=None, limit=2)
+    assert cursor is not None
+    second, last = await list_source_clauses(db, ctx, source.id, after=cursor, limit=2)
 
-    assert [c.clause_ref for c in clauses] == ["p1-c9", "p1-c10", "p2-c11", "c1"]
+    assert [c.clause_ref for c in whole] == ["p1-c9", "p1-c10", "p2-c11", "c1"]
+    assert end is None
+    # Pages split the same order: nothing skipped or repeated, and the last page has no cursor.
+    assert [c.clause_ref for c in first + second] == ["p1-c9", "p1-c10", "p2-c11", "c1"]
+    assert (cursor, last) == (first[-1].id, None)
+    with pytest.raises(NotFoundError, match="cursor names no item"):
+        await list_source_clauses(db, ctx, source.id, after=uuid4(), limit=2)
 
 
 # ---- Parallel duplicates, on committed data

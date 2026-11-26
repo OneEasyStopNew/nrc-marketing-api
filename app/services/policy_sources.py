@@ -1,6 +1,7 @@
 # Policy sources (NRC-4): register a READY policy upload as a source, and read sources and their
 # clauses. Clause extraction runs in the policy worker (app.workers.policy), not here.
 
+from typing import Final
 from uuid import UUID
 
 from sqlalchemy import func, or_, select
@@ -11,6 +12,7 @@ from app.auth.access import TenantContext
 from app.core.errors import NotFoundError, PolicySourceUploadNotReadyError
 from app.models import MediaUpload, PolicySource, PolicySourceClause
 from app.models.enums import PolicyLanguage, SourceExtractionState, UploadPurpose, UploadState
+from app.services.paging import page_after
 
 
 async def register_source(
@@ -98,24 +100,34 @@ async def get_source(db: AsyncSession, ctx: TenantContext, source_id: UUID) -> P
     return source
 
 
+_NO_PAGE: Final = 2**31 - 1  # past any page number (policy_source_clauses.page is an integer)
+
+
 async def list_source_clauses(
-    db: AsyncSession, ctx: TenantContext, source_id: UUID
-) -> list[PolicySourceClause]:
+    db: AsyncSession, ctx: TenantContext, source_id: UUID, *, after: UUID | None, limit: int
+) -> tuple[list[PolicySourceClause], UUID | None]:
+    """One page of a source's clauses in reading order, and the cursor for the next page."""
     await get_source(db, ctx, source_id)
-    result = await db.scalars(
-        select(PolicySourceClause)
-        .where(
+    page, next_cursor = await page_after(
+        db,
+        select(PolicySourceClause).where(
             PolicySourceClause.tenant_id == ctx.tenant_id,
             PolicySourceClause.source_id == source_id,
-        )
+        ),
         # Refs number clauses in reading order (p1-c9 before p1-c10): shorter first, then text.
-        .order_by(
-            PolicySourceClause.page.asc().nulls_last(),
+        # A clause without a page comes last; the row comparison needs a value, not NULL.
+        order=(
+            func.coalesce(PolicySourceClause.page, _NO_PAGE),
             func.length(PolicySourceClause.clause_ref),
             PolicySourceClause.clause_ref,
-        )
+            PolicySourceClause.id,
+        ),
+        row_id=PolicySourceClause.id,
+        id_of=lambda row: row[0].id,
+        after=after,
+        limit=limit,
     )
-    return list(result)
+    return [row[0] for row in page], next_cursor
 
 
 async def _existing(

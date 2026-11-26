@@ -25,6 +25,7 @@
     "status": 200,
     "schema": "PolicyClauseList",
     "body": {
+      "next_cursor": null,
       "items": [
         {
           "id": "00000000-0000-4000-8000-000000000002",
@@ -89,6 +90,7 @@
     "status": 200,
     "schema": "PolicyRuleList",
     "body": {
+      "next_cursor": null,
       "items": [
         {
           "id": "00000000-0000-4000-8000-000000000004",

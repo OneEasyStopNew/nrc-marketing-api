@@ -1061,7 +1061,7 @@ async def test_proposed_rules_are_hidden_unless_a_manager_asks(
     shown = (await api.ok(api.call("GET", listing, params={"include_proposals": "true"}))).json()
     refused = await api.call("GET", listing, APPROVER, params={"include_proposals": "true"})
 
-    assert hidden == {"items": []}
+    assert hidden == {"items": [], "next_cursor": None}
     assert [r["rule_id"] for r in shown["items"]] == ["REC-07"]
     assert shown["items"][0]["node"]["review_state"] == "PROPOSED"
     assert shown["items"][0]["wordings"][0]["review_state"] == "PROPOSED"
@@ -1256,6 +1256,77 @@ async def test_a_prohibited_phrase_fits_its_column(
 
 
 # ---- Paging
+
+
+async def walk(api: Api, path: str, **params: Any) -> list[dict[str, Any]]:
+    # Every item of a cursor-paged list, one page of one item at a time.
+    items: list[dict[str, Any]] = []
+    cursor: str | None = None
+    for _ in range(20):
+        query = {"limit": 1, **params} | ({"after": cursor} if cursor else {})
+        page = (await api.ok(api.call("GET", path, params=query))).json()
+        assert len(page["items"]) <= 1
+        items += page["items"]
+        cursor = page["next_cursor"]
+        if cursor is None:
+            return items
+    raise AssertionError("the list never ended")
+
+
+async def test_bundle_items_page_in_a_fixed_order(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+    path = f"/policy-bundles/{bundle['id']}"
+    graph = await draft_graph(api, bundle["id"], clause_id)
+    await api.ok(
+        api.call(
+            "POST",
+            f"{path}/nodes",
+            json=node_body(clause_id, key="CL-0"),
+            if_match=graph["revision"],
+        ),
+        201,
+    )
+
+    nodes = await walk(api, f"{path}/nodes")
+    edges = await walk(api, f"{path}/edges")
+    rules = await walk(api, f"{path}/rule-records", include_proposals="true")
+    clauses = await walk(api, f"/policy-sources/{source['id']}/clauses")
+
+    assert [n["node_key"] for n in nodes] == ["CL-0", "CL-1", "REC-07"]
+    assert [e["id"] for e in edges] == [graph["edge"]]
+    assert [r["rule_id"] for r in rules] == ["REC-07"]
+    assert [c["id"] for c in clauses] == [str(clause_id)]
+
+
+async def test_a_cursor_from_another_list_is_not_found(
+    api: Api, connection: AsyncConnection, world: World
+) -> None:
+    source = (await api.ok(register_source(api, connection), 201)).json()
+    clause_id = await add_clause(connection, world.a.tenant_id, source["id"])
+    bundle = await new_bundle(api)
+    graph = await draft_graph(api, bundle["id"], clause_id)
+
+    response = await api.call(
+        "GET", f"/policy-bundles/{bundle['id']}/nodes", params={"after": graph["edge"]}
+    )
+
+    assert response.status_code == 404, response.text
+    assert "cursor names no item" in response.json()["message"]
+
+
+@pytest.mark.parametrize("limit", [0, 501])
+async def test_a_page_size_outside_its_bounds_is_refused(api: Api, limit: int) -> None:
+    bundle = await new_bundle(api)
+
+    response = await api.call(
+        "GET", f"/policy-bundles/{bundle['id']}/nodes", params={"limit": limit}
+    )
+
+    assert response.status_code == 422, response.text
 
 
 async def test_the_audit_trail_pages_newest_first(

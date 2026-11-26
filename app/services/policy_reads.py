@@ -27,9 +27,12 @@ from app.schemas.policy_admin import (
     PolicyBundleChecks,
     PolicyBundleDetail,
     PolicyBundlePage,
+    PolicyEdgeList,
     PolicyEdgeRead,
     PolicyIssueRead,
+    PolicyNodeList,
     PolicyNodeRead,
+    PolicyRuleList,
     PolicyRuleRead,
     PolicySourceCreate,
     PolicySourcePage,
@@ -37,7 +40,7 @@ from app.schemas.policy_admin import (
     PolicyWordingRead,
 )
 from app.services import policy_sources
-from app.services.paging import newest_first_page
+from app.services.paging import newest_first_page, page_after
 from app.services.policy_checks import load_snapshot, run_checks
 
 
@@ -144,8 +147,10 @@ async def list_rules(
     bundle_id: UUID,
     *,
     include_proposals: bool,
+    after: UUID | None = None,
+    limit: int = 1,
     rule_record_id: UUID | None = None,
-) -> list[PolicyRuleRead]:
+) -> PolicyRuleList:
     """Rules with their node and wordings. PROPOSED ones are for policy:manage only (D13)."""
     if include_proposals and Capability.POLICY_MANAGE not in ctx.capabilities:
         raise PermissionDeniedError("Only policy managers can see proposed rules.")
@@ -164,21 +169,33 @@ async def list_rules(
             PolicyRuleRecord.tenant_id == ctx.tenant_id,
             PolicyRuleRecord.policy_bundle_id == bundle.id,
         )
-        .order_by(PolicyRuleRecord.rule_id)
     )
+    if rule_record_id is not None:
+        rules_query = rules_query.where(PolicyRuleRecord.id == rule_record_id)
+    if not include_proposals:
+        rules_query = rules_query.where(PolicyNode.review_state != ReviewState.PROPOSED)
+    page, next_cursor = await page_after(
+        db,
+        rules_query,
+        # rule_id is unique in a bundle (it is the rule node's key); id breaks no ties, it keeps
+        # the order total for the cursor.
+        order=(PolicyRuleRecord.rule_id, PolicyRuleRecord.id),
+        row_id=PolicyRuleRecord.id,
+        id_of=lambda row: row[0].id,
+        after=after,
+        limit=limit,
+    )
+    # Only the wordings of this page's rules, in one query.
     wordings_query = (
         select(PolicyRuleWording)
         .where(
             PolicyRuleWording.tenant_id == ctx.tenant_id,
             PolicyRuleWording.policy_bundle_id == bundle.id,
+            PolicyRuleWording.policy_rule_id.in_([row[0].id for row in page]),
         )
         .order_by(PolicyRuleWording.created_at, PolicyRuleWording.id)
     )
-    if rule_record_id is not None:
-        rules_query = rules_query.where(PolicyRuleRecord.id == rule_record_id)
-        wordings_query = wordings_query.where(PolicyRuleWording.policy_rule_id == rule_record_id)
     if not include_proposals:
-        rules_query = rules_query.where(PolicyNode.review_state != ReviewState.PROPOSED)
         wordings_query = wordings_query.where(
             PolicyRuleWording.review_state != ReviewState.PROPOSED
         )
@@ -187,7 +204,7 @@ async def list_rules(
         wordings.setdefault(wording.policy_rule_id, []).append(
             PolicyWordingRead.model_validate(wording)
         )
-    return [
+    items = [
         PolicyRuleRead(
             id=rule.id,
             rule_id=rule.rule_id,
@@ -201,8 +218,9 @@ async def list_rules(
             node=PolicyNodeRead.model_validate(node),
             wordings=wordings.get(rule.id, []),
         )
-        for rule, node in (await db.execute(rules_query)).all()
+        for rule, node in page
     ]
+    return PolicyRuleList(items=items, next_cursor=next_cursor)
 
 
 async def get_rule(
@@ -212,29 +230,49 @@ async def get_rule(
     rules = await list_rules(
         db, ctx, bundle_id, include_proposals=True, rule_record_id=rule_record_id
     )
-    if not rules:
+    if not rules.items:
         raise NotFoundError("Rule not found.")
-    return rules[0]
+    return rules.items[0]
 
 
-async def list_nodes(db: AsyncSession, ctx: TenantContext, bundle_id: UUID) -> list[PolicyNodeRead]:
+async def list_nodes(
+    db: AsyncSession, ctx: TenantContext, bundle_id: UUID, *, after: UUID | None, limit: int
+) -> PolicyNodeList:
     bundle = await get_bundle(db, ctx, bundle_id)
-    rows = await db.scalars(
-        select(PolicyNode)
-        .where(PolicyNode.tenant_id == ctx.tenant_id, PolicyNode.policy_bundle_id == bundle.id)
-        .order_by(PolicyNode.node_key)
+    page, next_cursor = await page_after(
+        db,
+        select(PolicyNode).where(
+            PolicyNode.tenant_id == ctx.tenant_id, PolicyNode.policy_bundle_id == bundle.id
+        ),
+        order=(PolicyNode.node_key, PolicyNode.id),
+        row_id=PolicyNode.id,
+        id_of=lambda row: row[0].id,
+        after=after,
+        limit=limit,
     )
-    return [PolicyNodeRead.model_validate(row) for row in rows]
+    return PolicyNodeList(
+        items=[PolicyNodeRead.model_validate(row[0]) for row in page], next_cursor=next_cursor
+    )
 
 
-async def list_edges(db: AsyncSession, ctx: TenantContext, bundle_id: UUID) -> list[PolicyEdgeRead]:
+async def list_edges(
+    db: AsyncSession, ctx: TenantContext, bundle_id: UUID, *, after: UUID | None, limit: int
+) -> PolicyEdgeList:
     bundle = await get_bundle(db, ctx, bundle_id)
-    rows = await db.scalars(
-        select(PolicyEdge)
-        .where(PolicyEdge.tenant_id == ctx.tenant_id, PolicyEdge.policy_bundle_id == bundle.id)
-        .order_by(PolicyEdge.edge_type, PolicyEdge.from_node_id, PolicyEdge.to_node_id)
+    page, next_cursor = await page_after(
+        db,
+        select(PolicyEdge).where(
+            PolicyEdge.tenant_id == ctx.tenant_id, PolicyEdge.policy_bundle_id == bundle.id
+        ),
+        order=(PolicyEdge.edge_type, PolicyEdge.from_node_id, PolicyEdge.to_node_id, PolicyEdge.id),
+        row_id=PolicyEdge.id,
+        id_of=lambda row: row[0].id,
+        after=after,
+        limit=limit,
     )
-    return [PolicyEdgeRead.model_validate(row) for row in rows]
+    return PolicyEdgeList(
+        items=[PolicyEdgeRead.model_validate(row[0]) for row in page], next_cursor=next_cursor
+    )
 
 
 async def bundle_checks(
