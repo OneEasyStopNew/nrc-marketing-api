@@ -50,7 +50,8 @@ from tests.conftest import (
 )
 from tests.ledger import assert_ledger_consistent
 
-ESTIMATE_MICROS = 94_000
+# Under the $0.09 per-image cap (NRC-10), so jobs reach submit.
+ESTIMATE_MICROS = 84_000
 ACTUAL_MICROS = 81_000
 OPERATOR = "operator-1"
 REASON = "Checked with the provider: no request under this key."
@@ -72,7 +73,7 @@ async def job_id(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> 
 def _priced() -> ScriptedProvider:
     # A price, so a wrong charge or release would show in provider_spend.
     provider = ScriptedProvider()
-    provider.cost_usd = Decimal("0.094")
+    provider.cost_usd = Decimal("0.084")
     return provider
 
 
