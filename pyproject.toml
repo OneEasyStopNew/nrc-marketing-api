@@ -58,8 +58,12 @@ DEP002 = ["asyncpg", "uvicorn"]
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
-# Vendored policy reference suite, see [tool.ruff].
+# Vendored policy reference suite, see [tool.ruff]. Tests import it, so mypy still reads it.
 exclude = ["^tests/nrc_policy_ref/"]
+
+[[tool.mypy.overrides]]
+module = "tests.nrc_policy_ref.*"
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

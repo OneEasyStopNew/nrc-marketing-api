@@ -297,8 +297,20 @@ uv run python -m scripts.import_policy_graph --tenant-id <tenant> --bundle-id <b
 # 3. GET .../policy-bundles/<bundle>/checks must return {"issues": []}
 # 4. POST .../transitions {"command": "submit"}, then as policy_approver {"command": "approve"}
 # 5. Run the policy worker until GET .../policy-bundles/<bundle> shows READY
-# 6. As policy_approver: POST .../transitions {"command": "activate", "reason": "..."}
+# 6. As policy_admin: POST .../transitions {"command": "activate", "reason": "..."}
 ```
+
+The policy deliverable's bundle document (v0.3, `scripts/data/nrc-ipb-candidate-bundle-v0.3.json`)
+is imported the same way, into an empty DRAFT, and checked against its checksums first:
+
+```powershell
+uv run python -m scripts.import_policy_bundle --tenant-id <tenant> --bundle-id <bundle>
+```
+
+The whole document is stored on the bundle, so nothing is lost. Only the rules that run inside
+validation become graph rules, all PROPOSED until reviewed. Rules that quote no source stay
+`MISSING_PROVENANCE` until someone adds their provenance. The reference contract it is checked
+against runs with the tests (`tests/nrc_policy_ref`).
 
 Sign-off before activating a real (non-synthetic) bundle:
 
