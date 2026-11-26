@@ -17,18 +17,10 @@ from typing import TYPE_CHECKING, Any, Final
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import (
-    BotoCoreError,
-    ClientError,
-    CredentialRetrievalError,
-    NoCredentialsError,
-    NoRegionError,
-    PartialCredentialsError,
-    SSOError,
-    TokenRetrievalError,
-)
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import Settings
+from app.services.providers.aws_errors import EXPIRED_CREDENTIAL_ERRORS, MISSING_CREDENTIAL_ERRORS
 from app.services.providers.base import (
     ProviderConfigError,
     ProviderError,
@@ -146,12 +138,11 @@ class BedrockTextJudge:
             )
         except ClientError as error:
             raise self._classify(error) from None
-        except NoCredentialsError, PartialCredentialsError, NoRegionError:
+        except MISSING_CREDENTIAL_ERRORS:
             raise ProviderConfigError(
                 f"Bedrock judge model {self.model_id}: AWS credentials or region missing"
             ) from None
-        except SSOError, TokenRetrievalError, CredentialRetrievalError:
-            # An expired sign-in or a role that can't be assumed: retrying won't renew it.
+        except EXPIRED_CREDENTIAL_ERRORS:
             raise ProviderConfigError(
                 f"Bedrock judge model {self.model_id}: AWS credentials missing or expired"
             ) from None
