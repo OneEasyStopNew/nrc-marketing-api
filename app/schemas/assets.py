@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import Field
 
 from app.schemas.common import ApiModel
+from app.schemas.uploads import MediaAuthorization
 from app.schemas.validations import ValidationRunSummary
 
 
@@ -16,12 +17,21 @@ class AssetOrigin(StrEnum):
     UPLOADED = "uploaded"
 
 
+_UPLOAD_ONLY = "Set for uploads; null for generated images."
+
+
 class AssetRead(ApiModel):
-    """Immutable stored bytes: any change produces a new asset_id and needs new validation."""
+    """Immutable stored bytes: any change produces a new asset_id and needs new validation.
+
+    Uploads appear here only once they passed inspection (READY).
+    """
 
     asset_id: UUID
-    creative_id: UUID
+    creative_id: UUID | None = Field(description="Null for an upload not tied to a draft.")
     origin: AssetOrigin
+    study_id: UUID | None = Field(default=None, description=_UPLOAD_ONLY)
+    name: str | None = Field(default=None, description=_UPLOAD_ONLY)
+    authorization: MediaAuthorization | None = Field(default=None, description=_UPLOAD_ONLY)
     mime_type: str
     width_px: int
     height_px: int
@@ -35,12 +45,15 @@ class AssetRead(ApiModel):
 
 
 class MediaItem(ApiModel):
-    """A finished generated image the caller can see. Uploads are not supported yet."""
+    """A finished generated image, or an upload that passed inspection, the caller can see."""
 
     asset_id: UUID
-    creative_id: UUID
-    creative_version: int
+    creative_id: UUID | None = Field(description="Null for an upload not tied to a draft.")
+    creative_version: int | None = Field(description="Null for uploads.")
     origin: AssetOrigin
+    study_id: UUID | None = Field(default=None, description=_UPLOAD_ONLY)
+    name: str | None = Field(default=None, description=_UPLOAD_ONLY)
+    authorization: MediaAuthorization | None = Field(default=None, description=_UPLOAD_ONLY)
     mime_type: str
     width_px: int
     height_px: int
@@ -48,7 +61,7 @@ class MediaItem(ApiModel):
     created_at: datetime
     created_by: str
     created_by_name: str | None = Field(
-        description="Display name of whoever started the generation; null when none is set."
+        description="Display name of whoever generated or uploaded it; null when none is set."
     )
     download_url: str | None = Field(description="Short-lived; do not store or log it.")
     download_url_expires_at: datetime | None

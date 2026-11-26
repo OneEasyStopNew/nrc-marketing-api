@@ -13,7 +13,7 @@ pgvector is not a trusted extension, so CREATE EXTENSION needs a superuser local
 rds_superuser on Aurora. Staging: Prabhu confirms the migration role before deploy (follow-up F29).
 
 Revision ID: 7d2f9a41c6e8
-Revises: b3e6bfed9303
+Revises: deb7a7225553
 Create Date: 2026-11-17 10:00:00.000000
 """
 
@@ -26,7 +26,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects import postgresql
 
 revision: str = "7d2f9a41c6e8"
-down_revision: str | None = "b3e6bfed9303"
+down_revision: str | None = "deb7a7225553"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

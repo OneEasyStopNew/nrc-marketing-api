@@ -51,6 +51,8 @@ from tests.conftest import (
 MODEL = "higgsfield-ai/soul/v2/standard"
 ESTIMATE_USD = "0.05"
 OUTPUT_HOST = "images.higgsfield.example"
+# What the mock resolver returns for OUTPUT_HOST (a public address, example.com's).
+PUBLIC_ADDRESS = "93.184.216.34"
 OUTPUT_URL = f"https://{OUTPUT_HOST}/outputs/result.png?signature=SIGNED"
 CONFLICT_DETAIL = "Idempotency-Key was already used with different request parameters."
 # One scripted answer to a submit: given the fake and the request, return the response.
@@ -293,14 +295,17 @@ def _output_server(png: bytes, outages: list[CdnAnswer] | None = None) -> SafeFe
     # The provider's CDN, behind MockTransport, resolved to a public address. Each outage
     # answers one download before the CDN serves the image.
     def cdn(request: httpx.Request) -> httpx.Response:
-        assert request.url.host == OUTPUT_HOST
+        # The fetch connects to the vetted address and names the real host in Host and SNI.
+        assert request.url.host == PUBLIC_ADDRESS
+        assert request.headers["host"] == OUTPUT_HOST
+        assert request.extensions["sni_hostname"] == OUTPUT_HOST
         assert "Authorization" not in request.headers
         if outages:
             return outages.pop(0)(request)
         return httpx.Response(200, content=png, headers={"content-type": "image/png"})
 
     async def public_resolver(host: str) -> list[str]:
-        return ["93.184.216.34"]
+        return [PUBLIC_ADDRESS]
 
     return SafeFetcher(
         httpx.AsyncClient(transport=httpx.MockTransport(cdn)),
