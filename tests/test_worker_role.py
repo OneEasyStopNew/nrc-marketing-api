@@ -1,6 +1,7 @@
 # The worker's database role and the lease function: who may do what, checked in the database.
 
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -10,10 +11,31 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.workers.connector import WorkerConfigError, worker_database_url
-from tests.conftest import APP_ROLE, WORKER_ROLE, AuthHeaders, World, _creative, _post_job, as_role
+from tests.conftest import (
+    APP_ROLE,
+    WORKER_ROLE,
+    AuthHeaders,
+    Sessions,
+    World,
+    _creative,
+    _post_job,
+    as_role,
+)
 
 LEASE = "lease_outbox_events(text, integer, integer, text[])"
 ROLES = (APP_ROLE, WORKER_ROLE)
+CHECK_INPUT_TABLES = (
+    "creatives",
+    "study_snapshots",
+    "policy_bundles",
+    "policy_sources",
+    "policy_source_clauses",
+    "policy_nodes",
+    "policy_rules",
+    "policy_edges",
+    "policy_node_embeddings",
+    "policy_index_builds",
+)
 
 
 async def _bind(connection: AsyncConnection, tenant_id: UUID | None) -> None:
@@ -24,8 +46,10 @@ async def _bind(connection: AsyncConnection, tenant_id: UUID | None) -> None:
 
 
 @pytest.fixture
-async def job_in_a(client: httpx.AsyncClient, auth: AuthHeaders, world: World) -> None:
-    creative_id = await _creative(client, auth, world.a)
+async def job_in_a(
+    client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
+) -> None:
+    creative_id = await _creative(client, auth, world.a, sessions)
     assert (await _post_job(client, auth, world, creative_id)).status_code == 202
 
 
@@ -40,7 +64,10 @@ async def test_no_role_reads_another_tenants_outbox_rows(
         await _bind(connection, tenant)
         visible[name] = int(
             await connection.scalar(
-                text("SELECT count(*) FROM outbox_events WHERE tenant_id = :a"),
+                text(
+                    "SELECT count(*) FROM outbox_events"
+                    " WHERE tenant_id = :a AND event_type = 'job.run'"
+                ),
                 {"a": world.a.tenant_id},
             )
             or 0
@@ -171,6 +198,10 @@ async def test_worker_role_has_exactly_the_table_privileges_it_uses(
         "outbox_events": {"SELECT", "INSERT", "UPDATE"},
         "assets": {"SELECT", "INSERT"},
         "provider_spend": {"SELECT", "UPDATE"},
+        # Text validation (NRC-7): the inputs of a check, and its manifest and run, insert-only.
+        **{table: {"SELECT"} for table in CHECK_INPUT_TABLES},
+        "context_manifests": {"SELECT", "INSERT"},
+        "validation_runs": {"SELECT", "INSERT"},
     }
     rows = (
         await connection.execute(
@@ -207,3 +238,122 @@ async def test_lease_batch_is_clamped_to_1_through_50(
     none = await connection.scalar(text(lease), {"batch": 0})
 
     assert (too_many, none) == (50, 1)
+
+
+async def test_every_table_the_worker_touches_for_a_check_forces_tenant_isolation(
+    connection: AsyncConnection,
+) -> None:
+    tables = [*CHECK_INPUT_TABLES, "context_manifests", "validation_runs"]
+    unprotected = (
+        await connection.scalars(
+            text(
+                "SELECT c.relname FROM pg_class AS c WHERE c.relname = ANY(:tables)"
+                " AND NOT (c.relrowsecurity AND c.relforcerowsecurity AND EXISTS ("
+                "SELECT 1 FROM pg_policies AS p WHERE p.tablename = c.relname"
+                " AND p.policyname = 'tenant_isolation'))"
+            ),
+            {"tables": tables},
+        )
+    ).all()
+
+    assert unprotected == []
+
+
+@pytest.fixture
+async def run_in_a(
+    client: httpx.AsyncClient,
+    auth: AuthHeaders,
+    world: World,
+    connection: AsyncConnection,
+    sessions: Sessions,
+) -> dict[str, Any]:
+    # _creative also stores the brief validation run of tenant A, which the tests copy.
+    await _creative(client, auth, world.a, sessions)
+    row = (
+        (
+            await connection.execute(
+                text(
+                    "SELECT creative_id, creative_version, input_kind, state, input_hash,"
+                    " policy_bundle_id, policy_bundle_version, study_snapshot_version"
+                    " FROM validation_runs WHERE tenant_id = :a"
+                ),
+                {"a": world.a.tenant_id},
+            )
+        )
+        .mappings()
+        .one()
+    )
+    return dict(row)
+
+
+async def _insert_run(connection: AsyncConnection, tenant_id: UUID, run: dict[str, Any]) -> None:
+    await connection.execute(
+        text(
+            "INSERT INTO validation_runs (id, tenant_id, creative_id, creative_version,"
+            " input_kind, state, input_hash, policy_bundle_id, policy_bundle_version,"
+            " study_snapshot_version, result, created_by, judge_model_id, judge_attempts,"
+            " reuse_key) VALUES (gen_random_uuid(), :tenant_id, :creative_id,"
+            " :creative_version, :input_kind, :state, :input_hash, :policy_bundle_id,"
+            " :policy_bundle_version, :study_snapshot_version, '{}'::jsonb, 'worker-test',"
+            " 'simulator:judge-v1', 1, repeat('a', 64))"
+        ),
+        {**run, "tenant_id": tenant_id},
+    )
+
+
+async def _count(connection: AsyncConnection, table: str, tenant_id: UUID) -> int:
+    # The table is one of the constants above, never input.
+    return int(
+        await connection.scalar(
+            text(f"SELECT count(*) FROM {table} WHERE tenant_id = :t"),  # noqa: S608
+            {"t": tenant_id},
+        )
+        or 0
+    )
+
+
+async def test_worker_reads_runs_and_policy_rules_of_its_own_tenant_only(
+    connection: AsyncConnection, world: World, run_in_a: dict[str, Any]
+) -> None:
+    await as_role(connection, WORKER_ROLE)
+    seen: dict[str, dict[str, int]] = {}
+    for name, tenant in (("own", world.a.tenant_id), ("other", world.b.tenant_id), ("none", None)):
+        await _bind(connection, tenant)
+        seen[name] = {
+            table: await _count(connection, table, world.a.tenant_id)
+            for table in ("validation_runs", "policy_rules")
+        }
+
+    assert seen["own"]["validation_runs"] == 1
+    assert seen["own"]["policy_rules"] > 0
+    assert seen["other"] == seen["none"] == {"validation_runs": 0, "policy_rules": 0}
+
+
+async def test_worker_inserts_a_run_for_its_tenant_but_not_another(
+    connection: AsyncConnection, world: World, run_in_a: dict[str, Any]
+) -> None:
+    await as_role(connection, WORKER_ROLE)
+    await _bind(connection, world.a.tenant_id)
+    await _insert_run(connection, world.a.tenant_id, run_in_a)
+
+    assert await _count(connection, "validation_runs", world.a.tenant_id) == 2
+
+    await _bind(connection, world.b.tenant_id)
+    with pytest.raises(DBAPIError, match="row-level security"):
+        async with connection.begin_nested():
+            await _insert_run(connection, world.a.tenant_id, run_in_a)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["UPDATE validation_runs SET outcome = 'PASS'", "DELETE FROM validation_runs"],
+)
+async def test_worker_cannot_change_or_delete_a_stored_run(
+    connection: AsyncConnection, world: World, run_in_a: dict[str, Any], statement: str
+) -> None:
+    await as_role(connection, WORKER_ROLE)
+    await _bind(connection, world.a.tenant_id)
+
+    with pytest.raises(DBAPIError, match="permission denied"):
+        async with connection.begin_nested():
+            await connection.execute(text(statement))

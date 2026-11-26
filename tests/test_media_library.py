@@ -45,7 +45,7 @@ def signed_urls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str | None, 
 async def _generated(
     client: httpx.AsyncClient, auth: AuthHeaders, world: World, sessions: Sessions
 ) -> UUID:
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     response = await _post_job(client, auth, world, creative_id)
     assert response.status_code == 202
     sink = FakeSink()

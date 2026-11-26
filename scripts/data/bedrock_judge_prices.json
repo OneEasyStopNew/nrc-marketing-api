@@ -1,0 +1,11 @@
+{
+  "_note": "On-demand, in-region, us-east-1 prices in USD per 1M tokens, for the judge evaluation's cost estimate and spend cap only (scripts.eval_judge). Source: AWS price list AmazonBedrock offer, publicationDate 2026-11-11 (version 20261111013037), priced per 1K tokens and multiplied by 1,000; copied from _context/NRC-7-model-candidates.md. Re-check before relying on them for a budget.",
+  "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json",
+  "published": "2026-11-11",
+  "models": {
+    "amazon.nova-lite-v1:0": {"input": 0.06, "output": 0.24},
+    "amazon.nova-pro-v1:0": {"input": 0.80, "output": 3.20},
+    "openai.gpt-oss-120b-1:0": {"input": 0.15, "output": 0.60},
+    "mistral.mistral-large-3-675b-instruct": {"input": 0.50, "output": 1.50}
+  }
+}

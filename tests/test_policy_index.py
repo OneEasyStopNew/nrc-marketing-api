@@ -26,7 +26,7 @@ from app.services.providers.embeddings import (
     EmbeddingResponseError,
     SimulatedEmbeddingProvider,
 )
-from scripts.import_policy_graph import import_policy_graph, load_synthetic_graph
+from scripts.import_policy_graph import PolicyGraphImport, import_policy_graph, load_synthetic_graph
 from tests.conftest import (
     ROOT,
     World,
@@ -36,6 +36,14 @@ from tests.conftest import (
     count_rows,
     owner_session,
 )
+
+
+@pytest.fixture
+def graph() -> PolicyGraphImport:
+    # These tests re-import and index the real synthetic graph into tenant A's bundle, so the
+    # bundle must hold that graph, not conftest's code-checked default.
+    return load_synthetic_graph()
+
 
 # Searchable nodes in the synthetic rulebook (7 clauses, 2 disclosures, 1 interpretation), all
 # approved. Its 9 rules and 2 exceptions are never embedded.

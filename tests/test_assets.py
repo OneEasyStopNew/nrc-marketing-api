@@ -20,6 +20,7 @@ from app.db.session import bind_tenant
 from app.models import Asset, CreditReservation, Job
 from app.models.enums import ExecutionState
 from app.models.jobs import ReservationState
+from app.schemas.jobs import JobKind
 from app.services import assets
 from app.services.assets import StoredImageSink
 from app.services.jobs import JobContent, JobContentMissingError
@@ -65,7 +66,7 @@ async def _generate(
     world: World,
 ) -> UUID:
     # Accept a job through the API, then run the worker until nothing is left.
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     response = await _post_job(client, auth, world, creative_id)
     assert response.status_code == 202
     while await run_once(sessions, {"simulator": provider}, sink, get_settings()):
@@ -299,11 +300,13 @@ async def test_declared_type_must_match_the_decoded_type(
     auth: AuthHeaders,
     world: World,
 ) -> None:
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     await _post_job(client, auth, world, creative_id)
     async with sessions() as db:
         await bind_tenant(db, world.a.tenant_id)
-        job = (await db.execute(select(Job))).scalar_one()
+        job = (
+            await db.execute(select(Job).where(Job.kind == JobKind.IMAGE_GENERATION))
+        ).scalar_one()
         image = FetchedImage(render_simulated_png(), "image/jpeg", None)
 
         with pytest.raises(ProviderOutputError, match="does not match"):
@@ -358,11 +361,13 @@ async def test_missing_job_content_is_an_output_error_the_worker_ends_on(
         raise JobContentMissingError("The job's creative version could not be found.")
 
     monkeypatch.setattr(assets, "job_content", missing)
-    creative_id = await _creative(client, auth, world.a)
+    creative_id = await _creative(client, auth, world.a, sessions)
     await _post_job(client, auth, world, creative_id)
     async with sessions() as db:
         await bind_tenant(db, world.a.tenant_id)
-        job = (await db.execute(select(Job))).scalar_one()
+        job = (
+            await db.execute(select(Job).where(Job.kind == JobKind.IMAGE_GENERATION))
+        ).scalar_one()
         image = FetchedImage(render_simulated_png(), "image/png", None)
 
         with pytest.raises(ProviderOutputError, match="creative version"):

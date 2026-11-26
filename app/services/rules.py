@@ -1,20 +1,33 @@
-"""Deterministic checks of a brief or caption against the active policy and the study facts.
+"""Deterministic checks of a brief or caption against policy rules and the study facts.
 
-Pure functions: no database, no network, no model. Each check covers one policy rule by ID
-(REC-01 to REC-08 in the seeded policy). A rule in the policy with no check here is reported
-as UNABLE_TO_ASSESS with a coverage gap, so an unknown rule can never pass silently.
+Pure functions: no database, no network, no model. There are two paths:
 
-The checks are phrase and fact matches, not a reading of meaning, and every result says so in
-its coverage gaps. Text offsets are Python string indices, which are Unicode code points: the
-contract's unit (see TextSpan).
+- Graph rules (evaluate_graph_rules, NRC-7): the rules the context manifest selected, each
+  checked from its own data (prohibited phrases, exact wording) plus a small registry of
+  study-fact checks keyed by rule id. A semantic rule needs a review of meaning, which is not
+  built yet, so without a phrase hit it is UNABLE_TO_ASSESS with a coverage gap.
+- Legacy (evaluate_text): the hard-coded PHRASE_CHECKS over the bundle's JSONB rules
+  (REC-01 to REC-08). Used only when a run has no context manifest. Each check covers one rule
+  by id, and a rule with no check is UNABLE_TO_ASSESS with a coverage gap.
+
+Either way an unassessed rule can never pass silently. The checks are phrase and fact matches,
+not a reading of meaning. Text offsets are Python string indices, which are Unicode code
+points: the contract's unit (see TextSpan).
 """
 
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Final
+from typing import Final, Protocol
 
-from app.models.enums import MissingContextCode, Outcome, ValidationInputKind
+from app.models.enums import (
+    CheckType,
+    JudgeFailure,
+    MissingContextCode,
+    ModelCheckFailure,
+    Outcome,
+    ValidationInputKind,
+)
 from app.schemas.policies import PolicyBundleRead, PolicyRule
 from app.schemas.tenancy import StudyFacts
 from app.schemas.validations import (
@@ -25,14 +38,30 @@ from app.schemas.validations import (
     ImageRegion,
     RuleResult,
     RuleResultValue,
+    Severity,
+    SourceReference,
     TextSpan,
 )
 from app.services.policy_context.manifest import ContextManifest
+from app.services.providers.text_judge import JudgeRuleAnswer
 
 PHRASE_AND_FACT_GAP: Final = CoverageGap(
     reason="Phrase and study-fact checks only; a review of meaning (AI or human) has not run."
 )
 NOT_CHECKED: Final = "No automated check exists for this rule yet."
+# Recorded on each run. Change it whenever the checks or the merge with the model's answers
+# change, so stored results can be traced and are never reused across a change.
+EVALUATION_VERSION: Final = "checks-v1"
+NEEDS_MEANING: Final = "Needs a review of meaning; the model check has not run."
+RULE_NOT_LOADED: Final = "The rule's text is not in the policy graph, so it could not be checked."
+MODEL_CHECK_FAILED: Final = "The model check failed ({failure}); a person must review this rule."
+SIMULATED_REVIEW_GAP: Final = CoverageGap(
+    reason="Semantic rules were judged by the SIMULATED model check; this is not evidence."
+)
+NO_RULES_SELECTED_GAP: Final = CoverageGap(
+    reason="The policy context selected no rules for this text, so nothing was checked; a person "
+    "must review it."
+)
 # A gap in the rule's policy context, saved with the rule result. {code} is a MissingContextCode.
 CONTEXT_GAP: Final = "The policy context for this rule is incomplete ({code}{detail})."
 # The rule result each blocking context gap gives a mandatory rule (policy bundle contract).
@@ -138,6 +167,59 @@ _AMOUNT: Final = re.compile(r"\$\s?[0-9][0-9,]*", _FLAGS)
 _Check = Callable[[str, StudyFacts], list[Hit]]
 
 
+class RuleInfo(Protocol):
+    # What summarise needs of a rule: the legacy PolicyRule and GraphRule both fit.
+    @property
+    def rule_id(self) -> str: ...
+    @property
+    def rule_version(self) -> int: ...
+    @property
+    def mandatory(self) -> bool: ...
+    @property
+    def gate(self) -> Gate: ...
+    @property
+    def severity(self) -> Severity: ...
+    @property
+    def source(self) -> SourceReference: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RuleContent:
+    # What the policy graph stores about a rule that the checks read.
+    title: str
+    requirement: str
+    exact_wording: str | None
+    prohibited_phrases: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GraphRule:
+    # A rule the manifest selected. content is None when its policy_rules row was not found.
+    rule_id: str
+    rule_version: int
+    node_key: str
+    mandatory: bool
+    gate: Gate
+    severity: Severity
+    source: SourceReference
+    check_type: CheckType
+    content: RuleContent | None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelReview:
+    # The model check of semantic rules, already verified by app.services.judging. answers is
+    # empty when the check ran but its answer was rejected; failure then says why.
+    answers: Mapping[str, JudgeRuleAnswer]
+    failure: JudgeFailure | ModelCheckFailure | None
+    is_simulated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _NotApplicable:
+    reason: str
+
+
 def _phrase_check(check: _PhraseCheck) -> _Check:
     def run(text: str, facts: StudyFacts) -> list[Hit]:
         return [
@@ -202,10 +284,16 @@ def _age_hit(match: re.Match[str], facts: StudyFacts) -> Hit:
     )
 
 
-TEXT_CHECKS: Final[Mapping[str, _Check]] = {
-    **{check.rule_id: _phrase_check(check) for check in PHRASE_CHECKS},
+# shortcut: study-fact checks are keyed by rule id; move to a fact-check field on
+# policy_rules when NRC-4's schema lands.
+FACT_CHECKS: Final[Mapping[str, _Check]] = {
     _DISCLOSURE_RULE: _disclosure,
     _FACTS_RULE: _study_facts,
+}
+# Legacy path only: the graph path reads its phrases from the rules themselves.
+TEXT_CHECKS: Final[Mapping[str, _Check]] = {
+    **{check.rule_id: _phrase_check(check) for check in PHRASE_CHECKS},
+    **FACT_CHECKS,
 }
 
 
@@ -220,42 +308,187 @@ def evaluate_text(
     return summarise(rules, hits, extra_gaps=[PHRASE_AND_FACT_GAP])
 
 
+def evaluate_graph_rules(
+    text: str,
+    rules: Sequence[GraphRule],
+    facts: StudyFacts,
+    review: ModelReview | None = None,
+) -> Evaluation:
+    """Check a text against the rules a context manifest selected, from their stored data.
+
+    A prohibited phrase or missing exact wording FAILs the rule, whatever the model says. A
+    deterministic rule that had something to check otherwise PASSes. A semantic rule takes the
+    model's verified answer from `review`; without one it is UNABLE_TO_ASSESS, as is a rule with
+    nothing to check or no stored row.
+    """
+    hits: dict[str, list[Hit]] = {}
+    unassessed: dict[str, str] = {}
+    not_applicable: dict[str, str] = {}
+    for rule in rules:
+        outcome = _check_graph_rule(rule, text, facts, review)
+        if isinstance(outcome, str):
+            unassessed[rule.rule_id] = outcome
+        elif isinstance(outcome, _NotApplicable):
+            not_applicable[rule.rule_id] = outcome.reason
+        else:
+            hits[rule.rule_id] = outcome
+    gaps = [SIMULATED_REVIEW_GAP] if review is not None and review.is_simulated else []
+    if not rules:
+        gaps.append(NO_RULES_SELECTED_GAP)
+    evaluation = summarise(
+        {rule.rule_id: rule for rule in rules},
+        hits,
+        extra_gaps=gaps,
+        unassessed=unassessed,
+        not_applicable=not_applicable,
+    )
+    # No rule matched this channel, format or language: nothing was checked, which is not the
+    # same as nothing broken, so it can't pass.
+    return evaluation if rules else without_pass(evaluation)
+
+
+def without_pass(evaluation: Evaluation) -> Evaluation:
+    # The outcome and gates, with every PASS turned into NEEDS_REVIEW.
+    return replace(
+        evaluation,
+        outcome=_settled_at_most(evaluation.outcome),
+        gates=[
+            gate.model_copy(update={"outcome": _settled_at_most(gate.outcome)})
+            for gate in evaluation.gates
+        ],
+    )
+
+
+def rules_for_model(text: str, rules: Sequence[GraphRule], facts: StudyFacts) -> list[GraphRule]:
+    # The semantic rules the code checks left open: no phrase or wording hit, row loaded.
+    return [rule for rule in rules if _check_graph_rule(rule, text, facts, None) == NEEDS_MEANING]
+
+
+def _check_graph_rule(
+    rule: GraphRule, text: str, facts: StudyFacts, review: ModelReview | None
+) -> list[Hit] | str | _NotApplicable:
+    # The rule's hits (empty means checked and clean), the reason it can't be assessed, or why
+    # it does not apply.
+    content = rule.content
+    if content is None:
+        return RULE_NOT_LOADED
+    hits = _phrase_hits(content, text)
+    fact_check = FACT_CHECKS.get(rule.rule_id)
+    if fact_check is not None:
+        hits.extend(fact_check(text, facts))
+    if content.exact_wording and _normalise(content.exact_wording) not in _normalise(text):
+        hits.append(
+            Hit(
+                f'Does not include the wording required by the rule "{content.title}".',
+                correction=content.exact_wording,
+            )
+        )
+    if hits:
+        return hits
+    if rule.check_type is CheckType.SEMANTIC:
+        return _model_result(rule, review)
+    checked = bool(content.prohibited_phrases or content.exact_wording or fact_check)
+    return [] if checked else NOT_CHECKED
+
+
+def _model_result(rule: GraphRule, review: ModelReview | None) -> list[Hit] | str | _NotApplicable:
+    if review is None:
+        return NEEDS_MEANING
+    answer = review.answers.get(rule.rule_id)
+    if answer is None:
+        return (
+            MODEL_CHECK_FAILED.format(failure=review.failure) if review.failure else NEEDS_MEANING
+        )
+    match answer.result:
+        case RuleResultValue.FAIL:
+            # Something missing has no span: one finding with the explanation alone.
+            return [
+                Hit(
+                    answer.explanation,
+                    span=TextSpan(start=finding.start, end=finding.end),
+                    excerpt=finding.excerpt,
+                    correction=finding.suggested_correction,
+                )
+                for finding in answer.findings
+            ] or [Hit(answer.explanation)]
+        case RuleResultValue.PASS:
+            return []
+        case RuleResultValue.NOT_APPLICABLE:
+            return _NotApplicable(f"{answer.explanation} (exception {answer.exception_node_key})")
+        # The answer schema refuses NEEDS_REVIEW (that is a reviewer's state, not the model's);
+        # were one to arrive, the rule stays unassessed.
+        case RuleResultValue.UNABLE_TO_ASSESS | RuleResultValue.NEEDS_REVIEW:
+            return answer.explanation
+
+
+def _normalise(value: str) -> str:
+    # Case-insensitive, whitespace runs collapsed.
+    return " ".join(value.split()).casefold()
+
+
+def _phrase_hits(content: RuleContent, text: str) -> list[Hit]:
+    if not content.prohibited_phrases:
+        return []
+    # Whole words by lookaround rather than \b: Unicode-aware (phrases may be Spanish) and right
+    # for a phrase that starts or ends with a symbol. A space in a phrase matches any whitespace
+    # run. Linear: the alternatives are escaped literals.
+    alternatives = "|".join(
+        r"\s+".join(re.escape(word) for word in phrase.split())
+        for phrase in content.prohibited_phrases
+    )
+    pattern = re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)", re.IGNORECASE)
+    return [
+        Hit(
+            f'Uses a phrase the rule "{content.title}" prohibits.',
+            span=TextSpan(start=match.start(), end=match.end()),
+            excerpt=match.group(),
+        )
+        for match in pattern.finditer(text)
+    ]
+
+
 def applicable_rules(policy: PolicyBundleRead, kind: ValidationInputKind) -> dict[str, PolicyRule]:
     return {rule.rule_id: rule for rule in policy.rules if kind in rule.applies_to}
 
 
 def summarise(
-    rules: Mapping[str, PolicyRule],
+    rules: Mapping[str, RuleInfo],
     hits: Mapping[str, list[Hit]],
     *,
     extra_gaps: list[CoverageGap],
     regions: Mapping[str, ImageRegion] | None = None,
+    unassessed: Mapping[str, str] | None = None,
+    not_applicable: Mapping[str, str] | None = None,
 ) -> Evaluation:
     """Turn per-rule hits into rule results, gates, findings and an outcome.
 
     A rule with hits FAILs, a checked rule without hits PASSes, and a rule with no check is
-    UNABLE_TO_ASSESS (reported as a coverage gap).
+    UNABLE_TO_ASSESS (reported as a coverage gap). `unassessed` gives the reason for such a rule
+    (default NOT_CHECKED); a rule in `not_applicable` is NOT_APPLICABLE with that reason.
     """
+    reasons = unassessed or {}
+    exempt = not_applicable or {}
     findings = [
         _finding(rules[rule_id], hit, None if regions is None else regions.get(rule_id))
         for rule_id, rule_hits in hits.items()
         for hit in rule_hits
     ]
-    results = {rule_id: _result(rule_id, hits) for rule_id in rules}
+    results = {
+        rule_id: RuleResultValue.NOT_APPLICABLE if rule_id in exempt else _result(rule_id, hits)
+        for rule_id in rules
+    }
     rule_results = [
         RuleResult(
             rule_id=rule.rule_id,
             rule_version=rule.rule_version,
             mandatory=rule.mandatory,
             result=results[rule.rule_id],
-            reason=NOT_CHECKED
-            if results[rule.rule_id] is RuleResultValue.UNABLE_TO_ASSESS
-            else None,
+            reason=_reason(results[rule.rule_id], rule.rule_id, reasons, exempt),
         )
         for rule in rules.values()
     ]
     gaps = [
-        CoverageGap(rule_id=rule_id, reason=NOT_CHECKED)
+        CoverageGap(rule_id=rule_id, reason=reasons.get(rule_id, NOT_CHECKED))
         for rule_id, result in results.items()
         if result is RuleResultValue.UNABLE_TO_ASSESS
     ]
@@ -278,7 +511,7 @@ def summarise(
     )
 
 
-def outcome_of(results: Iterable[tuple[PolicyRule, RuleResultValue]]) -> Outcome:
+def outcome_of(results: Iterable[tuple[RuleInfo, RuleResultValue]]) -> Outcome:
     """A failed mandatory rule fails; a failed optional rule, or a mandatory rule that is
     unchecked or waiting for a person, needs a human decision; otherwise the input passes."""
     outcome = Outcome.PASS
@@ -290,8 +523,18 @@ def outcome_of(results: Iterable[tuple[PolicyRule, RuleResultValue]]) -> Outcome
     return outcome
 
 
+def _reason(
+    result: RuleResultValue, rule_id: str, unassessed: Mapping[str, str], exempt: Mapping[str, str]
+) -> str | None:
+    if result is RuleResultValue.UNABLE_TO_ASSESS:
+        return unassessed.get(rule_id, NOT_CHECKED)
+    if result is RuleResultValue.NOT_APPLICABLE:
+        return exempt[rule_id]
+    return None
+
+
 def apply_policy_context(
-    evaluation: Evaluation, rules: Mapping[str, PolicyRule], manifest: ContextManifest
+    evaluation: Evaluation, rules: Mapping[str, RuleInfo], manifest: ContextManifest
 ) -> Evaluation:
     """The evaluation with what the policy context couldn't settle made part of the saved result.
 
@@ -344,7 +587,7 @@ def apply_policy_context(
 
 
 def apply_missing_policy_context(
-    evaluation: Evaluation, rules: Mapping[str, PolicyRule], reason: str
+    evaluation: Evaluation, rules: Mapping[str, RuleInfo], reason: str
 ) -> Evaluation:
     """No policy context at all: every mandatory rule is UNABLE_TO_ASSESS (FAIL stays FAIL), and
     the run can't pass even when it has no mandatory rule."""
@@ -353,25 +596,18 @@ def apply_missing_policy_context(
         for rule_id, rule in rules.items()
         if rule.mandatory
     }
-    result = with_results(evaluation, rules, changes, [])
-    return replace(
-        result,
-        outcome=_settled_at_most(result.outcome),
-        gates=[
-            gate.model_copy(update={"outcome": _settled_at_most(gate.outcome)})
-            for gate in result.gates
-        ],
-    )
+    return without_pass(with_results(evaluation, rules, changes, []))
 
 
 def with_results(
     evaluation: Evaluation,
-    rules: Mapping[str, PolicyRule],
+    rules: Mapping[str, RuleInfo],
     changes: Mapping[str, tuple[RuleResultValue, str]],
     gaps: Iterable[CoverageGap],
 ) -> Evaluation:
     """The evaluation with rule results changed from outside the checks, gates and outcome
-    recomputed. A change only ever makes a result stricter: FAIL stays FAIL."""
+    recomputed. A change only ever makes a result stricter: FAIL stays FAIL. So does the
+    recomputed outcome and each gate: one already held back (e.g. no rules selected) stays so."""
     rule_results = [
         result.model_copy(
             update={"result": changes[result.rule_id][0], "reason": changes[result.rule_id][1]}
@@ -384,14 +620,20 @@ def with_results(
     values = {result.rule_id: result.result for result in rule_results}
     return replace(
         evaluation,
-        outcome=outcome_of((rule, values[rule_id]) for rule_id, rule in rules.items()),
+        outcome=_stricter(
+            evaluation.outcome,
+            outcome_of((rule, values[rule_id]) for rule_id, rule in rules.items()),
+        ),
         gates=[
             gate.model_copy(
                 update={
-                    "outcome": outcome_of(
-                        (rule, values[rule_id])
-                        for rule_id, rule in rules.items()
-                        if rule.gate is gate.gate
+                    "outcome": _stricter(
+                        gate.outcome,
+                        outcome_of(
+                            (rule, values[rule_id])
+                            for rule_id, rule in rules.items()
+                            if rule.gate is gate.gate
+                        ),
                     )
                 }
             )
@@ -400,6 +642,17 @@ def with_results(
         rule_results=rule_results,
         coverage_gaps=[*evaluation.coverage_gaps, *gaps],
     )
+
+
+_OUTCOME_STRICTNESS: Final[Mapping[Outcome, int]] = {
+    Outcome.PASS: 0,
+    Outcome.NEEDS_REVIEW: 1,
+    Outcome.FAIL: 2,
+}
+
+
+def _stricter(first: Outcome, second: Outcome) -> Outcome:
+    return max(first, second, key=_OUTCOME_STRICTNESS.__getitem__)
 
 
 def _settled_at_most(outcome: Outcome) -> Outcome:
@@ -413,7 +666,7 @@ def _result(rule_id: str, hits: Mapping[str, list[Hit]]) -> RuleResultValue:
     return RuleResultValue.FAIL if hits[rule_id] else RuleResultValue.PASS
 
 
-def _finding(rule: PolicyRule, hit: Hit, region: ImageRegion | None) -> Finding:
+def _finding(rule: RuleInfo, hit: Hit, region: ImageRegion | None) -> Finding:
     return Finding(
         rule_id=rule.rule_id,
         rule_version=rule.rule_version,

@@ -21,6 +21,7 @@ from app.core.errors import (
     GenerationLimitError,
     NotFoundError,
     PermissionDeniedError,
+    ValidationLimitError,
     VersionConflictError,
     VersionRequiredError,
 )
@@ -38,6 +39,7 @@ STATUS_BY_ERROR: Final[Mapping[type, int]] = MappingProxyType(
         VersionConflictError: 412,
         VersionRequiredError: 428,
         GenerationLimitError: 429,
+        ValidationLimitError: 429,
         FeatureNotAvailableError: 501,
         DependencyUnavailableError: 503,
     }

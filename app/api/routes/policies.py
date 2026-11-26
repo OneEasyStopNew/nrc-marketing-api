@@ -42,4 +42,4 @@ async def get_active_policy(ctx: CreativeReader, db: DbSession) -> PolicyBundleR
 async def get_policy_bundle_rules(
     policy_bundle_id: UUID, ctx: CreativeReader, db: DbSession
 ) -> PolicyBundleRulesRead:
-    return await policy_evidence.get_bundle_rules(db, ctx, policy_bundle_id)
+    return await policy_evidence.get_bundle_rules(db, ctx.tenant_id, policy_bundle_id)

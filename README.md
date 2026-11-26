@@ -188,13 +188,19 @@ Policy and generation:
 
 Validation (NRC-7):
 
-- `POST /validations` with `input_kind` `brief` (the prompt) or `text` (the caption) runs the rule
-  checks in `app/services/rules.py` and stores the run before it answers, so `state` is already
-  `SUCCEEDED`. `job_id` equals `validation_run_id` until validation runs on the job framework.
-- The checks are phrase and study-fact matches: REC-01 to REC-06 phrases, REC-07 the research and
-  voluntary disclosure (captions only), REC-08 ages and payment amounts against the approved study
-  facts. A policy rule with no check is `UNABLE_TO_ASSESS` and listed in `coverage_gaps`; if it is
-  mandatory, the outcome is `NEEDS_REVIEW`. Every run also says that no review of meaning ran.
+- `POST /validations` with `input_kind` `brief` (the prompt) or `text` (the caption) queues a job
+  and answers `202` with `state` `QUEUED`; `job_id` equals `validation_run_id`. The connector worker
+  (`uv run python -m app.workers.connector`, which leases `validation.run` events) builds the
+  policy context, runs the checks and stores the run; poll `GET /validations/{id}` until
+  `SUCCEEDED`. An identical finished PASS or FAIL from the same day is reused and answers
+  `SUCCEEDED` at once. Without a running worker, runs stay `QUEUED`.
+- Code checks (`app/services/rules.py`) run on the rules the policy context selected: prohibited
+  phrases and exact wording from the policy graph, REC-07 the research and voluntary disclosure
+  (captions), REC-08 ages and payment amounts against the approved study facts. Rules about
+  meaning go to the model check when `VALIDATION_MODEL_MODE` is `simulator` (local and demo only,
+  answers labelled SIMULATED) or `live` (Amazon Bedrock); with `off` (the default) they are
+  `UNABLE_TO_ASSESS`, listed in `coverage_gaps`, and a mandatory one makes the outcome
+  `NEEDS_REVIEW`.
 - Runs are immutable: the API role can insert them but not change them. `is_current` turns false
   when the creative gets a new version or the policy a new version.
 - A tenant without a policy gets 409 `NO_ACTIVE_POLICY`. Image input answers 501 unless
