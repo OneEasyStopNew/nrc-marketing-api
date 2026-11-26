@@ -27,6 +27,7 @@ dev = [
     "asgi-lifespan>=2.1",
     "boto3-stubs[bedrock-runtime,s3,secretsmanager]>=1.40",
     "cryptography>=44",
+    "jsonschema==4.23.0",
     "mypy>=1.17",
     "pytest>=8.4",
     "pytest-asyncio>=1.1",
@@ -39,6 +40,9 @@ package = false
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+# The policy reference suite is vendored from the policy deliverable (NRC-4, nrc_policy_ref-v0.3);
+# it is run, not maintained, here, so it keeps its own style (changes: tests/nrc_policy_ref/README).
+extend-exclude = ["tests/nrc_policy_ref"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "S", "UP", "SIM", "PERF", "DTZ", "PLE", "PLW", "RUF", "PT", "ASYNC"]
@@ -54,6 +58,8 @@ DEP002 = ["asyncpg", "uvicorn"]
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
+# Vendored policy reference suite, see [tool.ruff].
+exclude = ["^tests/nrc_policy_ref/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

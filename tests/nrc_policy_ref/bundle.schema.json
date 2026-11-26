@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nrc.policy-bundle/0.2",
+  "type": "object",
+  "required": ["bundle", "schema_version", "scope", "governance", "evaluation_contract", "rules", "channel_readiness", "decisions", "graphrag_mapping", "external_references"],
+  "properties": {
+    "schema_version": {"const": "nrc.policy-bundle/0.2"},
+    "bundle": {
+      "type": "object",
+      "required": ["bundle_id", "bundle_version", "status", "content_sha256", "approval", "activation"],
+      "properties": {
+        "bundle_version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$"},
+        "status": {"enum": ["DRAFT", "REVIEW", "APPROVED", "ACTIVE", "RETIRED"]},
+        "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "approval": {"type": "object", "required": ["status", "policy_owner", "approvals"]},
+        "activation": {"type": "object", "required": ["status", "tenant_id", "study_ids", "activated_by", "activated_at"]}
+      }
+    },
+    "scope": {
+      "type": "object",
+      "required": ["jurisdiction", "enabled_channels", "reference_only_channels", "enabled_languages"],
+      "properties": {
+        "enabled_languages": {"type": "array", "items": {"type": "string", "pattern": "^[a-z]{2}(-[A-Z]{2})?$"}, "minItems": 1}
+      }
+    },
+    "rules": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/rule"}},
+    "decisions": {"type": "array", "items": {"type": "object", "required": ["decision_id", "question", "status"],
+      "properties": {"status": {"enum": ["PENDING", "DECIDED"]}}}}
+  },
+  "$defs": {
+    "outcome": {"enum": ["PASS", "FAIL", "NEEDS_REVIEW", "UNABLE_TO_ASSESS", "NOT_APPLICABLE", "ADVISORY", "NOT_EVALUATED"]},
+    "rule": {
+      "type": "object",
+      "required": ["rule_id", "rule_version", "layer", "stage", "title", "requirement", "basis", "applicability", "check", "outcome_policy", "source_quotations", "required_post_wording", "exceptions", "relations", "source_locations", "provenance_status", "review_status", "approval", "enabled_in_nrc"],
+      "properties": {
+        "rule_id": {"type": "string", "pattern": "^[A-Z]+-\\d{2}$"},
+        "stage": {"enum": ["context", "validation", "correction", "reviewer_gate", "publish_readiness"]},
+        "approval": {"type": "object", "required": ["status", "approved_by", "approved_at", "decision_ref"], "properties": {"status": {"enum": ["PENDING", "APPROVED", "REJECTED"]}}},
+        "source_locations": {"type": "array", "items": {"type": "object", "required": ["source_ref", "location"]}},
+        "provenance_status": {"enum": ["SOURCE_CLAUSE", "SOURCE_PARAPHRASED", "STUDY_SNAPSHOT", "NRC_CONTROL_PROPOSED", "NRC_INTERPRETATION_PROPOSED"]},
+        "review_status": {"enum": ["PROPOSED", "IN_REVIEW", "APPROVED", "REJECTED"]},
+        "outcome_policy": {
+          "type": "object",
+          "required": ["mandatory", "mandatory_decision_status", "on_violation", "on_missing_evidence", "blocks_readiness_when", "review_resolution"],
+          "properties": {
+            "mandatory": {"type": "boolean"},
+            "mandatory_decision_status": {"enum": ["PROPOSED", "PENDING_OWNER_DECISION", "APPROVED"]},
+            "on_violation": {"$ref": "#/$defs/outcome"},
+            "on_missing_evidence": {"$ref": "#/$defs/outcome"},
+            "review_resolution": {"type": "object", "required": ["allowed"], "if": {"properties": {"allowed": {"const": true}}}, "then": {"required": ["resolves_outcome", "role", "may_resolve_to", "requires_rationale"], "properties": {"resolves_outcome": {"const": "NEEDS_REVIEW"}}}}
+          }
+        },
+        "source_quotations": {"type": "array", "items": {"type": "object",
+          "required": ["source_ref", "locator", "quote_type", "text", "text_sha256", "use"],
+          "properties": {"use": {"const": "EVIDENCE_ONLY"}, "quote_type": {"enum": ["REGULATORY_TEXT", "GUIDANCE_TEXT"]},
+                         "text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}},
+        "required_post_wording": {"oneOf": [{"type": "null"}, {"type": "object", "required": ["source", "select", "nrc_supplies_text"],
+          "properties": {"source": {"type": "string", "pattern": "^study_snapshot\\."}, "nrc_supplies_text": {"const": false}}}]},
+        "exceptions": {"type": "array", "items": {"type": "object", "required": ["exception_id", "text", "status"],
+          "properties": {"status": {"enum": ["PROPOSED", "APPROVED", "REJECTED"]}}}}
+      }
+    }
+  }
+}

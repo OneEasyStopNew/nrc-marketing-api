@@ -1,0 +1,3793 @@
+{
+  "bundle": {
+    "bundle_id": "nrc-ipb-candidate",
+    "bundle_version": "0.3.0",
+    "supersedes": "0.2.0",
+    "status": "DRAFT",
+    "is_synthetic": false,
+    "prepared_at": "2026-11-20",
+    "content_sha256": "e708007b6302c113a916bca65bb4342403307e1ba296dfa945e4e4f88816bee2",
+    "content_sha256_scope": "sha256 of canonical JSON (sorted keys, no whitespace) of every top-level key except 'bundle'",
+    "approval": {
+      "status": "PENDING",
+      "policy_owner": null,
+      "required_role": "policy_owner",
+      "approvals": []
+    },
+    "activation": {
+      "status": "NOT_ACTIVATED",
+      "tenant_id": null,
+      "study_ids": [],
+      "activated_by": null,
+      "activated_by_role": null,
+      "required_role": "policy_admin",
+      "activated_at": null,
+      "effective_from": null,
+      "preconditions": [
+        "approval.status == APPROVED",
+        "import checks passed"
+      ]
+    },
+    "notice": "Proposed rules for policy-owner review. Not legal advice. Must not be activated."
+  },
+  "schema_version": "nrc.policy-bundle/0.2",
+  "ipb_definition": {
+    "name": "Institutional Review Boards (IRBs) and Protection of Human Subjects in Clinical Trials",
+    "publisher": "FDA",
+    "url": "https://www.fda.gov/about-fda/cder-offices-and-divisions/institutional-review-boards-irbs-and-protection-human-subjects-clinical-trials",
+    "layer": "L1"
+  },
+  "scope": {
+    "jurisdiction": "US",
+    "tenant_id": null,
+    "tenant_scope": "TEMPLATE_UNBOUND",
+    "study_ids": [],
+    "regulatory_applicability": "STUDY_SPECIFIC (recorded in each study snapshot; see CTX-01)",
+    "enabled_channels": [
+      "facebook",
+      "instagram",
+      "threads",
+      "youtube",
+      "tiktok",
+      "pinterest",
+      "linkedin",
+      "snapchat"
+    ],
+    "reference_only_channels": [
+      "x",
+      "reddit"
+    ],
+    "enabled_languages": [
+      "en"
+    ],
+    "gated_languages": [
+      {
+        "language": "es",
+        "status": "GATED",
+        "unblock_requires": [
+          "approved Spanish required disclosures per study",
+          "approved Spanish correction phrase library",
+          "Spanish fixture tests passing",
+          "decision D-13"
+        ]
+      }
+    ],
+    "distribution_modes": {
+      "organic": "SOURCING_INCOMPLETE (ORG-01)",
+      "paid": "PER_CHANNEL",
+      "boosted": "TREATED_AS_PAID"
+    }
+  },
+  "study_context_schema": {
+    "regulatory_applicability": {
+      "fda_21cfr50_56": "bool",
+      "fda_ind_21cfr312": "bool",
+      "fda_ide_21cfr812": "bool",
+      "hhs_45cfr46": "bool",
+      "approved_by": "str",
+      "approved_at": "datetime"
+    },
+    "has_test_article": "bool",
+    "product_type": "drug|biologic|device|none",
+    "irb_of_record": "str",
+    "l2_rules_status": "RECORDED|CONFIRMED_NONE",
+    "approved_languages": "list[str]",
+    "approved_contacts": "list[str]",
+    "required_disclosures": "list[{disclosure_id, study_id, language, version, text, text_sha256, approval: {approval_ref, approved_by, approved_at, approval_source (e.g. IRB-approved study materials)}}]",
+    "approved_phrases": "list[{phrase_id, phrase_type, study_id, language, version, text, text_sha256, approval: {approval_ref, approved_by, approved_at, approval_source}}]",
+    "channel_eligibility": "map channel -> {status: CONFIRMED|NOT_CONFIRMED, evidence_ref, confirmed_by, confirmed_at} (platform confirmations, e.g. TikTok, Snap)",
+    "compensation_statement": "str|null",
+    "facts": "object"
+  },
+  "governance": {
+    "roles": {
+      "policy_owner": {
+        "may": [
+          "approve rule meaning",
+          "approve required disclosures and phrase libraries",
+          "approve exceptions",
+          "record decisions and risk acceptances"
+        ],
+        "may_not": [
+          "activate a bundle"
+        ]
+      },
+      "policy_admin": {
+        "may": [
+          "activate an APPROVED bundle after import checks pass",
+          "deactivate or retire a bundle"
+        ],
+        "may_not": [
+          "approve rule meaning, disclosures or exceptions"
+        ]
+      }
+    },
+    "separation": "Approval and activation are separate permissions, independently assignable. Each action is audited with actor, role, timestamp, bundle_version and content_sha256.",
+    "dual_role": "PENDING (D-01)",
+    "decision_ref": "D-16",
+    "callers_to_test": [
+      "approval-only caller can approve, cannot activate",
+      "activation-only caller can activate an approved bundle, cannot approve",
+      "unauthorized caller can do neither"
+    ]
+  },
+  "evaluation_contract": {
+    "outcomes": [
+      "PASS",
+      "FAIL",
+      "NEEDS_REVIEW",
+      "UNABLE_TO_ASSESS",
+      "NOT_APPLICABLE",
+      "ADVISORY",
+      "NOT_EVALUATED"
+    ],
+    "readiness": "READY only when every selected mandatory rule is PASS, NOT_APPLICABLE (all predicate inputs present), or NEEDS_REVIEW resolved to PASS by an allowed reviewer with rationale. Any mandatory FAIL, unresolved NEEDS_REVIEW, UNABLE_TO_ASSESS or NOT_EVALUATED gives NOT_READY. Advisory rules never change readiness.",
+    "pending_decisions": "A rule whose mandatory_decision_status is PENDING_OWNER_DECISION is treated as mandatory with its proposed on_violation outcome until decided.",
+    "nrc_baseline_extension": "While D-04 is PENDING, a rule whose regulatory framework does not apply to the study is still applied (conservative), and each result it produces carries basis_flag APPLIED_VIA_PROPOSED_NRC_BASELINE so it is never presented as a regulatory requirement. If D-04 is REJECTED those rules return NOT_APPLICABLE; if APPROVED the flag reads APPLIED_VIA_APPROVED_NRC_BASELINE.",
+    "l2_rules": "When study.l2_rules_status is RECORDED, the study-scoped L2 bundle (same schema; layer L2; scope.study_ids = [study]; basis type IRB_POLICY) must be loaded and evaluated in the same run. If its results are absent the outcome is UNABLE_TO_ASSESS (L2_NOT_EVALUATED); any mandatory L2 result other than PASS or NOT_APPLICABLE blocks readiness. CONFIRMED_NONE needs no L2 bundle.",
+    "review_resolution": "Reviewers may resolve only NEEDS_REVIEW outcomes, on rules that allow it, with a rationale recorded via NRC-12. A FAIL cannot be overridden: the creative is corrected and revalidated, or a rule exception is proposed for policy-owner approval.",
+    "retrieval_gaps": "Gaps reported by retrieval (the context manifest) are part of the saved result, not just the in-memory evaluation. For any mandatory rule with unresolved applicability, a missing source (SOURCE_MISSING), a rule conflict, or incomplete graph traversal, the saved outcome is UNABLE_TO_ASSESS (conflict: NEEDS_REVIEW), and validation PASS and readiness are blocked. Whole-context absence is one case of this, not the only one. A FAIL stays FAIL; gaps never upgrade or soften a FAIL.",
+    "deterministic_evidence": "A deterministic check that passes is only PASS when the evidence it depends on was retrieved; if its required evidence is missing from the manifest the saved outcome is UNABLE_TO_ASSESS.",
+    "approved_wording_provenance": "Required post wording (disclosures, approved phrases) is validated against its own study/language/version approval record. Source-quotation verification (verbatim match and sha256) applies only to source_quotations used as regulatory or platform evidence; approved wording is never required to appear verbatim in a source clause.",
+    "source_locators": "L1 rules locate evidence by section plus the verbatim quoted span and its sha256. Paraphrased platform rules list section-level source_locations. Page snapshots and their sha256 are captured at ingestion.",
+    "stages": [
+      "context",
+      "validation",
+      "correction",
+      "reviewer_gate",
+      "publish_readiness"
+    ]
+  },
+  "rules": [
+    {
+      "rule_id": "CTX-01",
+      "rule_version": 1,
+      "layer": "L0",
+      "stage": "context",
+      "gate": "completeness",
+      "title": "Study regulatory context recorded and approved",
+      "requirement": "Before any policy PASS, the study snapshot must record approved values for: regulatory applicability (which of FDA 21 CFR 50/56, IND 21 CFR 312, IDE 21 CFR 812, HHS 45 CFR 46 apply), has_test_article and product type, IRB of record, L2 (IRB-specific) rule status, approved languages, approved contacts and required disclosures.",
+      "severity": "critical",
+      "basis": {
+        "type": "NRC_CONTROL_PROPOSED",
+        "frameworks": [],
+        "decision_ref": "D-03"
+      },
+      "applicability": {
+        "study": "all",
+        "requires_context": [
+          "study.regulatory_applicability",
+          "study.regulatory_applicability.approved_by",
+          "study.has_test_article",
+          "study.irb_of_record",
+          "study.l2_rules_status",
+          "study.approved_languages",
+          "study.approved_contacts",
+          "study.required_disclosures"
+        ]
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "study_snapshot"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "UNABLE_TO_ASSESS",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "STUDY_CONTEXT_INCOMPLETE"
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "CTX-01-E1",
+          "text": "l2_rules_status may be CONFIRMED_NONE when the IRB of record has no extra ad rules; it may not be blank.",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {},
+      "source_locations": [],
+      "provenance_status": "NRC_CONTROL_PROPOSED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-01",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "reviewer_gate",
+      "gate": "reviewer_gate",
+      "title": "Reviewer attests IRB approval of the exact creative version",
+      "requirement": "Not run during validation. Before approving a creative for publishing, the reviewer attests in NRC-12 that the study's IRB of record approved this exact creative version. NRC records the attestation (reviewer identity, timestamp, creative version id) and does not store the IRB's own approval reference. NRC-12's version-bound approval and stale-version invalidation stay enforced by the application.",
+      "severity": "critical",
+      "basis": {
+        "type": "FEDERAL_GUIDANCE",
+        "frameworks": [
+          "fda_21cfr50_56",
+          "hhs_45cfr46"
+        ],
+        "decision_ref": "D-02"
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56",
+            "hhs_45cfr46"
+          ]
+        },
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        },
+        "applies_to": [
+          "publication"
+        ]
+      },
+      "check": {
+        "method": "manual_attestation",
+        "inputs": [
+          "nrc12.approval"
+        ],
+        "recorded_fields": [
+          "reviewer_id",
+          "attested_at_utc",
+          "creative_version_id",
+          "attestation_statement_id"
+        ],
+        "application_enforced": [
+          "approval bound to creative_version_id",
+          "any new version invalidates approval (stale-version check)"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PENDING_OWNER_DECISION",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "NO_VALID_ATTESTATION"
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "Advertisements should be reviewed and approved by the IRB as part of the package for initial review.",
+          "text_sha256": "b8ef427185139ca8e716cc7fe8ddb7853e0de5f6bd56400051b8c2e0ba91cb1f",
+          "use": "EVIDENCE_ONLY"
+        },
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "The IRB should review the final copy of printed advertisements to evaluate the relative size of type used and other visual effects. When advertisements are to be taped for broadcast, the IRB should review the final audio/video tape.",
+          "text_sha256": "a3c631d5574e91d5ffc13e817735dc135cc3924a2d8abe7f97bc5edd8e34faff",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "FED-01-E1",
+          "text": "Boosting an already-approved version unchanged needs no new attestation, unless the IRB limited approved channels.",
+          "status": "PROPOSED"
+        },
+        {
+          "exception_id": "FED-01-E2",
+          "text": "FDA's exemption for listings limited to basic trial information is not applied to social posts without an owner decision.",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S1",
+          "S6"
+        ],
+        "decided_by": [
+          "D-02"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "SOURCE_CLAUSE",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-02",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "policy",
+      "title": "No explicit or implied safety or effectiveness claim for the test article",
+      "requirement": "Do not state or imply that the test article is safe or effective for the purposes under investigation.",
+      "severity": "critical",
+      "basis": {
+        "type": "REGULATION+FEDERAL_GUIDANCE",
+        "frameworks": [
+          "fda_ind_21cfr312",
+          "fda_ide_21cfr812",
+          "fda_21cfr50_56"
+        ]
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_ind_21cfr312",
+            "fda_ide_21cfr812",
+            "fda_21cfr50_56"
+          ]
+        },
+        "study.has_test_article": true,
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        }
+      },
+      "check": {
+        "method": "semantic",
+        "inputs": [
+          "brief",
+          "text",
+          "image",
+          "video"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "No claims should be made, either explicitly or implicitly, that the drug, biologic or device is safe or effective for the purposes under investigation",
+          "text_sha256": "184dc85efdf5bba2c616beee45173e02a99f572f26485a3f88ecb6fd91d4c8dd",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "S1",
+          "S3",
+          "S4"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "SOURCE_CLAUSE",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-03",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "policy",
+      "title": "No claim of equivalence or superiority to another product",
+      "requirement": "Do not claim the test article is known to be equivalent or superior to any other drug, biologic or device.",
+      "severity": "critical",
+      "basis": {
+        "type": "FEDERAL_GUIDANCE",
+        "frameworks": [
+          "fda_21cfr50_56"
+        ]
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56"
+          ]
+        },
+        "study.has_test_article": true,
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        }
+      },
+      "check": {
+        "method": "semantic+lexical",
+        "inputs": [
+          "brief",
+          "text",
+          "image",
+          "video"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "or that the test article is known to be equivalent or superior to any other drug, biologic or device.",
+          "text_sha256": "34b7049122e80a46bf02c02a5fa6fcb2ab85ea620ceaf06d3495451adca744fd",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "S1"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "SOURCE_CLAUSE",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-04",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "policy",
+      "title": "\"New treatment / medication / drug\" only with an investigational explanation",
+      "requirement": "Do not use 'new treatment', 'new medication' or 'new drug' without explaining that the test article is investigational.",
+      "severity": "major",
+      "basis": {
+        "type": "FEDERAL_GUIDANCE",
+        "frameworks": [
+          "fda_21cfr50_56"
+        ]
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56"
+          ]
+        },
+        "study.has_test_article": true,
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        }
+      },
+      "check": {
+        "method": "lexical_trigger+semantic",
+        "inputs": [
+          "brief",
+          "text",
+          "image",
+          "video"
+        ],
+        "triggers": [
+          "new treatment",
+          "new medication",
+          "new drug"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "Advertising for recruitment into investigational drug, biologic or device studies should not use terms such as \"new treatment,\" \"new medication\" or \"new drug\" without explaining that the test article is investigational.",
+          "text_sha256": "bed3c53efe10a74a039e3675d82e9acf1c32a3b62d5c8fbcfb7b00f940c948ea",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": {
+        "source": "study_snapshot.approved_phrases",
+        "select": {
+          "study_id": "{study.id}",
+          "phrase_type": "investigational_explanation",
+          "language": "{post.language}",
+          "version": "{current approved version}"
+        },
+        "condition": "Required only when a trigger term appears in the post",
+        "fields": [
+          "phrase_id",
+          "study_id",
+          "language",
+          "version",
+          "text",
+          "text_sha256",
+          "approval"
+        ],
+        "nrc_supplies_text": false,
+        "provenance_type": "STUDY_APPROVED_WORDING",
+        "validated_against": "The phrase's own approval record; never required to appear in a source quotation."
+      },
+      "exceptions": [
+        {
+          "exception_id": "FED-04-E1",
+          "text": "Not applicable when the study has no test article.",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S1",
+          "S5"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "SOURCE_CLAUSE",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-05",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "policy",
+      "title": "No certainty of favorable outcome or benefit beyond the consent and protocol",
+      "requirement": "Do not state or imply a certainty of cure, favorable outcome or other benefit beyond the consent document and protocol.",
+      "severity": "critical",
+      "basis": {
+        "type": "FEDERAL_GUIDANCE",
+        "frameworks": [
+          "fda_21cfr50_56"
+        ]
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56"
+          ]
+        },
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        }
+      },
+      "check": {
+        "method": "semantic",
+        "inputs": [
+          "brief",
+          "text",
+          "image",
+          "video"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "does not state or imply a certainty of favorable outcome or other benefits beyond what is outlined in the consent document and the protocol.",
+          "text_sha256": "96bcae89430b486a172ff79fc992f9e673b0e26a1030606ff9f207e89b02ecc3",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "FED-05-E1",
+          "text": "Permitted benefits come only from the study snapshot.",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S1"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "SOURCE_CLAUSE",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-06",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "policy",
+      "title": "No \"free medical treatment\" when the meaning is no charge to take part",
+      "requirement": "Do not promise 'free medical treatment' when the meaning is that participants are not charged for taking part.",
+      "severity": "major",
+      "basis": {
+        "type": "FEDERAL_GUIDANCE",
+        "frameworks": [
+          "fda_21cfr50_56"
+        ]
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56"
+          ]
+        },
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        }
+      },
+      "check": {
+        "method": "lexical+semantic",
+        "inputs": [
+          "brief",
+          "text",
+          "image",
+          "video"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "Advertisements should not promise \"free medical treatment,\" when the intent is only to say subjects will not be charged for taking part in the investigation.",
+          "text_sha256": "95380986443cd581b2e06d1d714afb34f43a13d140e14ab157c594ce01060c9f",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "FED-06-E1",
+          "text": "Any \"no cost\" replacement wording must come from the snapshot (FACT-03).",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S1"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "SOURCE_CLAUSE",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-07",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "policy",
+      "title": "Payment may be stated but not emphasized",
+      "requirement": "Payment may be stated but must not be emphasized, e.g. by larger or bold type.",
+      "severity": "major",
+      "basis": {
+        "type": "FEDERAL_GUIDANCE",
+        "frameworks": [
+          "fda_21cfr50_56"
+        ]
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56"
+          ]
+        },
+        "study.has_compensation": true,
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        }
+      },
+      "check": {
+        "method": "semantic+visual_layout",
+        "inputs": [
+          "text",
+          "image",
+          "video"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PENDING_OWNER_DECISION",
+        "on_violation": "NEEDS_REVIEW",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": true,
+          "resolves_outcome": "NEEDS_REVIEW",
+          "role": "nrc_policy_reviewer",
+          "may_resolve_to": [
+            "PASS",
+            "FAIL"
+          ],
+          "requires_rationale": true,
+          "recorded_via": "NRC-12 review record (reviewer id, timestamp, creative version)"
+        }
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "Advertisements may state that subjects will be paid, but should not emphasize the payment or the amount to be paid, by such means as larger or bold type.",
+          "text_sha256": "9b2d70900e3add3e5aa526ad46c393dd773f0418891b3f59c887489f4ae80484",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "FED-07-E1",
+          "text": "Proposed default NEEDS_REVIEW (D-06). The amount itself is checked by FACT-01.",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S1",
+          "S2"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "SOURCE_CLAUSE",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-08",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "policy",
+      "title": "Not unduly coercive; extra care for populations vulnerable to undue influence",
+      "requirement": "Content must not be unduly coercive; take extra care where subjects may be vulnerable to undue influence.",
+      "severity": "major",
+      "basis": {
+        "type": "FEDERAL_GUIDANCE",
+        "frameworks": [
+          "fda_21cfr50_56"
+        ]
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56"
+          ]
+        },
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        }
+      },
+      "check": {
+        "method": "semantic",
+        "inputs": [
+          "brief",
+          "text",
+          "image",
+          "video"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "NEEDS_REVIEW",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": true,
+          "resolves_outcome": "NEEDS_REVIEW",
+          "role": "nrc_policy_reviewer",
+          "may_resolve_to": [
+            "PASS",
+            "FAIL"
+          ],
+          "requires_rationale": true,
+          "recorded_via": "NRC-12 review record (reviewer id, timestamp, creative version)"
+        }
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "FDA expects IRBs to review the advertising to assure that it is not unduly coercive",
+          "text_sha256": "b4f2cf4a8e8cd484130253201ed3d81669f31c2df9f1165eb46d64487677cf43",
+          "use": "EVIDENCE_ONLY"
+        },
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "This is especially critical when a study may involve subjects who are likely to be vulnerable to undue influence.",
+          "text_sha256": "47e47d03f0c188414e1682b3ae1d50fba23238428ce1397f36e0cac89a13b776",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "FED-08-E1",
+          "text": "Urgency, scarcity and pressure language route to a reviewer; unresolved review blocks readiness.",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S1"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "SOURCE_CLAUSE",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-09",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "policy",
+      "title": "Keep content to what people need to judge eligibility and interest",
+      "requirement": "Keep content to what prospective participants need to judge eligibility and interest.",
+      "severity": "minor",
+      "basis": {
+        "type": "FEDERAL_GUIDANCE",
+        "frameworks": [
+          "fda_21cfr50_56"
+        ]
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56"
+          ]
+        },
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        }
+      },
+      "check": {
+        "method": "semantic",
+        "inputs": [
+          "text",
+          "image",
+          "video"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": false,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "ADVISORY",
+        "on_missing_evidence": "NOT_EVALUATED",
+        "blocks_readiness_when": [],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "Generally, FDA believes that any advertisement to recruit subjects should be limited to the information the prospective subjects need to determine their eligibility and interest.",
+          "text_sha256": "a382c3b71fb659372c72b9aeefdb5a5c0a9c383600c62b820e654193b9c2f9fe",
+          "use": "EVIDENCE_ONLY"
+        },
+        {
+          "source_ref": "S1",
+          "locator": "1. Media Advertising",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "FDA does not require inclusion of all of the listed items.",
+          "text_sha256": "d1c6193b30338932e2f7b597471c62c6942067e739681920a4c5c0f80724c8be",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "FED-09-E1",
+          "text": "Never FAIL for a missing item: the guidance says FDA does not require inclusion of all listed items.",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S1"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "SOURCE_CLAUSE",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-10",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "reviewer_gate",
+      "gate": "reviewer_gate",
+      "title": "Data-collecting destinations are IRB-reviewed",
+      "requirement": "Any destination linked from a post that collects identifiable information (pre-screener, form, landing page) must be one the IRB reviewed. The reviewer confirms this within the FED-01 attestation.",
+      "severity": "critical",
+      "basis": {
+        "type": "FEDERAL_GUIDANCE",
+        "frameworks": [
+          "hhs_45cfr46",
+          "fda_21cfr50_56"
+        ]
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56",
+            "hhs_45cfr46"
+          ]
+        },
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        },
+        "applies_to": [
+          "publication"
+        ]
+      },
+      "check": {
+        "method": "manual_attestation",
+        "inputs": [
+          "nrc12.approval"
+        ],
+        "covered_by": "FED-01 attestation statement"
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "DESTINATION_NOT_ATTESTED"
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S6",
+          "locator": "Archived OHRP guidance (2005), section on information collected via websites",
+          "quote_type": "GUIDANCE_TEXT",
+          "text": "If identifiable private information is collected via the clinical trial website, the IRB should review plans for protecting the confidentiality of that information.",
+          "text_sha256": "36326de17a5b1bc58a5b149574be08065d0885e78926d13762a304bf158b6a8d",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "S6",
+          "S1"
+        ],
+        "implemented_by": [
+          "CTRL-01"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "SOURCE_CLAUSE",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "CTRL-01",
+      "rule_version": 1,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "completeness",
+      "title": "Contacts in a post exactly match approved contacts",
+      "requirement": "Every URL, phone number, email and handle in a post must exactly match an approved contact in the study snapshot.",
+      "severity": "critical",
+      "basis": {
+        "type": "NRC_CONTROL_PROPOSED",
+        "frameworks": [],
+        "implements": "FED-10",
+        "decision_ref": "D-08"
+      },
+      "applicability": {
+        "study": "all",
+        "requires_context": [
+          "study.approved_contacts"
+        ]
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "text",
+          "image_ocr",
+          "video_captions"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PENDING_OWNER_DECISION",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "implements": [
+          "FED-10"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "NRC_CONTROL_PROPOSED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FED-11",
+      "rule_version": 2,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "completeness",
+      "title": "Posts only in an enabled and study-approved language",
+      "requirement": "A post's language must be (a) enabled in this bundle and (b) in the study's approved_languages with an approved translation of every required disclosure. Spanish is gated in v0.2.",
+      "severity": "critical",
+      "basis": {
+        "type": "REGULATION",
+        "frameworks": [
+          "hhs_45cfr46",
+          "fda_21cfr50_56"
+        ],
+        "interpretation": "Rule text governs consent information; extending it to recruitment posts is a proposed NRC interpretation (D-15)."
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56",
+            "hhs_45cfr46"
+          ]
+        },
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        },
+        "post.language": {
+          "must_be_in": [
+            "bundle.scope.enabled_languages",
+            "study.approved_languages"
+          ]
+        }
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "post.language",
+          "study.approved_languages",
+          "study.required_disclosures"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "LANGUAGE_NOT_ENABLED_OR_APPROVED"
+      },
+      "source_quotations": [
+        {
+          "source_ref": "S31",
+          "locator": "45 CFR 46.116(a)(3) (CFR 10-1-19 edition)",
+          "quote_type": "REGULATORY_TEXT",
+          "text": "The information that is given to the subject or the legally authorized representative shall be in language understandable to the subject or the legally authorized representative.",
+          "text_sha256": "6d1e2b9c411a95db1ecfd66fd30d309c1cdd286a8517d0be698ba548df4b300b",
+          "use": "EVIDENCE_ONLY"
+        },
+        {
+          "source_ref": "S32",
+          "locator": "21 CFR 50.20 (eCFR, current as of 11 Jun 2026)",
+          "quote_type": "REGULATORY_TEXT",
+          "text": "The information that is given to the subject or the representative shall be in language understandable to the subject or the representative.",
+          "text_sha256": "9bb81aa0be71c2a996d3be0d286cf40890b661d9bf3fb87ebae714e4ac57fe25",
+          "use": "EVIDENCE_ONLY"
+        }
+      ],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "S31",
+          "S32"
+        ],
+        "decided_by": [
+          "D-15",
+          "D-13"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "NRC_INTERPRETATION_PROPOSED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FACT-01",
+      "rule_version": 2,
+      "layer": "L3",
+      "stage": "validation",
+      "gate": "study_facts",
+      "title": "Approved study facts only",
+      "requirement": "Condition, eligibility, ages, sites, time commitment and payment must match the approved snapshot; a payment amount when compensation_statement is null is a FAIL.",
+      "severity": "critical",
+      "basis": {
+        "type": "STUDY_SNAPSHOT",
+        "frameworks": []
+      },
+      "applicability": {
+        "study": "all",
+        "requires_context": [
+          "study.facts"
+        ]
+      },
+      "check": {
+        "method": "deterministic+semantic",
+        "inputs": [
+          "brief",
+          "text",
+          "image",
+          "video"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "study_snapshot"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "STUDY_SNAPSHOT",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "FACT-02",
+      "rule_version": 2,
+      "layer": "L3",
+      "stage": "validation",
+      "gate": "completeness",
+      "title": "Required disclosures present with exact approved wording",
+      "requirement": "Each required disclosure recorded in the study snapshot for the post's language appears verbatim (whitespace-normalized); OCR and captions for media.",
+      "severity": "critical",
+      "basis": {
+        "type": "STUDY_SNAPSHOT",
+        "frameworks": []
+      },
+      "applicability": {
+        "study": "all",
+        "requires_context": [
+          "study.required_disclosures"
+        ]
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "text",
+          "image_ocr",
+          "video_captions"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [],
+      "required_post_wording": {
+        "source": "study_snapshot.required_disclosures",
+        "select": {
+          "study_id": "{study.id}",
+          "language": "{post.language}",
+          "version": "{current approved version}"
+        },
+        "fields": [
+          "disclosure_id",
+          "study_id",
+          "language",
+          "version",
+          "text",
+          "text_sha256",
+          "approval"
+        ],
+        "nrc_supplies_text": false,
+        "provenance_type": "STUDY_APPROVED_WORDING",
+        "validated_against": "The disclosure's own approval record (study, language, version, approval_ref, approved_by, approved_at). Never required to appear in a source quotation."
+      },
+      "exceptions": [
+        {
+          "exception_id": "FACT-02-E1",
+          "text": "FDA guidance lists typical advertisement content and says not all listed items are required, so this bundle sets no federal disclosure text. Disclosures come from each study's IRB-approved materials. Separately, FED-04 conditionally requires an investigational explanation whenever \"new treatment\"-type terms are used.",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "study_snapshot",
+          "S1"
+        ],
+        "requires_disclosure": [
+          "study_snapshot.required_disclosures"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "STUDY_SNAPSHOT",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": [
+        "REC-07"
+      ]
+    },
+    {
+      "rule_id": "FACT-03",
+      "rule_version": 2,
+      "layer": "L3",
+      "stage": "correction",
+      "gate": "completeness",
+      "title": "Corrections add only approved wording",
+      "requirement": "A suggested correction or AI revision may only insert wording from the study snapshot (approved claims, disclosures, compensation statement) or an owner-approved phrase library for that language.",
+      "severity": "critical",
+      "basis": {
+        "type": "NRC_CONTROL_PROPOSED",
+        "frameworks": [],
+        "decision_ref": "D-10"
+      },
+      "applicability": {
+        "study": "all"
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "correction"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PENDING_OWNER_DECISION",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "study_snapshot"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "NRC_CONTROL_PROPOSED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "IMG-01",
+      "rule_version": 1,
+      "layer": "L1",
+      "stage": "validation",
+      "gate": "policy",
+      "title": "Imagery must not imply cure, guaranteed results or endorsement",
+      "requirement": "Images and video must not show a cure, a before-and-after result, or a clinician endorsing the investigational product.",
+      "severity": "critical",
+      "basis": {
+        "type": "NRC_INTERPRETATION_PROPOSED",
+        "frameworks": [
+          "fda_21cfr50_56"
+        ],
+        "interprets": [
+          "FED-02",
+          "FED-05"
+        ],
+        "decision_ref": "D-07"
+      },
+      "applicability": {
+        "study.regulatory_applicability": {
+          "any_of": [
+            "fda_21cfr50_56"
+          ]
+        },
+        "nrc_baseline_extension": {
+          "applies_beyond_regulatory_basis": true,
+          "label": "PROPOSED_NRC_INTERNAL_POLICY",
+          "scope": "Studies whose snapshot shows none of the listed frameworks",
+          "decision_ref": "D-04",
+          "status": "PENDING"
+        }
+      },
+      "check": {
+        "method": "semantic_visual",
+        "inputs": [
+          "image",
+          "video"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PENDING_OWNER_DECISION",
+        "on_violation": "NEEDS_REVIEW",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": true,
+          "resolves_outcome": "NEEDS_REVIEW",
+          "role": "nrc_policy_reviewer",
+          "may_resolve_to": [
+            "PASS",
+            "FAIL"
+          ],
+          "requires_rationale": true,
+          "recorded_via": "NRC-12 review record (reviewer id, timestamp, creative version)"
+        }
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "interprets": [
+          "FED-02",
+          "FED-05"
+        ],
+        "derived_from": [
+          "S1"
+        ]
+      },
+      "source_locations": [],
+      "provenance_status": "NRC_INTERPRETATION_PROPOSED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": [
+        "REC-09"
+      ]
+    },
+    {
+      "rule_id": "CH-01",
+      "rule_version": 2,
+      "layer": "L4",
+      "stage": "publish_readiness",
+      "gate": "channel_readiness",
+      "title": "Meta paid/boosted: no personal attributes, listed cure claims, health clickbait or Rx promotion",
+      "requirement": "Do not assert or imply the viewer's personal attributes, including a health condition: asking \"Do you have diabetes?\" fails, describing the service or study passes. No claims, including from health professionals or organizations, to cure, heal or eliminate a disease on Meta's exhaustive list; claims about treating or managing symptoms are outside that limit. No clickbait in a health context (sensational or extreme claims, or promises of specific outcomes within a set timeframe without qualifiers). No prescription-drug promotion, which Meta allows only with LegitScript certification or Meta authorization.",
+      "severity": "major",
+      "basis": {
+        "type": "PLATFORM_POLICY",
+        "frameworks": []
+      },
+      "applicability": {
+        "channel": [
+          "facebook",
+          "instagram",
+          "threads"
+        ],
+        "distribution": [
+          "paid",
+          "boosted"
+        ]
+      },
+      "check": {
+        "method": "semantic+deterministic",
+        "inputs": [
+          "publish_request",
+          "brief",
+          "text",
+          "image",
+          "video"
+        ],
+        "cure_claim_terms": [
+          "cure",
+          "cures",
+          "cured",
+          "heal",
+          "heals",
+          "healed",
+          "eliminate",
+          "eliminates",
+          "eliminated"
+        ],
+        "cure_claim_diseases": [
+          "diabetes",
+          "herpes",
+          "thyroid",
+          "psoriasis",
+          "ebola",
+          "cancer",
+          "autism",
+          "alzheimer",
+          "parkinson",
+          "amyotrophic lateral sclerosis",
+          "als",
+          "hiv",
+          "human immunodeficiency virus"
+        ],
+        "cure_claim_list_status": "Exhaustive list per Meta Health and Wellness (copy supplied by NRC, 23 Nov 2026)"
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "CH-01-E1",
+          "text": "Meta lists 'New diabetes treatment available' as acceptable copy; for recruitment posts FED-04 still requires an investigational explanation. Platform acceptance never overrides L1 rules.",
+          "status": "PROPOSED"
+        },
+        {
+          "exception_id": "CH-01-E2",
+          "text": "Meta's Drugs and Pharmaceuticals policy does not mention clinical trials (checked 23 Nov 2026).",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S7",
+          "S19",
+          "S20",
+          "S22"
+        ]
+      },
+      "source_locations": [
+        {
+          "source_ref": "S7",
+          "location": "Physical or mental health and disability: allowed and disallowed examples"
+        },
+        {
+          "source_ref": "S19",
+          "location": "Ads can't: cure claims for the exhaustive disease list; clickbait in a health context"
+        },
+        {
+          "source_ref": "S22",
+          "location": "Prescription drugs: overview and guidelines (no clinical-trial mention)"
+        },
+        {
+          "source_ref": "S20",
+          "location": "Introduction: standards apply across Meta technologies"
+        }
+      ],
+      "provenance_status": "SOURCE_PARAPHRASED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "CH-02",
+      "rule_version": 2,
+      "layer": "L4",
+      "stage": "publish_readiness",
+      "gate": "channel_readiness",
+      "title": "Google/YouTube paid: healthcare approval, content limits and audience limits",
+      "requirement": "Google healthcare approval for the US is required. No prescription-drug promotion, no misleading expectations or implied safety. Targeting: advertiser-curated audiences (customer match, your data segments, audience expansion, lookalike segments) are not allowed; predefined Google audiences (in-market, affinity, demographics, life events, location, custom segments subject to Google's limits) are allowed; under-18s are not eligible.",
+      "severity": "critical",
+      "basis": {
+        "type": "PLATFORM_POLICY",
+        "frameworks": []
+      },
+      "applicability": {
+        "channel": [
+          "youtube"
+        ],
+        "distribution": [
+          "paid",
+          "boosted"
+        ]
+      },
+      "check": {
+        "method": "semantic+deterministic",
+        "inputs": [
+          "publish_request",
+          "targeting"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "S8",
+          "S23"
+        ]
+      },
+      "source_locations": [
+        {
+          "source_ref": "S8",
+          "location": "Clinical trial recruitment: allowed locations list and ad requirements"
+        },
+        {
+          "source_ref": "S23",
+          "location": "Targeting guidelines for sensitive interest categories: advertiser-curated vs predefined audiences table; footnote 3 (under-18s)"
+        }
+      ],
+      "provenance_status": "SOURCE_PARAPHRASED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "CH-03",
+      "rule_version": 2,
+      "layer": "L4",
+      "stage": "publish_readiness",
+      "gate": "channel_readiness",
+      "title": "TikTok paid: provisional, US eligibility unverified for recruitment",
+      "requirement": "Paid or boosted recruitment on TikTok stays unavailable until documented US-specific eligibility evidence or TikTok's written confirmation is recorded in channel_eligibility.tiktok. Classification is provisional: TikTok's US table conditionally permits medical institutions, but it does not establish that NRC clinical-trial recruitment falls in that category; that is an inference. Removing the unsupported blanket ban does not establish approval to advertise. Once eligibility is confirmed, these conditions apply: comply with local laws; certifications may be required; audiences 18 or older only; do not promote the investigational product as a prescription medicine (TikTok's US prescription row requires FDA approval).",
+      "severity": "critical",
+      "basis": {
+        "type": "PLATFORM_POLICY",
+        "frameworks": []
+      },
+      "applicability": {
+        "channel": [
+          "tiktok"
+        ],
+        "distribution": [
+          "paid",
+          "boosted"
+        ],
+        "jurisdiction": [
+          "US"
+        ]
+      },
+      "check": {
+        "method": "semantic+deterministic",
+        "inputs": [
+          "publish_request",
+          "brief",
+          "text",
+          "image",
+          "video",
+          "targeting"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "TIKTOK_US_CONDITION_NOT_MET"
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "CH-03-E1",
+          "text": "Missing or unconfirmed channel_eligibility.tiktok returns UNABLE_TO_ASSESS with reason PAID_ELIGIBILITY_UNVERIFIED (D-12).",
+          "status": "PROPOSED"
+        },
+        {
+          "exception_id": "CH-03-E2",
+          "text": "Classification status: PROVISIONAL (inferred category: Medical institutions).",
+          "status": "PROPOSED"
+        },
+        {
+          "exception_id": "CH-03-E3",
+          "text": "TikTok may request certifications; keep the study's IRB approval documentation available.",
+          "status": "PROPOSED"
+        },
+        {
+          "exception_id": "CH-03-E4",
+          "text": "Clinical trial recruitment is explicitly prohibited in other markets (e.g. Australia); this rule covers the US only.",
+          "status": "PROPOSED"
+        },
+        {
+          "exception_id": "CH-03-E5",
+          "text": "Landing pages must disclose data collection in a privacy policy (TikTok Data Collection Standards); the reviewer confirms this with the FED-10 destination attestation.",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S9",
+          "S34",
+          "S35",
+          "S36",
+          "S33"
+        ]
+      },
+      "source_locations": [
+        {
+          "source_ref": "S9",
+          "location": "Market-specific requirements: United States table (Medical institutions; Prescription medicine rows)"
+        },
+        {
+          "source_ref": "S9",
+          "location": "Market-specific requirements: Australia table (Medical-related products or services: clinical trial recruitment not allowed; contrast only)"
+        },
+        {
+          "source_ref": "S34",
+          "location": "Policy index: no clinical-trial or research category"
+        },
+        {
+          "source_ref": "S35",
+          "location": "Unsuitable business products or services (global list): clinical trials not listed"
+        },
+        {
+          "source_ref": "S36",
+          "location": "General information, item 2: privacy policy on landing pages"
+        },
+        {
+          "source_ref": "S33",
+          "location": "TikTok (US) section: medical institutions (corroboration)"
+        }
+      ],
+      "provenance_status": "SOURCE_PARAPHRASED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "CH-04",
+      "rule_version": 2,
+      "layer": "L4",
+      "stage": "publish_readiness",
+      "gate": "channel_readiness",
+      "title": "Pinterest paid: prohibited by platform",
+      "requirement": "Pinterest's Advertising Guidelines list clinical trial recruitment among healthcare ads it does not allow; the US country rules add no exception.",
+      "severity": "critical",
+      "basis": {
+        "type": "PLATFORM_POLICY",
+        "frameworks": []
+      },
+      "applicability": {
+        "channel": [
+          "pinterest"
+        ],
+        "distribution": [
+          "paid",
+          "boosted"
+        ]
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "publish_request"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "PLATFORM_PROHIBITS_PAID"
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "S18"
+        ]
+      },
+      "source_locations": [
+        {
+          "source_ref": "S18",
+          "location": "Healthcare products and services: 'We don't allow the advertising of' list"
+        },
+        {
+          "source_ref": "S18",
+          "location": "Country-specific guidelines: United States"
+        }
+      ],
+      "provenance_status": "SOURCE_PARAPHRASED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "CH-05",
+      "rule_version": 2,
+      "layer": "L4",
+      "stage": "publish_readiness",
+      "gate": "channel_readiness",
+      "title": "LinkedIn paid: no patient-facing recruitment",
+      "requirement": "LinkedIn allows clinical trial recruitment ads only when targeted at US healthcare professionals and relevant to their work; never consumers, a general audience or under-18s.",
+      "severity": "critical",
+      "basis": {
+        "type": "PLATFORM_POLICY",
+        "frameworks": []
+      },
+      "applicability": {
+        "channel": [
+          "linkedin"
+        ],
+        "distribution": [
+          "paid",
+          "boosted"
+        ]
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "publish_request"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "PLATFORM_PROHIBITS_PATIENT_PAID"
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "CH-05-E1",
+          "text": "A physician-referral campaign is a separate use case, outside NRC's current scope.",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S12",
+          "S24",
+          "S25"
+        ]
+      },
+      "source_locations": [
+        {
+          "source_ref": "S12",
+          "location": "Clinical trial recruitment ads: requirements list (US only; healthcare professionals; not under 18; no prohibited substances)"
+        }
+      ],
+      "provenance_status": "SOURCE_PARAPHRASED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "CH-07",
+      "rule_version": 2,
+      "layer": "L4",
+      "stage": "publish_readiness",
+      "gate": "channel_readiness",
+      "title": "Snapchat paid: unavailable until Snap pre-clearance",
+      "requirement": "Snap publishes no clinical-trial rule. Paid or boosted recruitment is unavailable until written confirmation from Snap is recorded.",
+      "severity": "critical",
+      "basis": {
+        "type": "NRC_CONTROL_PROPOSED",
+        "frameworks": []
+      },
+      "applicability": {
+        "channel": [
+          "snapchat"
+        ],
+        "distribution": [
+          "paid",
+          "boosted"
+        ]
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "publish_request"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PENDING_OWNER_DECISION",
+        "on_violation": "UNABLE_TO_ASSESS",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "PAID_ELIGIBILITY_UNVERIFIED"
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [
+        {
+          "exception_id": "CH-07-E1",
+          "text": "Conservative NRC control, not a Snap requirement (D-12).",
+          "status": "PROPOSED"
+        }
+      ],
+      "relations": {
+        "derived_from": [
+          "S11"
+        ]
+      },
+      "source_locations": [
+        {
+          "source_ref": "S11",
+          "location": "Health category page, all sections (no clinical-trial provision)"
+        }
+      ],
+      "provenance_status": "NRC_CONTROL_PROPOSED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "CH-08",
+      "rule_version": 2,
+      "layer": "L4",
+      "stage": "publish_readiness",
+      "gate": "channel_readiness",
+      "title": "X paid: reference only, not enabled in NRC",
+      "requirement": "X lists clinical trials only for pharmaceutical-manufacturer sponsors with X's prior authorization. Channel not enabled in NRC; any publish request fails.",
+      "severity": "critical",
+      "basis": {
+        "type": "PLATFORM_POLICY",
+        "frameworks": []
+      },
+      "applicability": {
+        "channel": [
+          "x"
+        ],
+        "distribution": [
+          "organic",
+          "paid",
+          "boosted"
+        ]
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "publish_request"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "CHANNEL_NOT_ENABLED"
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "S27"
+        ]
+      },
+      "source_locations": [
+        {
+          "source_ref": "S27",
+          "location": "Clinical trials; United States section; prior-authorization paragraph"
+        }
+      ],
+      "provenance_status": "SOURCE_PARAPHRASED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": false,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "CH-09",
+      "rule_version": 2,
+      "layer": "L4",
+      "stage": "publish_readiness",
+      "gate": "channel_readiness",
+      "title": "Reddit paid: reference only, not enabled in NRC",
+      "requirement": "Reddit allows clinical research ads through Reddit-managed accounts, ClinicalTrials.gov-registered studies and OHRP-registered IRBs, without Lead Generation ads or health targeting. Channel not enabled in NRC; any publish request fails.",
+      "severity": "critical",
+      "basis": {
+        "type": "PLATFORM_POLICY",
+        "frameworks": []
+      },
+      "applicability": {
+        "channel": [
+          "reddit"
+        ],
+        "distribution": [
+          "organic",
+          "paid",
+          "boosted"
+        ]
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "publish_request"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PROPOSED",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "CHANNEL_NOT_ENABLED"
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "S28",
+          "S29",
+          "S30"
+        ]
+      },
+      "source_locations": [
+        {
+          "source_ref": "S28",
+          "location": "Healthcare providers and medical services > Clinical research; Lead Generation Ads"
+        },
+        {
+          "source_ref": "S29",
+          "location": "Restricted targeting: Medical & Mental Health communities"
+        }
+      ],
+      "provenance_status": "SOURCE_PARAPHRASED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": false,
+      "legacy_ids": []
+    },
+    {
+      "rule_id": "CTRL-02",
+      "rule_version": 1,
+      "layer": "L4",
+      "stage": "publish_readiness",
+      "gate": "channel_readiness",
+      "title": "No health-condition audience targeting on any paid channel",
+      "requirement": "Paid and boosted recruitment must not target audiences by health or medical condition or proxies for one. This is a proposed NRC control applied on top of each platform's own rule (CH-01, CH-02), not a platform requirement.",
+      "severity": "critical",
+      "basis": {
+        "type": "NRC_CONTROL_PROPOSED",
+        "frameworks": [],
+        "decision_ref": "D-09"
+      },
+      "applicability": {
+        "distribution": [
+          "paid",
+          "boosted"
+        ]
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "targeting"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PENDING_OWNER_DECISION",
+        "on_violation": "FAIL",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        }
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {
+        "derived_from": [
+          "S23",
+          "S18",
+          "S26",
+          "S29"
+        ]
+      },
+      "source_locations": [
+        {
+          "source_ref": "S23",
+          "location": "Sensitive-category targeting table"
+        },
+        {
+          "source_ref": "S18",
+          "location": "Targeting restrictions on sensitive health conditions"
+        },
+        {
+          "source_ref": "S29",
+          "location": "Restricted targeting: health"
+        },
+        {
+          "source_ref": "S26",
+          "location": "Meta targeting limits (secondary)"
+        }
+      ],
+      "provenance_status": "NRC_CONTROL_PROPOSED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": [
+        "CH-06"
+      ]
+    },
+    {
+      "rule_id": "ORG-01",
+      "rule_version": 1,
+      "layer": "L4",
+      "stage": "publish_readiness",
+      "gate": "channel_readiness",
+      "title": "Organic channel policies not yet sourced",
+      "requirement": "Organic posting rules (community guidelines, branded-content rules) are not sourced for any channel. Paid-ad restrictions do not decide organic eligibility. Until sourced or an owner decision is recorded, organic publication returns UNABLE_TO_ASSESS.",
+      "severity": "critical",
+      "basis": {
+        "type": "NRC_CONTROL_PROPOSED",
+        "frameworks": [],
+        "decision_ref": "D-11"
+      },
+      "applicability": {
+        "channel": [
+          "facebook",
+          "instagram",
+          "threads",
+          "youtube",
+          "tiktok",
+          "linkedin",
+          "pinterest",
+          "snapchat"
+        ],
+        "distribution": [
+          "organic"
+        ]
+      },
+      "check": {
+        "method": "deterministic",
+        "inputs": [
+          "publish_request"
+        ]
+      },
+      "outcome_policy": {
+        "mandatory": true,
+        "mandatory_decision_status": "PENDING_OWNER_DECISION",
+        "on_violation": "UNABLE_TO_ASSESS",
+        "on_missing_evidence": "UNABLE_TO_ASSESS",
+        "blocks_readiness_when": [
+          "FAIL",
+          "NEEDS_REVIEW_UNRESOLVED",
+          "UNABLE_TO_ASSESS",
+          "NOT_EVALUATED"
+        ],
+        "review_resolution": {
+          "allowed": false,
+          "note": "A FAIL cannot be overridden: correct the creative and revalidate (NRC-11), or propose a rule exception for policy-owner approval."
+        },
+        "reason_code": "ORGANIC_POLICY_UNSOURCED"
+      },
+      "source_quotations": [],
+      "required_post_wording": null,
+      "exceptions": [],
+      "relations": {},
+      "source_locations": [],
+      "provenance_status": "NRC_CONTROL_PROPOSED",
+      "review_status": "PROPOSED",
+      "approval": {
+        "status": "PENDING",
+        "approved_by": null,
+        "approved_at": null,
+        "decision_ref": null
+      },
+      "enabled_in_nrc": true,
+      "legacy_ids": []
+    }
+  ],
+  "retired_rules": [
+    {
+      "rule_id": "CH-06",
+      "retired_in": "0.2.0",
+      "replaced_by": [
+        "CH-02 (Google audience limits)",
+        "CTRL-02 (NRC control)"
+      ],
+      "reason": "Mixed a Google-specific rule with a broader NRC control."
+    }
+  ],
+  "channel_readiness": [
+    {
+      "channel": "facebook",
+      "enabled_in_nrc": true,
+      "paid": {
+        "status": "ALLOWED_WITH_CONDITIONS",
+        "reason_code": null,
+        "rules": [
+          "CH-01",
+          "CTRL-02"
+        ],
+        "sources": [
+          "S7",
+          "S19",
+          "S22"
+        ]
+      },
+      "organic": {
+        "status": "INCOMPLETE_UNSOURCED",
+        "reason_code": "ORGANIC_POLICY_UNSOURCED",
+        "rules": [
+          "ORG-01"
+        ]
+      }
+    },
+    {
+      "channel": "instagram",
+      "enabled_in_nrc": true,
+      "paid": {
+        "status": "ALLOWED_WITH_CONDITIONS",
+        "reason_code": null,
+        "rules": [
+          "CH-01",
+          "CTRL-02"
+        ],
+        "sources": [
+          "S7",
+          "S19",
+          "S20"
+        ]
+      },
+      "organic": {
+        "status": "INCOMPLETE_UNSOURCED",
+        "reason_code": "ORGANIC_POLICY_UNSOURCED",
+        "rules": [
+          "ORG-01"
+        ]
+      }
+    },
+    {
+      "channel": "threads",
+      "enabled_in_nrc": true,
+      "paid": {
+        "status": "ALLOWED_WITH_CONDITIONS",
+        "reason_code": null,
+        "rules": [
+          "CH-01",
+          "CTRL-02"
+        ],
+        "sources": [
+          "S20",
+          "S21"
+        ]
+      },
+      "organic": {
+        "status": "INCOMPLETE_UNSOURCED",
+        "reason_code": "ORGANIC_POLICY_UNSOURCED",
+        "rules": [
+          "ORG-01"
+        ]
+      }
+    },
+    {
+      "channel": "youtube",
+      "enabled_in_nrc": true,
+      "paid": {
+        "status": "ALLOWED_WITH_CERTIFICATION",
+        "reason_code": null,
+        "rules": [
+          "CH-02",
+          "CTRL-02"
+        ],
+        "sources": [
+          "S8",
+          "S23"
+        ]
+      },
+      "organic": {
+        "status": "INCOMPLETE_UNSOURCED",
+        "reason_code": "ORGANIC_POLICY_UNSOURCED",
+        "rules": [
+          "ORG-01"
+        ]
+      }
+    },
+    {
+      "channel": "tiktok",
+      "enabled_in_nrc": true,
+      "paid": {
+        "status": "PROVISIONAL_GATED",
+        "reason_code": "PAID_ELIGIBILITY_UNVERIFIED",
+        "rules": [
+          "CH-03",
+          "CTRL-02"
+        ],
+        "sources": [
+          "S9",
+          "S34",
+          "S35",
+          "S36"
+        ]
+      },
+      "organic": {
+        "status": "INCOMPLETE_UNSOURCED",
+        "reason_code": "ORGANIC_POLICY_UNSOURCED",
+        "rules": [
+          "ORG-01"
+        ]
+      }
+    },
+    {
+      "channel": "pinterest",
+      "enabled_in_nrc": true,
+      "paid": {
+        "status": "PROHIBITED_BY_PLATFORM",
+        "reason_code": "PLATFORM_PROHIBITS_PAID",
+        "rules": [
+          "CH-04"
+        ],
+        "sources": [
+          "S18"
+        ]
+      },
+      "organic": {
+        "status": "INCOMPLETE_UNSOURCED",
+        "reason_code": "ORGANIC_POLICY_UNSOURCED",
+        "rules": [
+          "ORG-01"
+        ]
+      }
+    },
+    {
+      "channel": "linkedin",
+      "enabled_in_nrc": true,
+      "paid": {
+        "status": "PROHIBITED_FOR_PATIENT_RECRUITMENT",
+        "reason_code": "PLATFORM_PROHIBITS_PATIENT_PAID",
+        "rules": [
+          "CH-05"
+        ],
+        "sources": [
+          "S12",
+          "S24",
+          "S25"
+        ]
+      },
+      "organic": {
+        "status": "INCOMPLETE_UNSOURCED",
+        "reason_code": "ORGANIC_POLICY_UNSOURCED",
+        "rules": [
+          "ORG-01"
+        ]
+      }
+    },
+    {
+      "channel": "snapchat",
+      "enabled_in_nrc": true,
+      "paid": {
+        "status": "UNAVAILABLE",
+        "reason_code": "PAID_ELIGIBILITY_UNVERIFIED",
+        "rules": [
+          "CH-07"
+        ],
+        "sources": [
+          "S11"
+        ]
+      },
+      "organic": {
+        "status": "INCOMPLETE_UNSOURCED",
+        "reason_code": "ORGANIC_POLICY_UNSOURCED",
+        "rules": [
+          "ORG-01"
+        ]
+      }
+    },
+    {
+      "channel": "x",
+      "enabled_in_nrc": false,
+      "paid": {
+        "status": "NOT_ENABLED",
+        "reason_code": "CHANNEL_NOT_ENABLED",
+        "rules": [
+          "CH-08"
+        ],
+        "sources": [
+          "S27"
+        ]
+      },
+      "organic": {
+        "status": "NOT_ENABLED",
+        "reason_code": "CHANNEL_NOT_ENABLED",
+        "rules": [
+          "CH-08"
+        ]
+      }
+    },
+    {
+      "channel": "reddit",
+      "enabled_in_nrc": false,
+      "paid": {
+        "status": "NOT_ENABLED",
+        "reason_code": "CHANNEL_NOT_ENABLED",
+        "rules": [
+          "CH-09"
+        ],
+        "sources": [
+          "S28",
+          "S29",
+          "S30"
+        ]
+      },
+      "organic": {
+        "status": "NOT_ENABLED",
+        "reason_code": "CHANNEL_NOT_ENABLED",
+        "rules": [
+          "CH-09"
+        ]
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "decision_id": "D-01",
+      "question": "Name the NRC policy owner(s) and the authorized policy administrator(s), and decide whether one person may hold both roles. The role model itself is decided (D-16).",
+      "affects": [
+        "ALL"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-02",
+      "question": "Confirm FED-01 manual attestation in NRC-12 (no IRB reference stored) and sign the acceptance of risk R1. Direction given in chat on 20 Nov; no named approver or decision record yet.",
+      "affects": [
+        "FED-01",
+        "FED-10"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-03",
+      "question": "Who records and approves each study's regulatory applicability, has_test_article, IRB of record and L2 rule status in the snapshot (NRC-2)?",
+      "affects": [
+        "CTX-01"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-04",
+      "question": "Approve or reject an NRC internal baseline applying FDA-derived content rules to studies outside FDA/HHS coverage. Chat direction on 20 Nov was 'apply both for safety'; it needs a formal decision.",
+      "affects": [
+        "FED-01",
+        "FED-02",
+        "FED-03",
+        "FED-04",
+        "FED-05",
+        "FED-06",
+        "FED-07",
+        "FED-08",
+        "FED-09",
+        "FED-10",
+        "FED-11",
+        "IMG-01"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-05",
+      "question": "Process to capture each IRB of record's own ad rules as study-scoped L2 rules.",
+      "affects": [
+        "CTX-01"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-06",
+      "question": "FED-07 outcome on violation: NEEDS_REVIEW (proposed) or FAIL.",
+      "affects": [
+        "FED-07"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-07",
+      "question": "Approve IMG-01 (legacy REC-09) as an NRC interpretation, and its outcome.",
+      "affects": [
+        "IMG-01"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-08",
+      "question": "Approve CTRL-01 exact-contact matching as an NRC control.",
+      "affects": [
+        "CTRL-01"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-09",
+      "question": "Approve CTRL-02 cross-platform health-targeting ban as an NRC control (stricter than Google's rule).",
+      "affects": [
+        "CTRL-02"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-10",
+      "question": "Who owns the approved correction phrase library per language (FACT-03)?",
+      "affects": [
+        "FACT-03"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-11",
+      "question": "Organic publishing before organic policies are sourced: keep blocked (proposed) or allow with reviewer sign-off?",
+      "affects": [
+        "ORG-01"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-12",
+      "question": "Obtain documented US eligibility evidence or written confirmation from TikTok for clinical-trial recruitment (required to open CH-03), and pre-clearance from Snap; approve CH-07 as an NRC control.",
+      "affects": [
+        "CH-03",
+        "CH-07"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-13",
+      "question": "Enable Spanish only after approved disclosures, phrase library and language-specific tests exist.",
+      "affects": [
+        "FED-11",
+        "FACT-02",
+        "FACT-03"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-14",
+      "question": "Confirm X and Reddit stay reference-only (not enabled).",
+      "affects": [
+        "CH-08",
+        "CH-09"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-15",
+      "question": "Approve extending the consent-language regulation to recruitment posts (FED-11 interpretation).",
+      "affects": [
+        "FED-11"
+      ],
+      "status": "PENDING",
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    {
+      "decision_id": "D-16",
+      "question": "Role separation for policy approval and activation.",
+      "affects": [
+        "ALL"
+      ],
+      "status": "DECIDED",
+      "decision": "NRC's designated policy owner approves rule meaning, required disclosures and exceptions; an explicitly authorized policy administrator activates after import checks pass. Separate, independently assignable permissions; each action audited.",
+      "decided_by": "NRC (reviewer of record; individual name to be recorded under D-01)",
+      "decided_at": "2026-11-23",
+      "decision_ref": "Review feedback on bundle v0.2, item 3 (23 Nov 2026)"
+    }
+  ],
+  "risk_acceptances": [
+    {
+      "risk_id": "R1",
+      "description": "Creative published without IRB approval of that exact version; control is manual attestation only.",
+      "status": "PENDING",
+      "accepted_by": null,
+      "accepted_at": null,
+      "decision_ref": "D-02"
+    }
+  ],
+  "graphrag_mapping": {
+    "ingest_only": "Rules from a bundle whose activation.status is ACTIVE for the tenant/study scope. DRAFT/REVIEW bundles load only into an isolated sandbox namespace for fixture tests.",
+    "nodes": [
+      "Rule",
+      "Exception",
+      "SourceReference",
+      "SourceQuotation",
+      "Decision",
+      "Channel",
+      "Framework",
+      "Study",
+      "IRB",
+      "L2Rule",
+      "Disclosure"
+    ],
+    "edges": [
+      {
+        "from": "Rule",
+        "type": "DERIVED_FROM",
+        "to": "SourceReference",
+        "from_field": "relations.derived_from"
+      },
+      {
+        "from": "Rule",
+        "type": "QUOTES",
+        "to": "SourceQuotation",
+        "from_field": "source_quotations"
+      },
+      {
+        "from": "Rule",
+        "type": "APPLIES_WHEN_FRAMEWORK",
+        "to": "Framework",
+        "from_field": "applicability.study.regulatory_applicability.any_of"
+      },
+      {
+        "from": "Rule",
+        "type": "APPLIES_TO_CHANNEL",
+        "to": "Channel",
+        "from_field": "applicability.channel"
+      },
+      {
+        "from": "Rule",
+        "type": "HAS_EXCEPTION",
+        "to": "Exception",
+        "from_field": "exceptions[] (approved only)"
+      },
+      {
+        "from": "Rule",
+        "type": "REQUIRES_DISCLOSURE",
+        "to": "Disclosure",
+        "from_field": "required_post_wording.source (resolved per study+language)"
+      },
+      {
+        "from": "Rule",
+        "type": "INTERPRETS|IMPLEMENTS",
+        "to": "Rule",
+        "from_field": "relations.interprets / relations.implements"
+      },
+      {
+        "from": "Rule",
+        "type": "DECIDED_BY",
+        "to": "Decision",
+        "from_field": "basis.decision_ref, relations.decided_by"
+      },
+      {
+        "from": "Study",
+        "type": "OVERSEEN_BY",
+        "to": "IRB",
+        "from_field": "study snapshot"
+      },
+      {
+        "from": "IRB",
+        "type": "ADDS_RULE",
+        "to": "L2Rule",
+        "from_field": "study-scoped L2 bundle"
+      }
+    ],
+    "retrieval": {
+      "mandatory": "Selected by structured predicates over applicability against the study snapshot and publish request. Never by semantic top-k. A predicate whose input is missing selects the rule and marks it UNABLE_TO_ASSESS; it never yields NOT_APPLICABLE.",
+      "semantic": "May add advisory rules and source quotations as explanatory context only; cannot remove a mandatory rule.",
+      "exceptions": "Only exceptions with status APPROVED are traversed; PROPOSED exceptions are shown to reviewers but never change an outcome."
+    }
+  },
+  "changelog_from_0_1": [
+    {
+      "item": 1,
+      "change": "Source quotations moved to source_quotations (EVIDENCE_ONLY, sha256 per span). required_post_wording now only points to study-snapshot disclosures (FACT-02) and the conditional investigational phrase (FED-04), selected by study and language. FACT-02 note narrowed."
+    },
+    {
+      "item": 2,
+      "change": "FED-01 rewritten as an NRC-12 attestation bound to the creative version (reviewer id, timestamp); application approval and stale-version checks stay enforced. R1 acceptance recorded as PENDING (D-02), not accepted."
+    },
+    {
+      "item": 3,
+      "change": "Regulatory applicability is study-specific: new CTX-01; each rule carries framework predicates. Applying FDA-derived rules beyond their basis is a PROPOSED NRC internal policy (D-04); such results are flagged APPLIED_VIA_PROPOSED_NRC_BASELINE. IRB of record and L2 status required before any PASS; recorded study-scoped L2 rules must be evaluated in the same run."
+    },
+    {
+      "item": 4,
+      "change": "CH-03 TikTok rechecked against TikTok's US market table (copy supplied by NRC, 23 Nov 2026): no clinical-trial prohibition for the US. Changed from 'Blocked' to 'Allowed with conditions': 18+ audiences, local-law compliance, no promotion of the investigational product as a prescription medicine, privacy policy on landing pages. TikTok's policy index, Other Products and Services (incl. its global prohibited list) and Data Collection Standards were also read in full: none mentions clinical trials. The earlier US 'not allowed' search capture was a stitched fragment and is superseded."
+    },
+    {
+      "item": 5,
+      "change": "CH-06 retired: Google audience limits now in CH-02 (S23 read in full); cross-platform ban is CTRL-02 (proposed NRC control). FED-10 whitelist moved to CTRL-01 (proposed NRC control). ORG-01 added; channel readiness split into paid and organic. X and Reddit not enabled. Section-level source_locations added for every paraphrased platform rule. CH-05 (LinkedIn) and CH-01 (Meta) rechecked against live-page text supplied by NRC on 23 Nov 2026; CH-01 now carries Meta's exhaustive cure-claim disease list and its health clickbait limit."
+    },
+    {
+      "item": 6,
+      "change": "Every rule has an explicit outcome_policy (mandatory, decision status, on_violation, on_missing_evidence, blocking outcomes, review resolution). Reviewers may resolve only NEEDS_REVIEW; a FAIL cannot be overridden. FED-07 pending decision with NEEDS_REVIEW default; FED-08 NEEDS_REVIEW with reviewer resolution."
+    },
+    {
+      "item": 7,
+      "change": "Bundle metadata (schema/bundle version, content_sha256, approval, activation, scope), rule-level approval records, source snapshot status, GraphRAG mapping and evaluation contract. JSON Schema, reference implementation, 34 labelled fixtures, 59 tests."
+    },
+    {
+      "item": 8,
+      "change": "enabled_languages = [en]; Spanish gated with unblock criteria. FED-11 quotations refreshed to the 2018 45 CFR 46.116(a)(3) text and 21 CFR 50.20 (to confirm on eCFR). IMG-01 added with legacy id REC-09."
+    },
+    {
+      "item": "count",
+      "change": "23 rules -> 27 (+CTX-01, CTRL-01, CTRL-02, IMG-01, ORG-01; -CH-06)."
+    }
+  ],
+  "changelog_0_3": [
+    {
+      "item": 1,
+      "change": "Evaluation contract: retrieval gaps (unresolved applicability, SOURCE_MISSING, conflict, incomplete traversal) must be carried into the saved result and block PASS/readiness for mandatory rules; a deterministic pass without its required evidence is UNABLE_TO_ASSESS; FAIL stays FAIL."
+    },
+    {
+      "item": 2,
+      "change": "Required disclosures and approved phrases carry their own provenance (study, language, version, text_sha256, approval record) and are validated against it, never against source clauses. Quotation verification is limited to regulatory and platform evidence."
+    },
+    {
+      "item": 3,
+      "change": "Governance: policy_owner approves meaning, disclosures and exceptions; policy_admin activates after checks; separate, audited permissions (D-16, decided 23 Nov 2026). D-01 now covers named approvers and any dual-role decision."
+    },
+    {
+      "item": 4,
+      "change": "CH-03 TikTok relabelled provisional: paid recruitment stays gated (PAID_ELIGIBILITY_UNVERIFIED) until documented US eligibility evidence or TikTok confirmation is recorded; the medical-institutions classification is an inference. D-12 makes that confirmation required."
+    },
+    {
+      "item": 5,
+      "change": "Reference contract kept consistent: TikTok eligibility gate, retrieval-manifest gaps and disclosure approval records modelled; fixtures and tests updated. Repo integration (service/worker regression tests, round-trip import into NRC-4/5/7) remains engineering work."
+    },
+    {
+      "item": 6,
+      "change": "FED-11 regulatory quotations verified against official text: 21 CFR 50.20 on current eCFR (as of 11 Jun 2026) and 45 CFR 46.116(a)(3) in the CFR 10-1-19 edition; both match exactly. S32 is no longer a secondary source."
+    }
+  ],
+  "external_references": [
+    {
+      "ref_id": "S1",
+      "title": "Recruiting Study Subjects — Information Sheet: Guidance for IRBs and Clinical Investigators (Jan 1998; page current as of 05 Sep 2018)",
+      "publisher": "U.S. Food and Drug Administration",
+      "type": "Federal guidance",
+      "url": "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/recruiting-study-subjects",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-VERIFIED (full text read)",
+      "used_for": [
+        "FED-01",
+        "FED-02",
+        "FED-03",
+        "FED-04",
+        "FED-05",
+        "FED-06",
+        "FED-07",
+        "FED-08",
+        "FED-09",
+        "FED-10",
+        "Audit of REC-01 to REC-09"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S2",
+      "title": "Payment and Reimbursement to Research Subjects: Guidance for IRBs and Clinical Investigators (Jan 2018)",
+      "publisher": "U.S. Food and Drug Administration",
+      "type": "Federal guidance",
+      "url": "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/payment-and-reimbursement-research-subjects",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-SNIPPET",
+      "used_for": [
+        "FED-07"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S3",
+      "title": "21 CFR Part 312 — Investigational New Drug Application, §312.7(a) Promotion of an investigational new drug",
+      "publisher": "Electronic Code of Federal Regulations (eCFR)",
+      "type": "Federal regulation",
+      "url": "https://www.ecfr.gov/current/title-21/chapter-I/subchapter-D/part-312",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-SNIPPET",
+      "used_for": [
+        "FED-02"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S4",
+      "title": "21 CFR §812.7 — Prohibition of promotion and other practices (investigational devices)",
+      "publisher": "Legal Information Institute, Cornell Law School",
+      "type": "Federal regulation (secondary host)",
+      "url": "https://www.law.cornell.edu/cfr/text/21/812.7",
+      "accessed": "2026-11-20",
+      "verification": "SECONDARY — confirm on eCFR",
+      "used_for": [
+        "FED-02"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S5",
+      "title": "Preparing Notices of Availability of Investigational Medical Devices and for Recruiting Study Subjects — Guidance for Industry and FDA Staff",
+      "publisher": "U.S. Food and Drug Administration (HHS guidance repository)",
+      "type": "Federal guidance",
+      "url": "https://www.hhs.gov/guidance/sites/default/files/hhs-guidance-documents/FDA/Preparing-Notices-of-Availability-of-Investigational-Medical-Devices-and-for-Recruiting-Study-Subjects---Guidance-for-Industry-and-FDA-Staff.pdf",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-SNIPPET",
+      "used_for": [
+        "FED-04 (device studies)",
+        "Decision: investigator-notice claim list not applied to subject ads"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S6",
+      "title": "Guidance on Institutional Review Board Review of Clinical Trial Websites (20 Sep 2005)",
+      "publisher": "HHS Office for Human Research Protections (OHRP)",
+      "type": "Federal guidance",
+      "url": "https://www.hhs.gov/ohrp/regulations-and-policy/guidance/clinical-trial-websites/",
+      "archived_copy_url": "https://webarchive.library.unt.edu/web/20090511192932/http:/www.hhs.gov/ohrp/policy/clinicaltrials.html",
+      "note": "FED-10 quotation taken from the archived copy",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-SNIPPET",
+      "used_for": [
+        "FED-01",
+        "FED-10"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S7",
+      "title": "Advertising Standards — Privacy Violations and Personal Attributes",
+      "publisher": "Meta Transparency Center",
+      "type": "Platform ad policy",
+      "url": "https://transparency.meta.com/policies/ad-standards/objectionable-content/privacy-violations-personal-attributes/",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY: section text supplied by NRC from the live page on 2026-11-23 (page confirmed at this URL)",
+      "used_for": [
+        "CH-01"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S8",
+      "title": "Clinical trial recruitment — Advertising Policies Help",
+      "publisher": "Google Ads",
+      "type": "Platform ad policy",
+      "url": "https://support.google.com/adspolicy/answer/15598648",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-VERIFIED (full page read)",
+      "used_for": [
+        "CH-02",
+        "Channel matrix: YouTube"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S9",
+      "title": "Healthcare and Pharmaceuticals — TikTok Advertising Policies (updated Sep 2026)",
+      "publisher": "TikTok for Business",
+      "type": "Platform ad policy",
+      "url": "https://ads.tiktok.com/help/article/tiktok-ads-policy-healthcare-pharmaceuticals?lang=en",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY: US table read from a copy of TikTok's page supplied by NRC on 2026-11-23 (the research tool's fetch truncates before the US section); Australia table read directly. An earlier search capture showing a US 'Medical-related products or services: Not allowed' row was a stitched fragment and is superseded.",
+      "used_for": [
+        "CH-03"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S10",
+      "title": "Pinterest Advertising Guidelines — Prohibition on clinical trial recruitment advertising (captured 20 May 2026)",
+      "publisher": "ConductAtlas (third-party policy tracker)",
+      "type": "Secondary capture of platform ad policy",
+      "url": "https://conductatlas.com/platform/pinterest-ads/pinterest-advertising-guidelines/provision/CA-P-066242/prohibition-on-clinical-trial-recruitment-advertising/",
+      "accessed": "2026-11-20",
+      "verification": "SECONDARY — superseded by S18 (Pinterest's own page)",
+      "used_for": [
+        "Initial lead for CH-04 (superseded by S18)"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S11",
+      "title": "Ads Category Requirements — Health",
+      "publisher": "Snap Inc.",
+      "type": "Platform ad policy",
+      "url": "https://values.snap.com/policy/ads-category-requirements/health?lang=en-GB",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-VERIFIED (full page read; no clinical-trial provision)",
+      "used_for": [
+        "CH-07",
+        "Channel matrix: Snapchat"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S12",
+      "title": "Healthcare ads policy",
+      "publisher": "LinkedIn Marketing Solutions",
+      "type": "Platform ad policy",
+      "url": "https://www.linkedin.com/help/lms/answer/a1320991",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY: section text supplied by NRC from the live page on 2026-11-23 (page shows no date; footer (c) 2026). Research tool is blocked by the site.",
+      "used_for": [
+        "CH-05",
+        "Channel matrix: LinkedIn"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S14",
+      "title": "DUHS IRB Advertisement Guidelines (7 Jul 2021)",
+      "publisher": "Duke University Health System IRB",
+      "type": "Institutional IRB policy (example)",
+      "url": "https://irb.duhs.duke.edu/sites/default/files/2022-04/advertisement_guidelines_7-7-2021.pdf",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-SNIPPET",
+      "used_for": [
+        "Decision: separate L2 IRB-of-record layer",
+        "FED-01 (final copy approved before display)"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S15",
+      "title": "Institutional Review Boards (IRBs) and Protection of Human Subjects in Clinical Trials",
+      "publisher": "U.S. Food and Drug Administration, CDER",
+      "type": "Federal reference page (defines IPB)",
+      "url": "https://www.fda.gov/about-fda/cder-offices-and-divisions/institutional-review-boards-irbs-and-protection-human-subjects-clinical-trials",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-SNIPPET",
+      "used_for": [
+        "IPB definition",
+        "Layer L1 scope"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S16",
+      "title": "Recruitment and Advertising Guidance (v2020-07)",
+      "publisher": "University of Arizona Human Subjects Protection Program",
+      "type": "Institutional IRB policy (example)",
+      "url": "https://research.arizona.edu/sites/default/files/recruitment_and_advertisements_v2020-07.pdf",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-SNIPPET",
+      "used_for": [
+        "Decision: separate L2 IRB-of-record layer (IRB-specific required wording)"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S17",
+      "title": "What does Meta's personal attributes policy ban?",
+      "publisher": "Primores (third-party blog)",
+      "type": "Secondary commentary",
+      "url": "https://primores.org/blog/meta-personal-attributes-policy/",
+      "accessed": "2026-11-20",
+      "verification": "SECONDARY",
+      "used_for": [
+        "Flag that Meta's policy URL may have moved (resolved 23 Nov 2026: page confirmed)"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S18",
+      "title": "Advertising Guidelines — Healthcare products and services; Country-specific guidelines (United States)",
+      "publisher": "Pinterest",
+      "type": "Platform ad policy",
+      "url": "https://policy.pinterest.com/en/advertising-guidelines",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-VERIFIED (full page read)",
+      "used_for": [
+        "CH-04",
+        "CTRL-02"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S19",
+      "title": "Advertising Standards — Health and Wellness",
+      "publisher": "Meta Transparency Center",
+      "type": "Platform ad policy",
+      "url": "https://transparency.meta.com/policies/ad-standards/restricted-goods-services/health-wellness",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY: section text supplied by NRC from the live page on 2026-11-23",
+      "used_for": [
+        "CH-01"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S20",
+      "title": "Introduction to the Advertising Standards",
+      "publisher": "Meta Transparency Center",
+      "type": "Platform ad policy",
+      "url": "https://transparency.meta.com/policies/ad-standards/",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-SNIPPET",
+      "used_for": [
+        "CH-01 (standards apply across Meta technologies, incl. Threads)"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S21",
+      "title": "Introducing ads in Threads (19 May 2025)",
+      "publisher": "Meta for Developers",
+      "type": "Platform documentation",
+      "url": "https://developers.facebook.com/blog/post/2025/05/19/introducing-ads-in-threads/",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-SNIPPET",
+      "used_for": [
+        "Channel matrix: Threads"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S22",
+      "title": "Advertising Standards — Drugs and Pharmaceuticals",
+      "publisher": "Meta Transparency Center",
+      "type": "Platform ad policy",
+      "url": "https://transparency.meta.com/policies/ad-standards/restricted-goods-services/drugs-pharmaceuticals/",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY: section text supplied by NRC from the live page on 2026-11-23; no clinical-trial mention",
+      "used_for": [
+        "CH-01 (no prescription-drug promotion)"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S23",
+      "title": "Clinical trial recruitment in personalized advertising",
+      "publisher": "Google Ads",
+      "type": "Platform ad policy",
+      "url": "https://support.google.com/adspolicy/answer/16700746?hl=en-GB",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-VERIFIED (full page read)",
+      "used_for": [
+        "CTRL-02"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S24",
+      "title": "2026 Health Advertising Policies on Social Media: What Meta, TikTok, and Others Prohibit",
+      "publisher": "Accelerated Digital Media",
+      "type": "Secondary commentary",
+      "url": "https://www.accelerateddigitalmedia.com/insights/guide-to-social-media-health-ad-restrictions-2026/",
+      "accessed": "2026-11-20",
+      "verification": "SECONDARY",
+      "used_for": [
+        "Corroboration: LinkedIn, Pinterest"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S25",
+      "title": "Why Clinical Trial Recruitment Ads Get Disapproved (and How to Get Them Live)",
+      "publisher": "Star Digital Marketing",
+      "type": "Secondary commentary",
+      "url": "https://www.stardigitalmarketing.org/clinical-trial-recruitment-ads-disapproved-how-to-get-approved/",
+      "accessed": "2026-11-20",
+      "verification": "SECONDARY",
+      "used_for": [
+        "Corroboration: LinkedIn HCP-referral only"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S26",
+      "title": "Meta Healthcare Ad Rules in 2026: 3 Limits and How to Adapt",
+      "publisher": "Curve Compliance",
+      "type": "Secondary commentary",
+      "url": "https://www.curvecompliance.com/meta-healthcare-ad-restrictions-2026-changes-adaptation",
+      "accessed": "2026-11-20",
+      "verification": "SECONDARY",
+      "used_for": [
+        "CTRL-02 (Meta targeting, secondary)"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S27",
+      "title": "Health and pharmaceutical products and services (ads policy)",
+      "publisher": "X Corp. (X Business)",
+      "type": "Platform ad policy",
+      "url": "https://business.x.com/en/help/ads-policies/ads-content-policies/healthcare",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-VERIFIED (full page read)",
+      "used_for": [
+        "CH-08",
+        "Channel matrix: X"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S28",
+      "title": "Healthcare Products and Services policy (incl. Clinical research; Lead Generation Ads)",
+      "publisher": "Reddit Ads Help Center",
+      "type": "Platform ad policy",
+      "url": "https://business.reddithelp.com/s/article/healthcare-products-and-services-policy",
+      "archived_copy_url": "https://github.com/OpenTermsArchive/pga-versions/blob/main/Reddit/Advertising%20Content%20Policy.md",
+      "note": "Text read from the Open Terms Archive capture (tracking stopped 11 Mar 2026); live page not reachable by the research tool",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY TEXT VIA ARCHIVE (captured before 11 Mar 2026)",
+      "used_for": [
+        "CH-09",
+        "Channel matrix: Reddit"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S29",
+      "title": "Targeting Guidelines",
+      "publisher": "Reddit Ads Help Center",
+      "type": "Platform ad policy",
+      "url": "https://business.reddithelp.com/s/article/Reddit-Advertising-Policy-Targeting-Guidelines",
+      "accessed": "2026-11-20",
+      "verification": "PRIMARY-SNIPPET (current)",
+      "used_for": [
+        "CTRL-02",
+        "CH-09"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S30",
+      "title": "Reddit Ad Not Approved for Your Clinic? What to Fix",
+      "publisher": "Curve Compliance",
+      "type": "Secondary commentary",
+      "url": "https://www.curvecompliance.com/ad-account-rescue/reddit-ads-healthcare-not-approved",
+      "accessed": "2026-11-20",
+      "verification": "SECONDARY (2026)",
+      "used_for": [
+        "Corroboration: Reddit managed-account requirement still current"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S31",
+      "title": "45 CFR 46.116 General requirements for informed consent (2018 Requirements), paragraph (a)(3)",
+      "publisher": "U.S. Government Publishing Office (CFR, 10-1-19 edition)",
+      "type": "Federal regulation",
+      "url": "https://www.govinfo.gov/content/pkg/CFR-2019-title45-vol1/pdf/CFR-2019-title45-vol1-sec46-116.pdf",
+      "accessed": "2026-11-23",
+      "verification": "PRIMARY-VERIFIED (official print edition read; quotation matches exactly). Current eCFR page not reachable by the research tool.",
+      "used_for": [
+        "FED-11"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S32",
+      "title": "21 CFR 50.20 General requirements for informed consent",
+      "publisher": "Electronic Code of Federal Regulations (up to date as of 11 Jun 2026)",
+      "type": "Federal regulation",
+      "url": "https://www.ecfr.gov/current/title-21/chapter-I/subchapter-A/part-50/subpart-B",
+      "accessed": "2026-11-23",
+      "verification": "PRIMARY-VERIFIED (current eCFR read; quotation matches exactly)",
+      "used_for": [
+        "FED-11"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S33",
+      "title": "Healthcare Advertising Rules by Platform: 2026 Guide",
+      "publisher": "Curve Compliance",
+      "type": "Secondary commentary",
+      "url": "https://www.curvecompliance.com/healthcare-advertising-rules-by-platform",
+      "accessed": "2026-11-20",
+      "verification": "SECONDARY (2026): quotes TikTok US rules allowing medical institutions with certification and 18+ targeting",
+      "used_for": [
+        "CH-03 (corroboration)"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S34",
+      "title": "TikTok Advertising Policies (policy index; last updated August 2025)",
+      "publisher": "TikTok for Business",
+      "type": "Platform ad policy",
+      "url": "https://ads.tiktok.com/resources/help/article/tiktok-advertising-policies?lang=en&redirected=2",
+      "accessed": "2026-11-23",
+      "verification": "PRIMARY-VERIFIED (full page read). The North America Ad Policy Handbook URL now redirects here.",
+      "used_for": [
+        "CH-03"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S35",
+      "title": "Other Products and Services (last updated October 2026)",
+      "publisher": "TikTok for Business",
+      "type": "Platform ad policy",
+      "url": "https://ads.tiktok.com/help/article/tiktok-ads-policy-other-products-and-services",
+      "accessed": "2026-11-23",
+      "verification": "PRIMARY-VERIFIED (full page read; no clinical-trial mention)",
+      "used_for": [
+        "CH-03"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    },
+    {
+      "ref_id": "S36",
+      "title": "Data Collection Standards (last updated February 2025)",
+      "publisher": "TikTok for Business",
+      "type": "Platform ad policy",
+      "url": "https://ads.tiktok.com/help/article/data-collection-standards",
+      "accessed": "2026-11-23",
+      "verification": "PRIMARY-VERIFIED (full page read)",
+      "used_for": [
+        "CH-03 (landing-page privacy policy)"
+      ],
+      "snapshot": {
+        "retrieved_at": "2026-11-20",
+        "snapshot_sha256": null,
+        "snapshot_status": "NOT_CAPTURED",
+        "note": "Page snapshot and checksum must be captured at ingestion (NRC-4); quotation-level checksums are in each rule."
+      }
+    }
+  ]
+}
