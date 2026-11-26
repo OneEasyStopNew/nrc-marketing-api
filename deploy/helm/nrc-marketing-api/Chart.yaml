@@ -1,0 +1,8 @@
+apiVersion: v2
+name: nrc-marketing-api
+description: NRC Marketing backend - API, connector worker and the pre-deploy migration job.
+type: application
+# Chart version; the app version is the image tag passed at deploy time (the git commit).
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"
