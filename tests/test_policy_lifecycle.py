@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -65,6 +66,7 @@ from app.schemas.policy_admin import (
 from app.schemas.tenancy import StudyFacts
 from app.services import policy_bundles as bundles
 from app.services.policies import get_active_policy
+from scripts.import_policy_graph import SYNTHETIC_GRAPH_PATH, import_policy_graph, load_graph
 from tests.conftest import (
     IntegrationEnv,
     SeededTenant,
@@ -72,7 +74,10 @@ from tests.conftest import (
     add_policy_bundle,
     app_session,
     as_tenant_owner,
+    owner_session,
 )
+
+SAMPLE_BUNDLE_PATH = SYNTHETIC_GRAPH_PATH.with_name("synthetic_sample_bundle.json")
 
 EN = (PolicyLanguage.EN,)
 ADMIN, APPROVER = "policy-admin-a", "policy-approver-a"
@@ -1121,6 +1126,51 @@ async def approved(env: Env) -> Draft:
     await env.move(draft, Command.SUBMIT)
     await env.move(draft, Command.APPROVE, env.approver)
     return draft
+
+
+async def _imported_draft(connection: AsyncConnection, env: Env, graph_path: Path) -> Draft:
+    # What the import script does for an operator: a graph file into an empty DRAFT bundle.
+    bundle = await env.create()
+    async with owner_session(connection, env.tenant_id) as owner_db:
+        await import_policy_graph(owner_db, env.tenant_id, bundle.id, load_graph(graph_path))
+    await bind_tenant(env.db, env.tenant_id)
+    return Draft(bundle.id, await env.revision(bundle.id), *(uuid4() for _ in range(5)))
+
+
+async def test_the_sample_bundle_goes_from_submit_to_active(
+    connection: AsyncConnection, env: Env
+) -> None:
+    # The minimal English-only bundle for walking the lifecycle (README "Policy bundles").
+    draft = await _imported_draft(connection, env, SAMPLE_BUNDLE_PATH)
+    await env.move(draft, Command.SUBMIT)
+
+    approved = (await env.move(draft, Command.APPROVE, env.approver)).lifecycle_state
+    await mark_ready(connection, env.tenant_id, draft.id)
+    await bind_tenant(env.db, env.tenant_id)
+    active = (await env.move(draft, Command.ACTIVATE, env.admin, because())).lifecycle_state
+
+    assert (approved, active) == (BundleLifecycleState.APPROVED, BundleLifecycleState.ACTIVE)
+    policy = await get_active_policy(env.db, env.admin)
+    rule = next(r for r in policy.rules if r.rule_id == "REC-07")
+    assert (rule.source.source_id, rule.source.clause) == (
+        "synthetic:nrc4-sample-bundle-v1 (paraphrased public FDA guidance)",
+        "FDA-7",
+    )
+
+
+async def test_the_shared_synthetic_bundle_cannot_be_approved_while_spanish_is_unsupported(
+    connection: AsyncConnection, env: Env
+) -> None:
+    # Spanish stays in it for the retrieval eval, and the language gate is not weakened for it.
+    draft = await _imported_draft(connection, env, SYNTHETIC_GRAPH_PATH)
+    await env.move(draft, Command.SUBMIT)
+
+    with pytest.raises(PolicyBundleHasIssuesError, match="open issues") as error:
+        await env.move(draft, Command.APPROVE, env.approver)
+
+    assert error.value.details is not None
+    issues: list[dict[str, str]] = error.value.details["issues"]  # type: ignore[assignment]  # details is untyped JSON
+    assert {issue["code"] for issue in issues} == {"UNSUPPORTED_LANGUAGE"}
 
 
 async def test_an_approved_study_wording_pointer_reaches_the_active_rules(

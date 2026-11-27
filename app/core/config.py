@@ -238,8 +238,8 @@ class Settings(RetrievalSettings):
     # marked FAILED. Polling and lease length are the shared WORKER_* settings.
     policy_worker_max_attempts: int = Field(default=3, ge=1, le=10)
     # Bounds on what policy:manage requests can create: bundles still being written (DRAFT or
-    # REVIEW) per tenant, and nodes, edges and wordings per bundle. The synthetic bundle has 21
-    # nodes and 15 edges.
+    # REVIEW) per tenant, and nodes, edges and wordings per bundle. The synthetic bundle has 22
+    # nodes and 16 edges.
     policy_max_open_bundles_per_tenant: int = Field(default=10, ge=1, le=100)
     policy_max_items_per_bundle: int = Field(default=2000, ge=10, le=20_000)
     # Languages a policy bundle may contain before it can be approved (NRC-4). Spanish waits for

@@ -37,9 +37,9 @@ from tests.conftest import (
     owner_session,
 )
 
-# Searchable nodes in the synthetic rulebook (7 clauses, 2 disclosures, 1 interpretation), all
+# Searchable nodes in the synthetic rulebook (8 clauses, 2 disclosures, 1 interpretation), all
 # approved. Its 9 rules and 2 exceptions are never embedded.
-NODE_COUNT = 10
+NODE_COUNT = 11
 
 
 class _ShortVectors:

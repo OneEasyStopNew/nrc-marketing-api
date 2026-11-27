@@ -40,7 +40,7 @@ from tests.conftest import (
 
 GRAPH_MODELS = (PolicySource, PolicySourceClause, PolicyNode, PolicyRuleRecord, PolicyEdge)
 # Sources, clauses, nodes, rules, edges in the synthetic rulebook.
-EXPECTED_COUNTS = (1, 8, 21, 9, 15)
+EXPECTED_COUNTS = (1, 9, 22, 9, 16)
 
 
 @pytest.fixture
@@ -117,7 +117,7 @@ async def test_import_creates_the_synthetic_rulebook(
         assert await _counts(connection) == EXPECTED_COUNTS
         assert result.skipped is False
         assert (result.sources_created, result.sources_reused) == (1, 0)
-        assert (result.clauses_created, result.nodes, result.rules, result.edges) == (8, 21, 9, 15)
+        assert (result.clauses_created, result.nodes, result.rules, result.edges) == (9, 22, 9, 16)
 
         assert (
             await db.scalar(
@@ -138,7 +138,7 @@ async def test_import_creates_the_synthetic_rulebook(
                 .select_from(PolicyEdge)
                 .where(PolicyEdge.approved.is_(True), PolicyEdge.tenant_id == tenant_id)
             )
-            == 15
+            == 16
         )
 
 
@@ -173,8 +173,8 @@ async def test_second_bundle_of_the_tenant_reuses_the_source(
         result = await import_policy_graph(db, tenant_id, second_bundle, load_synthetic_graph())
         assert (result.sources_created, result.sources_reused, result.clauses_created) == (0, 1, 0)
         sources, clauses, nodes, rules, edges = await _counts(connection)
-        assert (sources, clauses) == (1, 8)
-        assert (nodes, rules, edges) == (42, 18, 30)
+        assert (sources, clauses) == (1, 9)
+        assert (nodes, rules, edges) == (44, 18, 32)
 
 
 async def test_other_tenant_sees_none_of_the_imported_rows(

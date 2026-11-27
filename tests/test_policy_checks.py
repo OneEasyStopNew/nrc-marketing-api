@@ -457,11 +457,12 @@ def test_proposals_hanging_off_a_rejected_rule_do_not_block() -> None:
     assert graph.issues() == set()
 
 
-async def test_the_imported_synthetic_rulebook_reports_only_its_known_gap(
+async def test_the_imported_synthetic_rulebook_is_clean_once_spanish_is_enabled(
     connection: AsyncConnection, world: World
 ) -> None:
     # The shared synthetic graph (NRC-5) has Spanish rows and an exception of an exception, both
-    # fine; REC-07 rests only on disclosures with no English source clause, which AC1 must catch.
+    # fine. Every mandatory rule, REC-07 included, has a source clause or interpretation; the
+    # only thing that stops a bundle made from it is Spanish, which is not approved yet.
     tenant_id = world.a.tenant_id
     assert world.a.policy_bundle_id is not None
     async with owner_session(connection, tenant_id) as db:
@@ -470,10 +471,10 @@ async def test_the_imported_synthetic_rulebook_reports_only_its_known_gap(
 
     assert len(snapshot.rules) == len(load_synthetic_graph().rules)
     assert snapshot.clause_texts
-    issues = run_checks(snapshot, (PolicyLanguage.EN, PolicyLanguage.ES))
-    assert [(issue.code, issue.subject) for issue in issues] == [
-        (CheckCode.MISSING_PROVENANCE, "rule:REC-07")
-    ]
+    assert run_checks(snapshot, (PolicyLanguage.EN, PolicyLanguage.ES)) == []
+    # English only, as activation runs today: the Spanish rows are refused, nothing else.
+    english_only = run_checks(snapshot, (PolicyLanguage.EN,))
+    assert {issue.code for issue in english_only} == {CheckCode.UNSUPPORTED_LANGUAGE}
 
 
 async def test_a_snapshot_never_reads_another_tenants_bundle(

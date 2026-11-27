@@ -7,6 +7,7 @@
     {"clause_ref": "FDA-4", "section": "Certainty of favourable outcome", "page": 4, "text": "[SYNTHETIC] Recruitment material must not promise a certain favourable outcome or a benefit the consent document does not describe.", "language": "en"},
     {"clause_ref": "FDA-5", "section": "Free medical treatment", "page": 5, "text": "[SYNTHETIC] Recruitment material must not promise free treatment; it may say that taking part costs nothing.", "language": "en"},
     {"clause_ref": "FDA-6", "section": "Emphasis on payment", "page": 6, "text": "[SYNTHETIC] Payment may be mentioned but must not be emphasised, for example by large type or by leading with the amount.", "language": "en"},
+    {"clause_ref": "FDA-7", "section": "Required disclosure", "page": 7, "text": "[SYNTHETIC] Every advertisement must carry this statement: This is a research study. Taking part is voluntary.", "language": "en"},
     {"clause_ref": "FDA-1-ES", "section": "Afirmaciones de seguridad o eficacia", "page": 1, "text": "[SYNTHETIC] El material de reclutamiento no debe decir ni sugerir que un tratamiento en investigación es seguro, eficaz o que cura la enfermedad en estudio.", "language": "es"},
     {"clause_ref": "DISC-ES", "section": "Divulgación obligatoria", "page": 7, "text": "[SYNTHETIC] Todo anuncio debe indicar que se trata de un estudio de investigación y que la participación es voluntaria.", "language": "es"}
     ]
@@ -18,6 +19,7 @@
     {"node_key": "CL-FDA-4", "node_type": "CLAUSE", "text": "[SYNTHETIC] Recruitment material must not promise a certain favourable outcome or a benefit the consent document does not describe.", "clause_ref": "FDA-4", "approved": true},
     {"node_key": "CL-FDA-5", "node_type": "CLAUSE", "text": "[SYNTHETIC] Recruitment material must not promise free treatment; it may say that taking part costs nothing.", "clause_ref": "FDA-5", "approved": true},
     {"node_key": "CL-FDA-6", "node_type": "CLAUSE", "text": "[SYNTHETIC] Payment may be mentioned but must not be emphasised, for example by large type or by leading with the amount.", "clause_ref": "FDA-6", "approved": true},
+    {"node_key": "CL-FDA-7", "node_type": "CLAUSE", "text": "[SYNTHETIC] Every advertisement must carry this statement: This is a research study. Taking part is voluntary.", "clause_ref": "FDA-7", "approved": true},
     {"node_key": "CL-FDA-1-ES", "node_type": "CLAUSE", "text": "[SYNTHETIC] El material de reclutamiento no debe decir ni sugerir que un tratamiento en investigación es seguro, eficaz o que cura la enfermedad en estudio.", "language": "es", "clause_ref": "FDA-1-ES", "approved": true},
     {"node_key": "REC-01", "node_type": "RULE", "text": "[SYNTHETIC] Do not state or imply that the investigational treatment is safe or effective for the condition being studied.", "input_kinds": ["brief", "text", "image"], "approved": true, "clause_ref": "FDA-1"},
     {"node_key": "REC-02", "node_type": "RULE", "text": "[SYNTHETIC] Do not claim the investigational treatment is equivalent or superior to any other treatment.", "input_kinds": ["brief", "text"], "approved": true, "clause_ref": "FDA-2"},
@@ -54,6 +56,7 @@
     {"edge_type": "supported_by", "from_node_key": "REC-06", "to_node_key": "CL-FDA-6", "approved": true, "provenance_clause_ref": "FDA-6"},
     {"edge_type": "supported_by", "from_node_key": "REC-09", "to_node_key": "CL-FDA-4", "approved": true, "provenance_clause_ref": "FDA-4"},
     {"edge_type": "supported_by", "from_node_key": "REC-01", "to_node_key": "CL-FDA-1-ES", "approved": true, "provenance_clause_ref": "FDA-1-ES"},
+    {"edge_type": "supported_by", "from_node_key": "REC-07", "to_node_key": "CL-FDA-7", "approved": true, "provenance_clause_ref": "FDA-7"},
     {"edge_type": "requires_disclosure", "from_node_key": "REC-07", "to_node_key": "DISC-01", "approved": true, "provenance_note": "Study snapshot required_disclosures"},
     {"edge_type": "requires_disclosure", "from_node_key": "REC-07", "to_node_key": "DISC-01-ES", "approved": true, "provenance_clause_ref": "DISC-ES"},
     {"edge_type": "supported_by", "from_node_key": "REC-08", "to_node_key": "INT-01", "approved": true, "provenance_note": "Study snapshot facts are the only approved source for these statements"},
