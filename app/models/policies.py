@@ -3,7 +3,17 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +29,28 @@ class PolicyBundle(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
         UniqueConstraint("tenant_id", "version"),
+        ForeignKeyConstraint(
+            ["tenant_id", "based_on_bundle_id"], ["policy_bundles.tenant_id", "policy_bundles.id"]
+        ),
+        CheckConstraint("revision >= 1", name="revision_positive"),
+        # A draft is not approved yet; every state from APPROVED on names who approved and when.
+        CheckConstraint(
+            "lifecycle_state NOT IN ('APPROVED', 'BUILDING', 'READY', 'ACTIVE', 'RETIRED')"
+            " OR (approved_by IS NOT NULL AND approved_at IS NOT NULL)",
+            name="approved_states_have_approver",
+        ),
+        CheckConstraint(
+            "(contract_document IS NULL) = (contract_sha256 IS NULL)"
+            " AND (contract_sha256 IS NULL OR contract_sha256 ~ '^[0-9a-f]{64}$')",
+            name="contract_has_checksum",
+        ),
+        # At most one ACTIVE bundle per tenant: activation retires the previous one first.
+        Index(
+            "uq_policy_bundles_one_active",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("lifecycle_state = 'ACTIVE'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -29,8 +61,9 @@ class PolicyBundle(Base):
     # Validated against app.schemas.policies.PolicyRule on write (seed) and on read.
     rules: Mapped[list[dict[str, object]]] = mapped_column(JSONB)
     is_synthetic: Mapped[bool]
-    approved_by: Mapped[str] = mapped_column(String(200))
-    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Empty while the bundle is a DRAFT or in REVIEW (CHECK approved_states_have_approver).
+    approved_by: Mapped[str | None] = mapped_column(String(200))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # New bundles start as DRAFT, so one inserted without a state never becomes the active policy
     # (the migration set existing rows to ACTIVE). NRC-4 owns the transitions; enforcing a single
@@ -40,3 +73,20 @@ class PolicyBundle(Base):
     )
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     activated_by: Mapped[str | None] = mapped_column(String(200))
+    # NRC-4: the version the editor sends in If-Match; every edit of the bundle's graph bumps it.
+    revision: Mapped[int] = mapped_column(server_default=text("1"))
+    # The bundle this draft was copied from, if any.
+    based_on_bundle_id: Mapped[UUID | None]
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Build queue, the same scheme as media_uploads: set by lease_policy_builds().
+    available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    leased_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_owner: Mapped[str | None] = mapped_column(String(128))
+    attempts: Mapped[int] = mapped_column(server_default=text("0"))
+    failed_attempts: Mapped[int] = mapped_column(server_default=text("0"))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    # A bundle imported from a policy deliverable (scripts.import_policy_bundle): the document as
+    # imported, and its verified content_sha256. Fields runtime does not read yet (outcome policy,
+    # channel readiness, decisions) live only here. NULL for bundles built in the editor.
+    contract_document: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    contract_sha256: Mapped[str | None] = mapped_column(String(64))

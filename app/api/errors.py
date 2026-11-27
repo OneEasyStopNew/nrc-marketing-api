@@ -21,6 +21,7 @@ from app.core.errors import (
     GenerationLimitError,
     NotFoundError,
     PermissionDeniedError,
+    PolicySourceStorageUnavailableError,
     UploadLimitError,
     UploadNotAcceptedError,
     VersionConflictError,
@@ -44,6 +45,7 @@ STATUS_BY_ERROR: Final[Mapping[type, int]] = MappingProxyType(
         UploadLimitError: 429,
         FeatureNotAvailableError: 501,
         DependencyUnavailableError: 503,
+        PolicySourceStorageUnavailableError: 503,
     }
 )
 _HTTP_CODES: Final[Mapping[int, str]] = MappingProxyType(

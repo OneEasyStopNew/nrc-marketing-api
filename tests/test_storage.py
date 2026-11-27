@@ -361,3 +361,22 @@ async def test_head_reports_only_a_full_object_sha256(
 
     assert head is not None
     assert head.checksum_sha256 == expected
+
+
+def test_a_bucket_override_wins_and_works_without_the_media_bucket(settings: Settings) -> None:
+    assert ObjectStorage(settings).bucket == BUCKET
+    assert ObjectStorage(settings, bucket="nrc-test-policy").bucket == "nrc-test-policy"
+    no_media = settings.model_copy(update={"aws_s3_bucket": None})
+    assert ObjectStorage(no_media, bucket="nrc-test-policy").bucket == "nrc-test-policy"
+
+
+@pytest.mark.parametrize(
+    ("content_type", "extension"),
+    [("application/pdf", "pdf"), ("text/plain", "txt"), ("text/markdown", "md")],
+)
+def test_new_upload_key_carries_the_policy_source_extension(
+    content_type: str, extension: str
+) -> None:
+    assert re.fullmatch(
+        rf"uploads/\d{{4}}/\d{{2}}/[0-9a-f-]{{36}}\.{extension}", new_upload_key(content_type)
+    )

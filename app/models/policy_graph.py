@@ -25,7 +25,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -36,7 +36,11 @@ from app.models.enums import (
     PolicyEdgeType,
     PolicyLanguage,
     PolicyNodeType,
+    ProposalOrigin,
+    ReviewState,
     Severity,
+    SourceExtractionState,
+    WordingKind,
     enum_column,
 )
 
@@ -45,6 +49,12 @@ from app.models.enums import (
 EMBEDDING_DIMENSIONS = 1024
 # Same pattern as app.schemas.policies.PolicyRule.rule_id (which imports it from here).
 RULE_ID_PATTERN = r"^[A-Z][A-Z0-9-]{1,39}$"
+# Node keys (policy_nodes.node_key, 80 chars) appear in paths, audit details and import files:
+# letters, digits, '.', '_' and '-'. Used by the API schemas and the import script.
+NODE_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+# policy_rules.prohibited_phrases element size; approval copies each approved phrase there, so
+# requests and imports refuse a longer one up front instead of failing approval.
+PROHIBITED_PHRASE_MAX_CHARS: Final = 200
 # What search returns and the embedding index covers: supporting text. Rules are selected by
 # their conditions and exceptions reached through the graph, so neither is searched or embedded.
 SEARCHABLE_NODE_TYPES: Final = (
@@ -64,6 +74,31 @@ _EMPTY_ARRAY = text("'{}'")
 _FALSE = text("false")
 # Which bundle a node-level row belongs to, shared by every table that references policy_nodes.
 _NODE_COLUMNS = ["policy_nodes.tenant_id", "policy_nodes.policy_bundle_id", "policy_nodes.id"]
+_ZERO = text("0")
+# convert_to() is only STABLE, so a generated column cannot call it; the migration defines this
+# IMMUTABLE wrapper (the database encoding is fixed, so the result never changes).
+_TEXT_SHA256_SQL = "policy_text_sha256(text)"
+# NRC-4 review fields. A decided row (approved or rejected) always names who decided and when.
+_REVIEWED_WHEN_DECIDED = (
+    "review_state = 'PROPOSED' OR (reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL)"
+)
+# NRC-5 retrieval reads `approved`; the review state must never disagree with it.
+_APPROVED_MATCHES_REVIEW_STATE = "approved = (review_state = 'APPROVED')"
+
+
+class _ReviewColumns:
+    # Mixin for rows that a human reviews before they count (nodes, edges, wordings). Rows written
+    # by the owner import script are APPROVED by 'system:import'; new rows start PROPOSED.
+
+    review_state: Mapped[ReviewState] = mapped_column(
+        enum_column(ReviewState), server_default=ReviewState.PROPOSED.value
+    )
+    origin: Mapped[ProposalOrigin] = mapped_column(
+        enum_column(ProposalOrigin), server_default=ProposalOrigin.HUMAN.value
+    )
+    reviewed_by: Mapped[str | None] = mapped_column(String(200))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_note: Mapped[str | None] = mapped_column(String(1000))
 
 
 class PolicySource(Base):
@@ -73,6 +108,15 @@ class PolicySource(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
         UniqueConstraint("tenant_id", "checksum_sha256"),
+        ForeignKeyConstraint(
+            ["tenant_id", "upload_id"], ["media_uploads.tenant_id", "media_uploads.id"]
+        ),
+        UniqueConstraint("tenant_id", "upload_id"),
+        # A source without clauses yet must have an upload to extract them from.
+        CheckConstraint(
+            "extraction_state = 'EXTRACTED' OR upload_id IS NOT NULL",
+            name="extraction_has_upload",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -86,6 +130,20 @@ class PolicySource(Base):
     is_synthetic: Mapped[bool]
     created_by: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # NRC-4 extraction queue. Existing and owner-imported sources come with their clauses.
+    upload_id: Mapped[UUID | None]
+    extraction_state: Mapped[SourceExtractionState] = mapped_column(
+        enum_column(SourceExtractionState), server_default=SourceExtractionState.EXTRACTED.value
+    )
+    extraction_error_code: Mapped[str | None] = mapped_column(String(64))
+    extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    page_count: Mapped[int | None]
+    # Extraction lease, the same scheme as media_uploads: set by lease_policy_sources().
+    available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    leased_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_owner: Mapped[str | None] = mapped_column(String(128))
+    attempts: Mapped[int] = mapped_column(server_default=_ZERO)
+    failed_attempts: Mapped[int] = mapped_column(server_default=_ZERO)
 
 
 class PolicySourceClause(Base):
@@ -110,7 +168,7 @@ class PolicySourceClause(Base):
     language: Mapped[PolicyLanguage] = mapped_column(enum_column(PolicyLanguage))
 
 
-class PolicyNode(Base):
+class PolicyNode(_ReviewColumns, Base):
     # The unit that is searched and cited. node_key is what the API shows, never the UUID.
 
     __tablename__ = "policy_nodes"
@@ -134,6 +192,8 @@ class PolicyNode(Base):
             name="effective_window",
         ),
         Index("ix_policy_nodes_search_vector", "search_vector", postgresql_using="gin"),
+        CheckConstraint(_APPROVED_MATCHES_REVIEW_STATE, name="approved_matches_review_state"),
+        CheckConstraint(_REVIEWED_WHEN_DECIDED, name="reviewed_when_decided"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -174,6 +234,8 @@ class PolicyRuleRecord(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "policy_bundle_id", "node_id"),
         UniqueConstraint("tenant_id", "policy_bundle_id", "rule_id"),
+        # The target of the wordings' composite foreign key.
+        UniqueConstraint("tenant_id", "policy_bundle_id", "id"),
         ForeignKeyConstraint(["tenant_id", "policy_bundle_id", "node_id"], _NODE_COLUMNS),
         CheckConstraint(f"rule_id ~ '{RULE_ID_PATTERN}'", name="rule_id_pattern"),
         CheckConstraint("rule_version >= 1", name="rule_version_positive"),
@@ -197,11 +259,15 @@ class PolicyRuleRecord(Base):
     exact_wording: Mapped[str | None] = mapped_column(Text)
     # Checked first, case-insensitive and whole-word; a hit fails the rule without a model call.
     prohibited_phrases: Mapped[list[str]] = mapped_column(
-        ARRAY(String(200)), server_default=_EMPTY_ARRAY
+        ARRAY(String(PROHIBITED_PHRASE_MAX_CHARS)), server_default=_EMPTY_ARRAY
     )
+    # The rule's own record in an imported policy deliverable (layer, stage, outcome_policy,
+    # approval, applicability, relations), kept as imported: editing the rule does not change it.
+    # NULL for rules written in the editor.
+    contract: Mapped[dict[str, object] | None] = mapped_column(JSONB)
 
 
-class PolicyEdge(Base):
+class PolicyEdge(_ReviewColumns, Base):
     # Only approved edges are followed. Both endpoints are in the same bundle and tenant.
 
     __tablename__ = "policy_edges"
@@ -239,6 +305,8 @@ class PolicyEdge(Base):
         ),
         Index("ix_policy_edges_from_node", "tenant_id", "policy_bundle_id", "from_node_id"),
         Index("ix_policy_edges_to_node", "tenant_id", "policy_bundle_id", "to_node_id"),
+        CheckConstraint(_APPROVED_MATCHES_REVIEW_STATE, name="approved_matches_review_state"),
+        CheckConstraint(_REVIEWED_WHEN_DECIDED, name="reviewed_when_decided"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -250,6 +318,75 @@ class PolicyEdge(Base):
     approved: Mapped[bool] = mapped_column(server_default=_FALSE)
     provenance_clause_id: Mapped[UUID | None]
     provenance_note: Mapped[str | None] = mapped_column(Text)
+
+
+class PolicyRuleWording(_ReviewColumns, Base):
+    # F40: the exact wording a rule requires and the phrases it prohibits, per language. The
+    # columns on policy_rules stay as the English projection that retrieval and validation read.
+    # A translation points at the wording it translates.
+
+    __tablename__ = "policy_rule_wordings"
+    __table_args__ = (
+        # The target of translation_of_id.
+        UniqueConstraint("tenant_id", "policy_bundle_id", "id"),
+        UniqueConstraint(
+            "tenant_id",
+            "policy_rule_id",
+            "language",
+            "kind",
+            "text_sha256",
+            name="uq_policy_rule_wordings_rule_language_kind_text",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "policy_bundle_id", "policy_rule_id"],
+            ["policy_rules.tenant_id", "policy_rules.policy_bundle_id", "policy_rules.id"],
+        ),
+        # A composite key with a NULL column is not enforced (MATCH SIMPLE): wanted, a wording
+        # may have no source clause.
+        ForeignKeyConstraint(
+            ["tenant_id", "source_clause_id"],
+            ["policy_source_clauses.tenant_id", "policy_source_clauses.id"],
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "policy_bundle_id", "translation_of_id"],
+            [
+                "policy_rule_wordings.tenant_id",
+                "policy_rule_wordings.policy_bundle_id",
+                "policy_rule_wordings.id",
+            ],
+        ),
+        CheckConstraint(_LANGUAGE_CHECK, name="language"),
+        # An empty wording would match everywhere (a phrase) or require nothing (an exact text).
+        CheckConstraint("text ~ '[^[:space:]]'", name="text_not_blank"),
+        CheckConstraint(_REVIEWED_WHEN_DECIDED, name="reviewed_when_decided"),
+        # One live exact wording per rule and language; a rejected one may be replaced.
+        Index(
+            "uq_policy_rule_wordings_one_exact",
+            "tenant_id",
+            "policy_rule_id",
+            "language",
+            unique=True,
+            postgresql_where=text(
+                f"kind = '{WordingKind.EXACT_WORDING.value}'"
+                f" AND review_state <> '{ReviewState.REJECTED.value}'"
+            ),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID]
+    policy_bundle_id: Mapped[UUID]
+    policy_rule_id: Mapped[UUID]
+    language: Mapped[PolicyLanguage] = mapped_column(enum_column(PolicyLanguage))
+    kind: Mapped[WordingKind] = mapped_column(enum_column(WordingKind))
+    text: Mapped[str] = mapped_column(Text)
+    # Makes (rule, language, kind, text) unique without indexing long text; never written.
+    text_sha256: Mapped[str] = mapped_column(
+        String(64), Computed(_TEXT_SHA256_SQL, persisted=True), deferred=True
+    )
+    source_clause_id: Mapped[UUID | None]
+    translation_of_id: Mapped[UUID | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class PolicyNodeEmbedding(Base):

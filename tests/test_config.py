@@ -42,19 +42,6 @@ def test_operator_limits_have_an_upper_bound(field: str, too_high: object) -> No
         _settings(**{field: too_high})
 
 
-def test_policy_context_timeout_must_be_below_the_db_timeout() -> None:
-    # Otherwise asyncpg's own timeout fires first and fails the request instead of NEEDS_REVIEW.
-    assert _settings(policy_context_timeout_seconds=9, db_timeout_seconds=10)
-    with pytest.raises(ValidationError, match="must be below DB_TIMEOUT_SECONDS"):
-        _settings(policy_context_timeout_seconds=10, db_timeout_seconds=10)
-
-
-def test_policy_context_timeout_is_at_least_a_millisecond() -> None:
-    # statement_timeout is whole milliseconds, and 0 would mean no limit at all.
-    with pytest.raises(ValidationError, match="policy_context_timeout_seconds"):
-        _settings(policy_context_timeout_seconds=0.0004)
-
-
 def test_cancel_lock_timeout_never_rounds_to_postgres_no_timeout() -> None:
     # The value becomes SET LOCAL lock_timeout in whole milliseconds, and 0 ms there means wait
     # forever: anything that rounds to 0 is refused.
@@ -119,3 +106,76 @@ def test_malware_scan_simulator_is_allowed_in_development(app_env: str) -> None:
 def test_malware_scan_simulator_is_refused_outside_development(app_env: str) -> None:
     with pytest.raises(ValidationError, match="MALWARE_SCAN_MODE=simulator"):
         _settings(app_env=app_env, malware_scan_mode="simulator")
+
+
+def test_policy_source_defaults() -> None:
+    settings = _settings()
+
+    assert settings.policy_source_bucket is None
+    assert settings.policy_source_max_bytes == 50 * 1024 * 1024
+
+
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_a_blank_policy_source_bucket_means_unset(blank: str) -> None:
+    assert _settings(policy_source_bucket=blank).policy_source_bucket is None
+
+
+def test_policy_source_bucket_is_read_as_given() -> None:
+    assert _settings(policy_source_bucket="nrc-dev-policy").policy_source_bucket == "nrc-dev-policy"
+
+
+@pytest.mark.parametrize("bad_value", [1023, 104_857_601])
+def test_policy_source_max_bytes_is_bounded(bad_value: int) -> None:
+    with pytest.raises(ValidationError, match="policy_source_max_bytes"):
+        _settings(policy_source_max_bytes=bad_value)
+
+
+def test_image_types_do_not_accept_policy_types() -> None:
+    with pytest.raises(ValidationError, match=r"unsupported type\(s\): application/pdf"):
+        _settings(upload_image_types="application/pdf")
+
+
+def test_policy_extraction_defaults() -> None:
+    settings = _settings()
+
+    assert settings.policy_source_max_pages == 500
+    assert settings.policy_extraction_max_clauses == 5000
+    assert settings.policy_extraction_timeout_seconds == 30
+    assert settings.policy_worker_max_attempts == 3
+    assert settings.policy_max_open_bundles_per_tenant == 10
+    assert settings.policy_max_items_per_bundle == 2000
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("policy_source_max_pages", 0),
+        ("policy_source_max_pages", 5001),
+        ("policy_extraction_max_clauses", 0),
+        ("policy_extraction_max_clauses", 100_001),
+        ("policy_extraction_timeout_seconds", 0.5),
+        ("policy_extraction_timeout_seconds", 301),
+        ("policy_worker_max_attempts", 0),
+        ("policy_worker_max_attempts", 11),
+        ("policy_max_open_bundles_per_tenant", 0),
+        ("policy_max_open_bundles_per_tenant", 101),
+        ("policy_max_items_per_bundle", 9),
+        ("policy_max_items_per_bundle", 20_001),
+    ],
+)
+def test_policy_extraction_settings_are_bounded(field: str, bad_value: float) -> None:
+    with pytest.raises(ValidationError, match=field):
+        _settings(**{field: bad_value})
+
+
+def test_policy_context_timeout_must_be_below_the_db_timeout() -> None:
+    # Otherwise asyncpg's own timeout fires first and fails the request instead of NEEDS_REVIEW.
+    assert _settings(policy_context_timeout_seconds=9, db_timeout_seconds=10)
+    with pytest.raises(ValidationError, match="must be below DB_TIMEOUT_SECONDS"):
+        _settings(policy_context_timeout_seconds=10, db_timeout_seconds=10)
+
+
+def test_policy_context_timeout_is_at_least_a_millisecond() -> None:
+    # statement_timeout is whole milliseconds, and 0 would mean no limit at all.
+    with pytest.raises(ValidationError, match="policy_context_timeout_seconds"):
+        _settings(policy_context_timeout_seconds=0.0004)

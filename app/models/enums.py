@@ -66,6 +66,9 @@ class Gate(StrEnum):
     STUDY_FACTS = "study_facts"
     POLICY = "policy"
     MEDIA = "media"
+    # Policy bundle v0.3: rules checked by a human reviewer, and channel publish readiness.
+    REVIEWER_GATE = "reviewer_gate"
+    CHANNEL_READINESS = "channel_readiness"
 
 
 class Severity(StrEnum):
@@ -94,6 +97,71 @@ class PolicyNodeType(StrEnum):
     EXCEPTION = "EXCEPTION"
     INTERPRETATION = "INTERPRETATION"
     EXAMPLE = "EXAMPLE"
+
+
+class ReviewState(StrEnum):
+    """Review decision on one node, edge or wording. APPROVED rows are the ones retrieval reads."""
+
+    PROPOSED = "PROPOSED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class ProposalOrigin(StrEnum):
+    """Who produced a graph row. LLM_SIMULATED is a labelled stand-in, never a real model."""
+
+    HUMAN = "HUMAN"
+    IMPORT = "IMPORT"
+    LLM_SIMULATED = "LLM_SIMULATED"
+    LLM = "LLM"
+
+
+class PolicyAuditAction(StrEnum):
+    CREATE = "CREATE"
+    EDIT = "EDIT"
+    SUBMIT = "SUBMIT"
+    REVIEW = "REVIEW"
+    APPROVE = "APPROVE"
+    REJECT = "REJECT"
+    RETURN_TO_DRAFT = "RETURN_TO_DRAFT"
+    BUILD_STARTED = "BUILD_STARTED"
+    BUILD_READY = "BUILD_READY"
+    BUILD_FAILED = "BUILD_FAILED"
+    ACTIVATE = "ACTIVATE"
+    ROLLBACK = "ROLLBACK"
+    RETIRE = "RETIRE"
+
+
+class SourceExtractionState(StrEnum):
+    """Where a policy source is in text extraction; one that arrives with clauses is EXTRACTED."""
+
+    PENDING = "PENDING"
+    EXTRACTING = "EXTRACTING"
+    EXTRACTED = "EXTRACTED"
+    FAILED = "FAILED"
+
+
+class WordingKind(StrEnum):
+    # Required wording quoted from a source: a regulatory or platform quotation, or wording that
+    # is the same for every study. Checked word for word against its source clause.
+    EXACT_WORDING = "EXACT_WORDING"
+    PROHIBITED_PHRASE = "PROHIBITED_PHRASE"
+    # Policy bundle v0.3 (decided 26 Nov, option A): the rule needs the study's own approved
+    # wording. The bundle holds only a pointer (StudyWordingSource), never the text or its
+    # approval; the study snapshot (NRC-2) supplies both and validation (NRC-7) checks them.
+    STUDY_APPROVED_WORDING = "STUDY_APPROVED_WORDING"
+
+
+class StudyWordingSource(StrEnum):
+    """Where a STUDY_APPROVED_WORDING points: the text of such a wording.
+
+    A field of the study snapshot's facts (StudyFacts) holding approved texts, each with its
+    approval record (NRC-2). The v0.3 bundle names them study_snapshot.required_disclosures and
+    study_snapshot.approved_phrases; the bundle import maps those names to these.
+    """
+
+    REQUIRED_DISCLOSURES = "facts.required_disclosure_records"
+    APPROVED_CLAIMS = "facts.approved_claim_records"
 
 
 class PolicyEdgeType(StrEnum):
@@ -144,6 +212,31 @@ class PolicyIndexReason(StrEnum):
     INDEX_CONTENT_CHANGED = "INDEX_CONTENT_CHANGED"
 
 
+class PolicyBuildFailure(StrEnum):
+    # Why the policy worker's last index build of a bundle failed (policy_bundles.last_error_code).
+    # The two index reasons keep PolicyIndexReason's values. Provider errors are grouped into
+    # unavailable (retried until the attempt cap) and failed; the worker logs the exact code.
+    BUILD_ABANDONED = "POLICY_BUILD_ABANDONED"
+    NO_APPROVED_NODES = PolicyIndexReason.NO_APPROVED_NODES.value
+    INDEX_CONTENT_CHANGED = PolicyIndexReason.INDEX_CONTENT_CHANGED.value
+    INDEX_REFUSED = "POLICY_INDEX_REFUSED"
+    EMBEDDING_UNAVAILABLE = "EMBEDDING_UNAVAILABLE"
+    EMBEDDING_FAILED = "EMBEDDING_FAILED"
+
+
+class ExtractionCode(StrEnum):
+    # policy_sources.extraction_error_code. The first four are permanent failures of the file
+    # itself, the rest are the worker's.
+    UNREADABLE = "SOURCE_UNREADABLE"
+    EMPTY = "SOURCE_EMPTY"
+    TOO_MANY_PAGES = "SOURCE_TOO_MANY_PAGES"
+    TOO_MANY_CLAUSES = "SOURCE_TOO_MANY_CLAUSES"
+    TOO_MUCH_TEXT = "SOURCE_TOO_MUCH_TEXT"
+    STORAGE_UNAVAILABLE = "SOURCE_STORAGE_UNAVAILABLE"
+    TIMEOUT = "SOURCE_EXTRACTION_TIMEOUT"
+    FAILED = "SOURCE_EXTRACTION_FAILED"
+
+
 class PolicyContextReason(StrEnum):
     """Why no policy context was built. Sent as details.reason of POLICY_CONTEXT_UNAVAILABLE (409)
     and in brackets in a validation run's coverage gap; the frontend branches on these values."""
@@ -168,6 +261,8 @@ class CheckType(StrEnum):
 
     DETERMINISTIC = "deterministic"
     SEMANTIC = "semantic"
+    # Policy bundle v0.3: a person attests it (e.g. IRB approval of the exact version); no model.
+    MANUAL_ATTESTATION = "manual_attestation"
 
 
 class IndexBuildState(StrEnum):
@@ -205,8 +300,9 @@ class UploadState(StrEnum):
 
 
 class UploadPurpose(StrEnum):
-    # Policy-source documents (PDF, text) are added by NRC-4.
     CREATIVE_MEDIA = "creative_media"
+    # A policy-source document (PDF or text) uploaded for NRC-4 ingestion; it has no study.
+    POLICY_SOURCE = "policy_source"
 
 
 class IdentifiablePerson(StrEnum):
@@ -238,3 +334,42 @@ def enum_column[E: StrEnum](enum_cls: type[E]) -> Enum:
         values_callable=lambda members: [member.value for member in members],
         validate_strings=True,
     )
+
+
+class CheckCode(StrEnum):
+    EMPTY_BUNDLE = "EMPTY_BUNDLE"
+    UNREVIEWED_ITEM = "UNREVIEWED_ITEM"
+    MISSING_PROVENANCE = "MISSING_PROVENANCE"
+    EDGE_TO_UNAPPROVED_NODE = "EDGE_TO_UNAPPROVED_NODE"
+    SUPERSEDES_CYCLE = "SUPERSEDES_CYCLE"
+    SUPERSEDES_CONFLICT = "SUPERSEDES_CONFLICT"
+    CONTRADICTORY_WORDING = "CONTRADICTORY_WORDING"
+    UNRESOLVED_EXCEPTION = "UNRESOLVED_EXCEPTION"
+    UNSUPPORTED_LANGUAGE = "UNSUPPORTED_LANGUAGE"
+    DUPLICATE_OBLIGATION = "DUPLICATE_OBLIGATION"
+    EXACT_WORDING_NOT_IN_SOURCE = "EXACT_WORDING_NOT_IN_SOURCE"
+    # Activation only: a READY index build no longer matches the approved nodes.
+    INDEX_STALE = "INDEX_STALE"
+
+
+class Command(StrEnum):
+    SUBMIT = "submit"
+    RETURN_TO_DRAFT = "return_to_draft"
+    APPROVE = "approve"
+    REJECT = "reject"
+    BUILD = "build"
+    ACTIVATE = "activate"
+    ROLLBACK = "rollback"
+    RETIRE = "retire"
+
+
+# AC6: these commands always name a reason, kept in the audit trail.
+REASON_REQUIRED_COMMANDS: Final = frozenset(
+    {Command.REJECT, Command.ACTIVATE, Command.ROLLBACK, Command.RETIRE}
+)
+
+
+class ReviewItemKind(StrEnum):
+    NODE = "node"
+    EDGE = "edge"
+    WORDING = "wording"

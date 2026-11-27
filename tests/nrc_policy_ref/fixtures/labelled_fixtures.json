@@ -1,0 +1,4554 @@
+{
+  "schema": "nrc.policy-fixtures/0.2",
+  "bundle_version": "0.3.0",
+  "fixtures": [
+    {
+      "fixture_id": "FX-01",
+      "label": "Compliant English Facebook paid post, full context, valid attestation",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": true,
+        "blocking": [],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-02",
+      "label": "Same post; semantic top-k returns nothing: mandatory rules still selected",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": true,
+        "blocking": [],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-03",
+      "label": "Same post; top-k returns only advisory FED-09 (advisory violation does not block)",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS",
+        "FED-09": "VIOLATION"
+      },
+      "semantic_hits": [
+        "FED-09"
+      ],
+      "resolutions": {},
+      "expected": {
+        "ready": true,
+        "blocking": [],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-04",
+      "label": "IRB of record missing: no PASS possible",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CTX-01"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-05",
+      "label": "has_test_article unknown: FDA content rules cannot be ruled out",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CTX-01",
+          "FED-02",
+          "FED-03",
+          "FED-04"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-06",
+      "label": "Regulatory applicability missing",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CTX-01",
+          "FED-01",
+          "FED-02",
+          "FED-03",
+          "FED-04",
+          "FED-05",
+          "FED-06",
+          "FED-07",
+          "FED-08",
+          "FED-10",
+          "FED-11",
+          "IMG-01"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-07",
+      "label": "Semantic judge returned nothing for FED-05",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FED-05"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-08",
+      "label": "FED-08 flagged NEEDS_REVIEW, unresolved",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "VIOLATION",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FED-08"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-09",
+      "label": "FED-08 NEEDS_REVIEW resolved to PASS by policy reviewer with rationale",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "VIOLATION",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {
+        "FED-08": {
+          "role": "nrc_policy_reviewer",
+          "to": "PASS",
+          "rationale": "Phrase 'limited spots' is factual per snapshot"
+        }
+      },
+      "expected": {
+        "ready": true,
+        "blocking": [],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-10",
+      "label": "FED-08 resolution without rationale is ignored",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "VIOLATION",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {
+        "FED-08": {
+          "role": "nrc_policy_reviewer",
+          "to": "PASS"
+        }
+      },
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FED-08"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-11",
+      "label": "Spanish post: language gated in v0.2",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "es",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FACT-02",
+          "FED-11"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-12",
+      "label": "TikTok paid (US), 18+, no recorded eligibility confirmation",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "tiktok",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": [],
+            "min_age": 18
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CH-03"
+        ],
+        "reasons": {
+          "CH-03": "PAID_ELIGIBILITY_UNVERIFIED"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-13",
+      "label": "TikTok organic: paid rule not applied, organic unsourced",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "tiktok",
+          "distribution": "organic",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "ORG-01"
+        ],
+        "reasons": {
+          "ORG-01": "ORGANIC_POLICY_UNSOURCED"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-14",
+      "label": "X channel request: not enabled",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "x",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CH-08"
+        ],
+        "reasons": {
+          "CH-08": "CHANNEL_NOT_ENABLED"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-15",
+      "label": "Stale attestation: approved v2, publishing v3",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v2"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FED-01",
+          "FED-10"
+        ],
+        "reasons": {
+          "FED-01": "NO_VALID_ATTESTATION"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-16",
+      "label": "No attestation at all",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FED-01",
+          "FED-10"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-17",
+      "label": "'$50' with no approved compensation (v0.1 demo bug)",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study Get paid $50 for your time.",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FACT-01"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-18",
+      "label": "Unapproved link in post",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study Or visit https://other.example.com",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CTRL-01"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-19",
+      "label": "'New treatment' without approved investigational explanation",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study Try a new treatment.",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FED-04"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-20",
+      "label": "'New treatment' with approved investigational explanation",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study Try a new treatment. The study medicine is investigational, which means it is not approved by the FDA.",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": true,
+        "blocking": [],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-21",
+      "label": "YouTube paid with customer match audience",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "youtube",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [
+              "customer_match"
+            ],
+            "health_conditions": []
+          },
+          "google_healthcare_certified": true
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CH-02"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-22",
+      "label": "YouTube paid, certified, predefined audiences only",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "youtube",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [
+              "in_market"
+            ],
+            "health_conditions": []
+          },
+          "google_healthcare_certified": true
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": true,
+        "blocking": [],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-23",
+      "label": "YouTube paid, certification flag missing",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "youtube",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CH-02"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-24",
+      "label": "Facebook paid with health-condition targeting (NRC control)",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": [
+              "hypertension"
+            ]
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CTRL-02"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-25",
+      "label": "Required disclosure altered",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is optional. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FACT-02"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-26",
+      "label": "L2 rule status blank is not 'none'",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": null,
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CTX-01"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-27",
+      "label": "HHS-only study (no FDA): FDA-derived rules applied via proposed NRC baseline and flagged",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": false,
+            "fda_ind_21cfr312": false,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": true,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": true,
+        "blocking": [],
+        "reasons": {},
+        "basis_flags": [
+          "FED-02",
+          "FED-03",
+          "FED-04",
+          "FED-05",
+          "FED-06",
+          "FED-08",
+          "IMG-01"
+        ]
+      }
+    },
+    {
+      "fixture_id": "FX-28",
+      "label": "IRB-specific (L2) rules recorded but not evaluated",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "RECORDED",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "L2"
+        ],
+        "reasons": {
+          "L2": "L2_NOT_EVALUATED"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-29",
+      "label": "IRB-specific (L2) rules recorded and passing",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "RECORDED",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        },
+        "l2_results": {
+          "IRB-ACME-01": "PASS"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": true,
+        "blocking": [],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-30",
+      "label": "IRB-specific (L2) rule failing",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "RECORDED",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        },
+        "l2_results": {
+          "IRB-ACME-01": "FAIL"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "L2:IRB-ACME-01"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-32",
+      "label": "TikTok paid (US), eligibility confirmed, no 18+ restriction",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "tiktok",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": [],
+            "min_age": 13
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        },
+        "channel_eligibility": {
+          "tiktok": {
+            "status": "CONFIRMED",
+            "evidence_ref": "fixture-tiktok-confirmation",
+            "confirmed_by": "fixture",
+            "confirmed_at": "2026-11-23T00:00:00Z"
+          }
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CH-03"
+        ],
+        "reasons": {
+          "CH-03": "TIKTOK_US_CONDITION_NOT_MET"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-33",
+      "label": "TikTok paid (US), eligibility confirmed, no age setting declared",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "tiktok",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        },
+        "channel_eligibility": {
+          "tiktok": {
+            "status": "CONFIRMED",
+            "evidence_ref": "fixture-tiktok-confirmation",
+            "confirmed_by": "fixture",
+            "confirmed_at": "2026-11-23T00:00:00Z"
+          }
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CH-03"
+        ],
+        "reasons": {
+          "CH-03": "targeting.min_age missing"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-34",
+      "label": "Facebook paid: cure claim for a disease on Meta's list",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study Our study medicine may cure diabetes.",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "CH-01"
+        ],
+        "reasons": {
+          "CH-01": "cure claim for listed disease: diabetes"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-35",
+      "label": "TikTok paid (US), eligibility confirmed, 18+",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "tiktok",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": [],
+            "min_age": 18
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        },
+        "channel_eligibility": {
+          "tiktok": {
+            "status": "CONFIRMED",
+            "evidence_ref": "fixture-tiktok-confirmation",
+            "confirmed_by": "fixture",
+            "confirmed_at": "2026-11-23T00:00:00Z"
+          }
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": true,
+        "blocking": [],
+        "reasons": {},
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-36",
+      "label": "Deterministic disclosure check passes but retrieval reports its source missing",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        },
+        "retrieval_manifest": {
+          "gaps": [
+            {
+              "rule_id": "FACT-02",
+              "type": "SOURCE_MISSING"
+            }
+          ]
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FACT-02"
+        ],
+        "reasons": {
+          "FACT-02": "SOURCE_MISSING"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-37",
+      "label": "Retrieval reports a rule conflict on FED-05",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        },
+        "retrieval_manifest": {
+          "gaps": [
+            {
+              "rule_id": "FED-05",
+              "type": "CONFLICT"
+            }
+          ]
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FED-05"
+        ],
+        "reasons": {
+          "FED-05": "CONFLICT"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-38",
+      "label": "Retrieval gap does not soften a FAIL",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study Get paid $50 for your time.",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        },
+        "retrieval_manifest": {
+          "gaps": [
+            {
+              "rule_id": "FACT-01",
+              "type": "SOURCE_MISSING"
+            }
+          ]
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FACT-01"
+        ],
+        "reasons": {
+          "FACT-01": "payment amount stated but study has no approved compensation"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-39",
+      "label": "Unresolved applicability reported for FED-02",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        },
+        "retrieval_manifest": {
+          "gaps": [
+            {
+              "rule_id": "FED-02",
+              "type": "UNRESOLVED_APPLICABILITY"
+            }
+          ]
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FED-02"
+        ],
+        "reasons": {
+          "FED-02": "UNRESOLVED_APPLICABILITY"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-40",
+      "label": "Required disclosure lacks an approval record",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {},
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FACT-02"
+        ],
+        "reasons": {
+          "FACT-02": "disclosure approval record incomplete"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-41",
+      "label": "Reviewer resolution cannot clear a retrieval conflict",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        },
+        "retrieval_manifest": {
+          "gaps": [
+            {
+              "rule_id": "FED-08",
+              "type": "CONFLICT"
+            }
+          ]
+        }
+      },
+      "semantic_results": {
+        "FED-02": "PASS",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "VIOLATION",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {
+        "FED-08": {
+          "role": "nrc_policy_reviewer",
+          "to": "PASS",
+          "rationale": "reviewed"
+        }
+      },
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FED-08"
+        ],
+        "reasons": {
+          "FED-08": "CONFLICT"
+        },
+        "basis_flags": []
+      }
+    },
+    {
+      "fixture_id": "FX-31",
+      "label": "Reviewer cannot override a FAIL (FED-02)",
+      "stages": [
+        "context",
+        "validation",
+        "reviewer_gate",
+        "publish_readiness"
+      ],
+      "context": {
+        "study": {
+          "id": "FIXTURE-HTN-01",
+          "regulatory_applicability": {
+            "fda_21cfr50_56": true,
+            "fda_ind_21cfr312": true,
+            "fda_ide_21cfr812": false,
+            "hhs_45cfr46": false,
+            "approved_by": "fixture-approver",
+            "approved_at": "2026-11-20T00:00:00Z"
+          },
+          "has_test_article": true,
+          "product_type": "drug",
+          "irb_of_record": "Fixture IRB",
+          "l2_rules_status": "CONFIRMED_NONE",
+          "approved_languages": [
+            "en"
+          ],
+          "approved_contacts": [
+            "https://example.org/htn-study"
+          ],
+          "required_disclosures": [
+            {
+              "disclosure_id": "D1",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "This is a research study. Taking part is voluntary.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "151b5365280672fd1c77cd20844959a39fcd3b7bb4b56c88e5677d4ede4c9395"
+            }
+          ],
+          "approved_phrases": [
+            {
+              "phrase_id": "P1",
+              "phrase_type": "investigational_explanation",
+              "study_id": "FIXTURE-HTN-01",
+              "language": "en",
+              "version": "1",
+              "text": "The study medicine is investigational, which means it is not approved by the FDA.",
+              "approval": {
+                "approval_ref": "FIXTURE-IRB-APPROVED-MATERIALS-v1",
+                "approved_by": "fixture-approver",
+                "approved_at": "2026-11-20T00:00:00Z",
+                "approval_source": "IRB-approved study materials"
+              },
+              "text_sha256": "bb708c667dcf56a8184e4695d9a41700dd523232bb26f602eef36b3433936a5e"
+            }
+          ],
+          "compensation_statement": null,
+          "facts": {
+            "condition": "high blood pressure"
+          }
+        },
+        "post": {
+          "channel": "facebook",
+          "distribution": "paid",
+          "language": "en",
+          "creative_version_id": "v3",
+          "text": "Adults with high blood pressure may be eligible for a research study. This is a research study. Taking part is voluntary. Learn more: https://example.org/htn-study",
+          "targeting": {
+            "audiences": [],
+            "health_conditions": []
+          }
+        },
+        "attestation": {
+          "reviewer_id": "rev-1",
+          "attested_at_utc": "2026-11-20T10:00:00Z",
+          "creative_version_id": "v3"
+        }
+      },
+      "semantic_results": {
+        "FED-02": "VIOLATION",
+        "FED-03": "PASS",
+        "FED-05": "PASS",
+        "FED-06": "PASS",
+        "FED-08": "PASS",
+        "FACT-01": "PASS",
+        "IMG-01": "PASS",
+        "CH-01": "PASS",
+        "CH-02": "PASS",
+        "CH-03": "PASS"
+      },
+      "semantic_hits": [],
+      "resolutions": {
+        "FED-02": {
+          "role": "nrc_policy_reviewer",
+          "to": "PASS",
+          "rationale": "Judge false positive"
+        }
+      },
+      "expected": {
+        "ready": false,
+        "blocking": [
+          "FED-02"
+        ],
+        "reasons": {},
+        "basis_flags": []
+      }
+    }
+  ]
+}

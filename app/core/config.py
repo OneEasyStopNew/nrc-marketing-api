@@ -9,6 +9,7 @@ from pydantic import Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.core.media_types import IMAGE_EXTENSIONS
+from app.models.enums import PolicyLanguage
 
 AppEnv = Literal["local", "demo", "staging", "production"]
 # Environments where simulated data and locally signed tokens are allowed.
@@ -218,11 +219,41 @@ class Settings(RetrievalSettings):
     # before it is rejected as INSPECTION_FAILED (the uploader can then upload again).
     media_inspection_retry_window_seconds: int = Field(default=86_400, ge=600, le=604_800)
 
+    # Policy source files (NRC-4) go to their own bucket, never the media bucket. Unset: the policy
+    # upload endpoints answer 503 and the media worker defers policy uploads (no fallback).
+    policy_source_bucket: str | None = None
+    # The worker holds the whole file in memory while inspecting it.
+    policy_source_max_bytes: int = Field(default=52_428_800, ge=1024, le=104_857_600)
+    # Text extraction from policy sources (NRC-4), run by the policy worker. A source over either
+    # cap fails with a typed code instead of exhausting memory or the database.
+    policy_source_max_pages: int = Field(default=500, ge=1, le=5000)
+    policy_extraction_max_clauses: int = Field(default=5000, ge=1, le=100_000)
+    # Characters of extracted text, checked as each page arrives. 5,000 clauses of 1,000
+    # characters each.
+    policy_extraction_max_chars: int = Field(default=5_000_000, ge=1000, le=50_000_000)
+    # Reading and extracting one source. It must stay under WORKER_LEASE_SECONDS (the policy worker
+    # refuses to start otherwise), so a source is never extracted while another worker holds it.
+    policy_extraction_timeout_seconds: float = Field(default=30, ge=1, le=300)
+    # Leases that end in a transient failure (storage, timeout) or a crash before a source is
+    # marked FAILED. Polling and lease length are the shared WORKER_* settings.
+    policy_worker_max_attempts: int = Field(default=3, ge=1, le=10)
+    # Bounds on what policy:manage requests can create: bundles still being written (DRAFT or
+    # REVIEW) per tenant, and nodes, edges and wordings per bundle. The synthetic bundle has 22
+    # nodes and 16 edges.
+    policy_max_open_bundles_per_tenant: int = Field(default=10, ge=1, le=100)
+    policy_max_items_per_bundle: int = Field(default=2000, ge=10, le=20_000)
+    # Languages a policy bundle may contain before it can be approved (NRC-4). Spanish waits for
+    # the product decision on languages (Q6).
+    policy_supported_languages: Annotated[tuple[PolicyLanguage, ...], NoDecode] = Field(
+        default=(PolicyLanguage.EN,), min_length=1
+    )
+
     @field_validator(
         "cognito_client_ids",
         "cors_origins",
         "higgsfield_output_hosts",
         "upload_image_types",
+        "policy_supported_languages",
         mode="before",
     )
     @classmethod
@@ -244,6 +275,14 @@ class Settings(RetrievalSettings):
                 f"supported: {', '.join(sorted(SUPPORTED_UPLOAD_IMAGE_TYPES))}"
             )
         return types
+
+    @field_validator("policy_source_bucket", mode="before")
+    @classmethod
+    def _blank_bucket_means_unset(cls, value: object) -> object:
+        # `POLICY_SOURCE_BUCKET=` (as in .env.example) means "not configured".
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("dev_jwks_file", mode="before")
     @classmethod

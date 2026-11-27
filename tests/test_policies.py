@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import insert, text
+from sqlalchemy import insert, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.models import PolicyBundle, StudySnapshot
@@ -29,6 +29,19 @@ async def as_owner(connection: AsyncConnection) -> AsyncIterator[None]:
         yield
     finally:
         await connection.execute(text("SET LOCAL ROLE marketing_app"))
+
+
+async def _retire_active(connection: AsyncConnection, tenant_id: UUID) -> None:
+    # A tenant has one ACTIVE bundle at most (unique index); a newer one replaces it, as in
+    # activation. Call inside as_owner.
+    await connection.execute(
+        update(PolicyBundle)
+        .where(
+            PolicyBundle.tenant_id == tenant_id,
+            PolicyBundle.lifecycle_state == BundleLifecycleState.ACTIVE,
+        )
+        .values(lifecycle_state=BundleLifecycleState.RETIRED)
+    )
 
 
 async def _create_creative(
@@ -103,6 +116,7 @@ async def test_highest_policy_version_is_active(
     client: httpx.AsyncClient, world: World, auth: AuthHeaders, connection: AsyncConnection
 ) -> None:
     async with as_owner(connection):
+        await _retire_active(connection, world.a.tenant_id)
         await connection.execute(
             insert(PolicyBundle).values(
                 id=uuid4(),
@@ -131,6 +145,8 @@ async def _add_bundle(
     connection: AsyncConnection, tenant_id: UUID, version: int, state: BundleLifecycleState
 ) -> None:
     async with as_owner(connection):
+        if state is BundleLifecycleState.ACTIVE:
+            await _retire_active(connection, tenant_id)
         await connection.execute(
             insert(PolicyBundle).values(
                 id=uuid4(),
@@ -169,7 +185,7 @@ async def test_higher_version_that_is_not_active_is_ignored(
     assert context.json()["active_policy"]["version"] == 1
 
 
-async def test_active_version_above_an_older_active_one_wins_over_a_newer_draft(
+async def test_active_version_wins_over_a_newer_draft(
     client: httpx.AsyncClient, world: World, auth: AuthHeaders, connection: AsyncConnection
 ) -> None:
     await _add_bundle(connection, world.a.tenant_id, 2, BundleLifecycleState.ACTIVE)

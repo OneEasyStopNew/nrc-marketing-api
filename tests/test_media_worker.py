@@ -1048,6 +1048,7 @@ async def test_a_cancel_while_renewal_stops_still_cancels_the_worker(
     run = media_worker._Run(
         sessions=cast(Any, no_database),
         storage=cast(Any, None),
+        policy_storage=None,
         scanner=cast(Any, None),
         settings=cast(Any, None),
         owner="w1",

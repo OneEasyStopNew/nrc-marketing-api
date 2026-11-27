@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import Field
 
+from app.models.enums import StudyWordingSource
 from app.models.policy_graph import RULE_ID_PATTERN
 from app.schemas.common import ApiModel
 from app.schemas.validations import Gate, Severity, SourceReference, ValidationInputKind
@@ -25,6 +26,14 @@ class PolicyRule(ApiModel):
     mandatory: bool = Field(description="A failed mandatory rule always fails the validation.")
     applies_to: list[ValidationInputKind] = Field(min_length=1, max_length=3)
     source: SourceReference
+    # Empty for rules stored before NRC-4 and for rules without study wording.
+    study_wording_sources: list[StudyWordingSource] = Field(
+        default_factory=list,
+        max_length=len(StudyWordingSource),
+        description="Where the study's approved wording for this rule comes from, in the study "
+        "snapshot. The bundle holds only these pointers; validation checks the post against the "
+        "approved texts they name.",
+    )
 
 
 class PolicyBundleRead(ApiModel):

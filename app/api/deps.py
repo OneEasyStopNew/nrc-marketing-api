@@ -16,6 +16,7 @@ from app.core.errors import (
     DependencyUnavailableError,
     FeatureNotAvailableError,
     PermissionDeniedError,
+    PolicySourceStorageUnavailableError,
 )
 from app.services import tenancy
 from app.services.demo_stubs import DemoStubs
@@ -50,10 +51,19 @@ async def get_storage(request: Request) -> ObjectStorage:
     return require_storage(await get_optional_storage(request))
 
 
+async def get_policy_source_storage(request: Request) -> ObjectStorage:
+    # The policy bucket only: without POLICY_SOURCE_BUCKET there is no fallback to the media one.
+    storage: ObjectStorage | None = request.app.state.policy_source_storage
+    if storage is None:
+        raise PolicySourceStorageUnavailableError
+    return storage
+
+
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 DemoStubsDep = Annotated[DemoStubs | None, Depends(get_demo_stubs)]
 StorageDep = Annotated[ObjectStorage, Depends(get_storage)]
 OptionalStorageDep = Annotated[ObjectStorage | None, Depends(get_optional_storage)]
+PolicySourceStorageDep = Annotated[ObjectStorage, Depends(get_policy_source_storage)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
@@ -134,8 +144,28 @@ def require_capability(capability: Capability) -> Callable[..., Awaitable[Tenant
     return check
 
 
+def require_any_capability(*capabilities: Capability) -> Callable[..., Awaitable[TenantContext]]:
+    async def check(ctx: TenantCtx) -> TenantContext:
+        if not ctx.capabilities.intersection(capabilities):
+            raise PermissionDeniedError("Your role does not allow this.")
+        return ctx
+
+    return check
+
+
 CreativeReader = Annotated[TenantContext, Depends(require_capability(Capability.CREATIVE_READ))]
 CreativeWriter = Annotated[TenantContext, Depends(require_capability(Capability.CREATIVE_WRITE))]
+PolicyManager = Annotated[TenantContext, Depends(require_capability(Capability.POLICY_MANAGE))]
+# Reads policy bundles and sources. Write routes use it too and the service enforces the exact
+# capability, so a role with no policy capability is refused before any lookup.
+PolicyReader = Annotated[
+    TenantContext,
+    Depends(
+        require_any_capability(
+            Capability.POLICY_MANAGE, Capability.POLICY_APPROVE, Capability.POLICY_ACTIVATE
+        )
+    ),
+]
 ValidationRunner = Annotated[TenantContext, Depends(require_capability(Capability.VALIDATION_RUN))]
 GenerationRunner = Annotated[TenantContext, Depends(require_capability(Capability.GENERATION_RUN))]
 
